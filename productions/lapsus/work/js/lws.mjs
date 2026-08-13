@@ -116,6 +116,15 @@ export function parseLWS(text) {
       case 'FogMinDist': scene.fog.minDist = Number(rest[0]); break;
       case 'FogMaxDist': scene.fog.maxDist = Number(rest[0]); break;
       case 'FogColor': scene.fog.color = rest.map(Number); break;
+      // BackdropColor is the one the ENGINE reads (it is a string constant in
+      // Lapsus.exe); it is the clear colour, and the fog colour when
+      // BackdropFog is set. 3 of the 23 scenes carry a non-black value —
+      // higherbiing, kuubiotekniikka and silli — so ignoring it clears those
+      // to black incorrectly.
+      case 'BackdropColor': scene.backdrop.color = rest.map(Number); break;
+      case 'BackdropFog': scene.backdrop.fog = Number(rest[0]); break;
+      // Parsed for completeness, but NOT present in the binary, so the engine
+      // cannot be using them: a gradient backdrop never renders here.
       case 'SolidBackdrop': scene.backdrop.solid = Number(rest[0]); break;
       case 'ZenithColor': case 'SkyColor': case 'GroundColor': case 'NadirColor':
         scene.backdrop[kw[0].toLowerCase() + kw.slice(1)] = rest.map(Number); break;

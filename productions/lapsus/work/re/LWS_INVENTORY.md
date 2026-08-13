@@ -1,5 +1,55 @@
 # LWS inventory — what the 23 shipped scenes actually use
 
+## The engine's real vocabulary
+
+Of the **101 distinct keywords the 23 scenes use, only 31 exist anywhere in
+`Lapsus.exe`.** Determined by testing each keyword as a NUL- or
+space-delimited literal against the binary; the other 70 appear nowhere, so
+the engine cannot be reading them (METHOD.md, "the binary is the source of
+truth").
+
+**Parsed** — `LWSC` `FirstFrame` `LastFrame` `FramesPerSecond`
+`LoadObjectLayer` `AddNullObject` `AddLight` `AddCamera` `ObjectMotion`
+`LightMotion` `CameraMotion` `NumChannels` `Channel` `ParentItem`
+`LightName` `LightType` `LightColor` `LightIntensity` `CameraName`
+`ZoomFactor` `AmbientColor` `AmbientIntensity` `BackdropColor`
+`BackdropFog` `BGImage` `FogType` `FogColor` `FogMinDist` `FogMaxDist`
+`Plugin` `EndPlugin`.
+
+**Absent from the binary** — all 70 others, including everything about the
+LightWave *editor* view (`ViewMode` `ViewZoomFactor` `ViewAimpoint`
+`GridSize` `ShowObject` `ShowLight` `ShowCamera` `ShowMotionPath` …), the
+renderer settings (`RenderMode` `Antialiasing` `RayTraceEffects`
+`MotionBlur` `FieldRendering` `ResolutionMultiplier` `PixelAspect`
+`FrameSize` …), the IK/joint system (`HController` `BController`
+`*JointStiffness` `*Limits` `GoalObject` `FullTimeIK` …), and the whole
+gradient backdrop (`SolidBackdrop` `ZenithColor` `SkyColor` `GroundColor`
+`NadirColor`).
+
+Consequences that bite a port:
+
+- **`BackdropColor` is the clear colour** — and the fog colour when
+  `BackdropFog 1` is set. Three scenes carry a non-black value
+  (`higherbiing`, `kuubiotekniikka`, `silli`, all three of them fog scenes),
+  so ignoring it clears them to black incorrectly. There is **no gradient
+  backdrop** at all: `SolidBackdrop` and the four sky/ground colours are not
+  in the binary.
+- **`FogMinAmount` / `FogMaxAmount` are absent**, independently confirming
+  RENDER.md §8's instruction to ignore them.
+- **`ShowObject` is absent**, so per-item visibility flags do nothing.
+- `BGImage` appears in six scenes but always bare, with no filename, so no
+  background image is ever loaded despite the keyword being supported.
+
+### Correction to an earlier claim in this file
+
+The note below originally said the `FirstFrame`/`LastFrame`/`Preview*`
+headers are authoring metadata "the engine never reads". That is right for
+`FrameStep`, `CurrentFrame` and the three `Preview*` keywords — genuinely
+absent — but **`FirstFrame` and `LastFrame` *are* parsed**. The behavioural
+conclusion is unchanged and still rests on the evaluator's own code
+(`FUN_0041ab80`: absolute seconds, clamped, no scaling), not on the headers'
+absence. Parsed is not the same as used.
+
 Parsed by `work/js/lws.mjs` (run the table below via the snippet in its
 header). All scenes are **LWSC version 3, text, 30 fps**. Every envelope key
 is spantype 0 = TCB (Kochanek-Bartels) except a handful of spantype 3
