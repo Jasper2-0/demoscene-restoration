@@ -244,11 +244,14 @@ Draw semantics (`FUN_00404970` FadeIn / `FUN_00404a60` FadeOut, both:
 ortho 640×480 `FUN_0040b740`, material apply `FUN_0040c060`, one GL_QUADS
 fullscreen quad; clamp01):
 - FadeIn early-outs at v ≥ 1 (done); FadeOut early-outs at v ≤ 0 (not yet).
-- mode 3: writes v (FadeIn) / 1−v (FadeOut) into material alpha (+0x38) —
-  *inference:* mode 3 material = multiplicative blend, so alpha 0 = black
-  screen, 1 = untouched → fade from/to black.
-- mode 1: scales the RGB color by 1−v (FadeIn) / v (FadeOut) — *inference:*
-  additive blend → white flash decaying / rising.
+- mode 3: writes v (FadeIn) / 1−v (FadeOut) into material **transparency**
+  (+0x38); GL alpha = 1 − transparency. **RESOLVED** (`re/RENDER.md` §4.4/§6):
+  mode 3 = `glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)`, i.e. ordinary
+  alpha blending over a black quad → fade from/to black. (The earlier
+  "multiplicative" inference was wrong; multiplicative is mode **2**,
+  `GL_DST_COLOR/GL_ZERO`, which no fader uses.)
+- mode 1: scales the RGB color by 1−v (FadeIn) / v (FadeOut). **CONFIRMED**:
+  mode 1 = `glBlendFunc(GL_ONE, GL_ONE)` → additive white flash decaying/rising.
 - RandomFade*: `if rand()/32767 <= v then draw(1.0) else draw(v)` —
   per-frame flicker between "done" and the ramp (0x401e00 / 0x401ea0).
 
@@ -310,18 +313,21 @@ per-part float constants).
   headers are authoring metadata the engine never reads — 19 of 20 scheduled
   scenes key past their slot, and `kuubiotekniikka` holds its final pose for
   its last 1.8 s, exactly as clamping predicts.
-- **Per-part rendering internals**: the LW::Scene tick/render pipeline
-  (`FUN_004150b0`/`FUN_004151e0`) and every custom
-  part vf2 (HigherBiing 0x4060b0, Kuubiotekniikka 0x406b20, Silli 0x407e30,
-  Paleksi 0x4072b0, Pehko 0x407800, Syrjakyla 0x4081f0, Turska 0x408460,
-  Viherio 0x4087a0, Part_Empt 0x4057b0) are un-analysed. Several sit near
-  x87-audit SUSPECT territory (`FUN_0041ab80`, `FUN_00410350`,
-  `FUN_004107f0`) — read their asm before porting.
-- **Material/blend semantics of fader modes 1 vs 3** (`FUN_0040c060`) are
-  inferred from usage, not read.
+- ~~**Per-part rendering internals**~~ **RESOLVED** — see `re/RENDER.md`: the
+  LW::Scene tick/render pipeline (`FUN_004150b0`/`FUN_004151e0`), matrices,
+  camera, parenting, material→GL state, textures and faders are all out.
+  The custom part vf2s are decompiled in `re/targeted2.c`; HigherBiing
+  (3-camera cut + per-shot fog), Kuubiotekniikka (1 s picture dissolve), Silli
+  and Pehko (frame-feedback trails — **no colour clear**) are written up in
+  RENDER.md §7.3. Viherio 0x4087a0, Morko and Part_Empt 0x4057b0 are only
+  skimmed.
+- ~~**Material/blend semantics of fader modes 1 vs 3**~~ **RESOLVED** — §6
+  above, read out of `FUN_0040c060`'s jump table at 0x40c5c4.
 - **Hair (`data/hairs/*.txt`, HairMesh/Hair classes) and Pehko's tauno.txt
-  format** — consumer code located (Part_Pehko creates from tauno.txt +
-  pehko.lws) but not parsed.
+  format** — the *draw* side is now known (RENDER.md §4.6: `GL_LINES`, stride-32
+  verts, 16-bit indices, `glLineWidth(3)`, one light; tauno.txt parsed by
+  `FUN_0040c620` for `ColorTexture`/`AlphaTexture`), but the geometry
+  generators are still un-traced.
 - Exact wall-clock offset between capture t=0 and process start (mode-switch
   time before the first frame) is unknowable statically; all relative timing
   is anchored to the two PlaySound events and matches the capture.
