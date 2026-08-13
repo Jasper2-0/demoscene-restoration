@@ -400,7 +400,24 @@ entirely by its custom vf2); `silli` is a frame-feedback part.
 | 0.000 | empt, krediili, pehko, hairball | hair system / no scene |
 | −0.114 | silli | frame feedback |
 
-### Hair: parsed and bound, integration NOT right
+### Hair: WORKING (2026-08-13)
+
+Three bugs, all found by reading `FUN_0042d220`'s pseudocode rather than
+tuning: **`T` starts as the strand direction, not zero**; **node[0] IS the
+root anchor and is never integrated**; and the loop runs `1 .. N-1`. With
+`T = 0` the stiffness term vanishes on the first segment, each strand loses
+its directional memory, and after ~480 steps gravity drags all 500 strands to
+the same equilibrium — they rendered as ONE vertical line.
+
+Fixed, krediili's plume renders with its full fibrous structure and correct
+colour. hairball 0.000 → **0.560**, krediili 0.000 → **0.523**, pehko
+0.000 → **0.100**; median across all parts 0.324 → **0.515**.
+
+Remaining on these: the plume's position/orientation still differ (the
+`Hair_` null's animated transform), and pehko additionally needs its particle
+system and its frame feedback.
+
+### (superseded) Hair: parsed and bound, integration NOT right
 
 `work/js/hair.mjs` implements RENDER.md §11. Verified: all five
 `data/hairs/*.txt` parse with **zero unknown tokens**; the

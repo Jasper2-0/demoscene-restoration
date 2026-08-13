@@ -62,9 +62,11 @@ export function buildStrands(h, rand = msvcRand()) {
     const d = [0, 1, 2].map(() => rand() * (1 / 32767) - 0.5);
     const len = Math.hypot(...d) || 1;
     const dir = d.map((x) => x / len);
+    // node[0] IS the root anchor at the object origin and is never
+    // integrated; nodes 1..N-1 lie along `dir`.
     const nodes = [];
     for (let n = 0; n < h.nodesPerHair; n++) {
-      const k = n + 1;
+      const k = n;
       nodes.push({
         pos: [dir[0] * segLen * k, dir[1] * segLen * k, dir[2] * segLen * k],
         segLen,
@@ -90,8 +92,15 @@ export function buildStrands(h, rand = msvcRand()) {
  */
 export function stepHair(strands, root, gravity, dt) {
   for (const st of strands) {
-    let P = root, T = [0, 0, 0];
-    for (const nd of st.nodes) {
+    // P starts at the root and T starts at the strand DIRECTION, not zero.
+    // Starting T at zero kills the stiffness term on the first segment, the
+    // strand loses its directional memory, and after a few hundred steps
+    // gravity drags every strand to the same equilibrium — 500 strands
+    // collapse into a single vertical line. node[0] is the anchor and is
+    // skipped, per FUN_0042d220's `for i = 1 .. N-1`.
+    let P = root, T = st.dir.slice();
+    for (let i = 1; i < st.nodes.length; i++) {
+      const nd = st.nodes[i];
       const a = [
         nd.pos[0] + dt * gravity[0] - P[0] + T[0] * (dt * nd.stiff),
         nd.pos[1] + dt * gravity[1] - P[1] + T[1] * (dt * nd.stiff),
@@ -117,8 +126,10 @@ export function simulate(strands, root, gravity, time, dt = 1 / 60) {
 export function toLines(strands, root) {
   const out = [];
   for (const st of strands) {
-    let prev = root;
-    for (const nd of st.nodes) { out.push(...prev, ...nd.pos); prev = nd.pos; }
+    let prev = root;                       // node[0] IS the root
+    for (let i = 1; i < st.nodes.length; i++) {
+      out.push(...prev, ...st.nodes[i].pos); prev = st.nodes[i].pos;
+    }
   }
   return new Float32Array(out);
 }
