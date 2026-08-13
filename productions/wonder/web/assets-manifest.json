@@ -1,0 +1,395 @@
+{
+  "demo": "Wonder",
+  "assets": [
+    {
+      "path": "alpha_circle.env",
+      "size": 579,
+      "sha256": "d51ddec06f88cc9d0e00b48ed954de08cb9bbb7d765784122e4b07c1d0f900c7"
+    },
+    {
+      "path": "backg.jpg",
+      "size": 22713,
+      "sha256": "250bed1d19bdb2dc4cf1dfb078e3c4b681bb6672325220ed24c8c8eb464a5559"
+    },
+    {
+      "path": "beginning.exp",
+      "size": 342848,
+      "sha256": "51344d7f57582ef527bbf5beebe4bcc22f73dab5ed4d1e0d626f232f9b779c43"
+    },
+    {
+      "path": "boxical.exp",
+      "size": 1517,
+      "sha256": "696a33507b1acf74f7c2a2a4accde4fa987ccacf38b4f62ea125494985d3036f"
+    },
+    {
+      "path": "boxical4.exp",
+      "size": 33005,
+      "sha256": "d081c57de26d1f2f98b29ded670dc16b50d0c8c3bf8d0274d4d6b5053186da69"
+    },
+    {
+      "path": "bubble.env",
+      "size": 272,
+      "sha256": "7bb2b2a41bf00bc7e7e7701c6ad91edcffbc7e1c2ab8a4bea4e8340ede01f0a8"
+    },
+    {
+      "path": "bubblebath.exp",
+      "size": 65236,
+      "sha256": "6e20c1699dd1f52847541d50f4f9d7b79e141a1d5ba7a096b18c29eb29db0ce6"
+    },
+    {
+      "path": "bump.jpg",
+      "size": 97642,
+      "sha256": "08c4c86eeea9f4e60be135742b0a00d314d4daf273ff89669c6cd8e2415caf27"
+    },
+    {
+      "path": "bump.raw",
+      "size": 131072,
+      "sha256": "b13a5a39ad91f46de2871c2b87f13082f4d96183b5677b4082b17889909b0f14"
+    },
+    {
+      "path": "check.exp",
+      "size": 62754,
+      "sha256": "09375d173132a8375661bbdafa84383e702336ed084d47205906beae2dc68515"
+    },
+    {
+      "path": "clock.exp",
+      "size": 8422,
+      "sha256": "38210d16361a82d31bc63da761250d16a9c04db764588a4e41ea93f66becf0ea"
+    },
+    {
+      "path": "CloudsOnTheHorizon.jpg",
+      "size": 57578,
+      "sha256": "6a98ec6766150eed2f82264b6339259b274c1a6dfa9eae724a03901257d1ce35"
+    },
+    {
+      "path": "Credit_Camel1.jpg",
+      "size": 42734,
+      "sha256": "4a924343802f0f5cbca5c263dd1e0e51634138cacb694cdfd18ea7939ef76246"
+    },
+    {
+      "path": "Credit_EvilReal1.jpg",
+      "size": 59559,
+      "sha256": "aae67ae4906ad366c406c55d9386b74d19f1eb69cd89820f204198448cc0d9f3"
+    },
+    {
+      "path": "Credit_Technomancer1.jpg",
+      "size": 56601,
+      "sha256": "ab5c27ae0e9963dc854b207c3076e4191cc31fb42087fa2c809536a92e96eddd"
+    },
+    {
+      "path": "Credit_Virgill1.jpg",
+      "size": 30260,
+      "sha256": "41e708919721adb725b42e4f793bf0c97d091bee90e2fa8f37e85cfeab907719"
+    },
+    {
+      "path": "Credit_Visualice1.jpg",
+      "size": 39707,
+      "sha256": "e319184ccc2f208ae91dc812b4b30712a0c2da9db70f5b27d4e6605056820751"
+    },
+    {
+      "path": "Credit_Yoghurt1.jpg",
+      "size": 32437,
+      "sha256": "fd75c24f232c8825d5b2bdccbbb330e05c54c0bb25cce82a43dab5018bc8b2dc"
+    },
+    {
+      "path": "credits.exp",
+      "size": 113618,
+      "sha256": "4d95089bd291a6f88e6aa61ff1b65acbdda05ddfd3e64af5a25a7c9c815af3a2"
+    },
+    {
+      "path": "Cscape2.jpg",
+      "size": 71088,
+      "sha256": "e7877a50a6135db7a0a494913317cd24dc2c9ac863337c6abf64f0b8b3660e91"
+    },
+    {
+      "path": "d1_.jpg",
+      "size": 12662,
+      "sha256": "fe2f5baffde53adfdecec2aba4bb831748b02526560c2e34d6837f8b9adf1883"
+    },
+    {
+      "path": "d1_circle2.jpg",
+      "size": 31246,
+      "sha256": "36d7df0a960eaf7db4a834c23b0309d30e1df0c543e4dcede51671740f4addd4"
+    },
+    {
+      "path": "D1_CircleAlpha.tga",
+      "size": 65536,
+      "sha256": "5443493917eb37430c12056fe7adb62681b4e80b96ef9a7bb91d2e1c72a46ff4"
+    },
+    {
+      "path": "d1_face.jpg",
+      "size": 12185,
+      "sha256": "a790c712db81b773dd498e4af66fa4e30fe7b6ec25b36e66f5751272ccdac16d"
+    },
+    {
+      "path": "D1_FaceAlpha.tga",
+      "size": 65536,
+      "sha256": "c40ea2a926293e33feac384c42d3851cfae19b08016a3e5c0f46e839625b0ea8"
+    },
+    {
+      "path": "d1_wonder2.jpg",
+      "size": 16680,
+      "sha256": "f81de28ad2f94b6ebfd0b8890a4521ce6ee948c089332216f77493897ccae001"
+    },
+    {
+      "path": "D1_WonderAlpha.tga",
+      "size": 65536,
+      "sha256": "5a5106d26e2f22584a47b72836a8fca70f8f3e6ca68ffd9fef7bf3ab030c581c"
+    },
+    {
+      "path": "d1.jpg",
+      "size": 20025,
+      "sha256": "38555ac1345eafb3ad1b7434b30c084ad37656909ff70a0c1bc925df53c3f993"
+    },
+    {
+      "path": "DarkHorizonOfDreams1__.jpg",
+      "size": 37022,
+      "sha256": "e390fbafb6dc9a87f7fd598971e15d37aaf40dbd101e44edd735fed4ed87b791"
+    },
+    {
+      "path": "DarkHorizonOfDreams1.jpg",
+      "size": 11206,
+      "sha256": "acc5b43839f7459c61a4558b10bb280f5b7183c447d2a28c786cd252cc396eb4"
+    },
+    {
+      "path": "design_bw.exp",
+      "size": 24572,
+      "sha256": "810c591c86bc305e7e45703cd0ba62172407236168d2247973892d7dfb8b90ae"
+    },
+    {
+      "path": "design_bw2.exp",
+      "size": 5322,
+      "sha256": "03fa8d2a802f4456ba31b776c02fa1d2797f6b892ce2292730167d96ebff5e1f"
+    },
+    {
+      "path": "design2.jpg",
+      "size": 20025,
+      "sha256": "38555ac1345eafb3ad1b7434b30c084ad37656909ff70a0c1bc925df53c3f993"
+    },
+    {
+      "path": "DustOnYourEyes__.jpg",
+      "size": 27966,
+      "sha256": "d38dbdce2b79f411104d1c67e9bfaa588ca55c828a406b23833f84a11245ff47"
+    },
+    {
+      "path": "DustOnYourEyes.jpg",
+      "size": 8818,
+      "sha256": "2d99c3af4b18f2f64d425af49fb1336ca1614f02ec5959761f97209b43ee1d45"
+    },
+    {
+      "path": "end.exp",
+      "size": 15252,
+      "sha256": "c748f8676658018ed88d5ad53b75f255247d9eb9450de205ca64ec00d90ecef1"
+    },
+    {
+      "path": "energy.exp",
+      "size": 100530,
+      "sha256": "a778c926ec8a603897ffbf2df4b4e57f3f6caee11c45d4b17d71944f7544c21b"
+    },
+    {
+      "path": "faceted.exp",
+      "size": 4666,
+      "sha256": "6b5873de4b72ac90c387215bd3d674fdafb9e1fecd9f99e39ef38ec5aff26de0"
+    },
+    {
+      "path": "faceted2.exp",
+      "size": 4666,
+      "sha256": "5e892634d98c540d93fe42e031f95fde4da22d1e6d7b2039a55f0af567631033"
+    },
+    {
+      "path": "HorizonClouds1.jpg",
+      "size": 6390,
+      "sha256": "80fa5297babebf58ec438d79fb67ca4f0ef91e01de94fcee046e7cb236d97bd7"
+    },
+    {
+      "path": "introductionpoem1.jpg",
+      "size": 86061,
+      "sha256": "72b36ade3877d940e78228f535e1fd1c42eb7ed55ea8c1d3beacf1ab40111882"
+    },
+    {
+      "path": "koniec_intra.env",
+      "size": 83,
+      "sha256": "3b84126ca54015917e579bfb52ab94dadad32b8b249c2a403c0af8439511e834"
+    },
+    {
+      "path": "LeftSideOfSecret1b.tga",
+      "size": 196608,
+      "sha256": "2ce23e8c0990ab89eb72f50d0bfe914b78d0c893dfb87bf2a7985515948ef52b"
+    },
+    {
+      "path": "MAX_t1.jpg",
+      "size": 45817,
+      "sha256": "7a32069fe3d69df4829aba18984de9b66a3b80ffeabf34859a2f045850e6fd0e"
+    },
+    {
+      "path": "MAX_t2.jpg",
+      "size": 66406,
+      "sha256": "14f6dfa098a03397ba8c15a6055ee4839f0cadfbe9247906d0dc639fc4f63602"
+    },
+    {
+      "path": "MAX_t21.jpg",
+      "size": 82027,
+      "sha256": "9fe84398257883d61959867a88e7ea1d761829f0a5c2f6940f59afa24bb73b13"
+    },
+    {
+      "path": "MAX_t2x.jpg",
+      "size": 20212,
+      "sha256": "5142e82fe6f87d5b15b01c89a0c006a01495eb13d33631166ea47625bbbf64cb"
+    },
+    {
+      "path": "MAX_t3.jpg",
+      "size": 64136,
+      "sha256": "957d5201835dd8b83807f944359a337e12ba583edb3f63c4c1a48c9a15c18ef5"
+    },
+    {
+      "path": "max_t4.jpg",
+      "size": 66839,
+      "sha256": "c1f79d39103e2eff0f00fff504678066bba949773da403328830323977ee4b13"
+    },
+    {
+      "path": "MAX_T5.JPG",
+      "size": 81963,
+      "sha256": "4f2866c70a61777b401e0f83407367c04dc33bd8467e66dc5e773e8811616dac"
+    },
+    {
+      "path": "Mechanics1.jpg",
+      "size": 15934,
+      "sha256": "2d462bbcb89288a4d95557de6a0aad0c7ff849aef06e0883f4f530c6b618df1d"
+    },
+    {
+      "path": "mystified.env",
+      "size": 389,
+      "sha256": "abd7c214ddf1c8624d3f47f97b8d029fe3c8f0925558eadfc123b26d745d16ba"
+    },
+    {
+      "path": "mystified.xm",
+      "size": 2557033,
+      "sha256": "c57b3d2bb18c32a0733ac19932fc6db0579fffbb70bdca14b74e9e16ada1a5e2"
+    },
+    {
+      "path": "napierdalanie.env",
+      "size": 1059,
+      "sha256": "ec1091e11b03269c2b4f1f62bfebedd00fa75971a13f9dd37cdd019bdbf96258"
+    },
+    {
+      "path": "napierdalanie2.env",
+      "size": 1059,
+      "sha256": "9235da198283d7a8e0440182f3da04ebf81128d82b15201079a32d4559d1277f"
+    },
+    {
+      "path": "NebulaMultiCrater1.jpg",
+      "size": 11239,
+      "sha256": "5de4293a52007844b7bbbe753217ad1d3e28cba0649f8112b420897dc08f243c"
+    },
+    {
+      "path": "nebulamultip1.jpg",
+      "size": 55369,
+      "sha256": "5832334a1b22ce7cdba78eca8b80c2ce95251ec35a1a8b71af7d88b85000b91e"
+    },
+    {
+      "path": "overtake.jpg",
+      "size": 20415,
+      "sha256": "28afcf0c9efaefe468807d51cd5b94648d4b737d1f92ba839be11b998c70ae55"
+    },
+    {
+      "path": "overtake2.jpg",
+      "size": 17860,
+      "sha256": "179bf263726eea51ad49b15638aa56d900db29cd8cc87f4b33640f7b39d8a252"
+    },
+    {
+      "path": "reflection_map1_stripes.jpg",
+      "size": 89332,
+      "sha256": "8dfab6882c6828932a615a69b8b18a3936480b302021de39e6d692faf9e73aee"
+    },
+    {
+      "path": "RightSideOfSecret1b.tga",
+      "size": 196608,
+      "sha256": "d7b35ff8fa4221ad4398fa79a702b7e61963d33651a4ef03ec6a5c784bc5d56b"
+    },
+    {
+      "path": "scene.exp",
+      "size": 24928,
+      "sha256": "8794ecdf3a5c0011af313f368843c0cf69d9c38cf1d772f6d09cd22bfe6d71ce"
+    },
+    {
+      "path": "Secret.jpg",
+      "size": 99419,
+      "sha256": "6395842180a38f22851026a4aa64364d1ae1fa478582547b0fedae697a260a61"
+    },
+    {
+      "path": "shite1.exp",
+      "size": 72028,
+      "sha256": "d0f8a0479adc7f4dec2dfe88b3f86261068f1f0d57dbb9a02ef8e5114903fd19"
+    },
+    {
+      "path": "speedy.exp",
+      "size": 702,
+      "sha256": "76e46db46e23c773f2578b7338dbb776aa62e98abd2d555f95607dc7134371f6"
+    },
+    {
+      "path": "spherical.exp",
+      "size": 37167,
+      "sha256": "e1aab7f6c2d9076fa26ab4e51be62dd79479c339355c6e53929dad9b32c94b63"
+    },
+    {
+      "path": "stars.exp",
+      "size": 54730,
+      "sha256": "4b2e8316ffce1483fe03fe6a53acc4cd11180fa49b1641f310da0f3668b5a469"
+    },
+    {
+      "path": "unrd1.jpg",
+      "size": 5321,
+      "sha256": "c190db3587a52987369810df5ea443943ad1791aa6e0da4a880b5b2f164408d4"
+    },
+    {
+      "path": "unrd1.raw",
+      "size": 65536,
+      "sha256": "79aa9b81dd43c61e6fe4849c15437958fdc2d21e1fd4a37f99144261f39bf960"
+    },
+    {
+      "path": "unrd3.raw",
+      "size": 65536,
+      "sha256": "666e9489cd8b4af7b26c691ea0b26f526474b38b9f99292bd63ce8f6302c3314"
+    },
+    {
+      "path": "vsz_d2.jpg",
+      "size": 53378,
+      "sha256": "1c7d61561ff3ac44c750b89b5f278289ee354b8217ff4192180ea314efbdd70d"
+    },
+    {
+      "path": "Water2.jpg",
+      "size": 62815,
+      "sha256": "b57982e5953fd085565fec4ec996f65bc82a57f7f0f9cf90691ea18771df3292"
+    },
+    {
+      "path": "WatergreenWorld.jpg",
+      "size": 16268,
+      "sha256": "db5137d220a68e7f3911920c8e6c673b5581d18de8b89b79cbe63e5d794d0117"
+    },
+    {
+      "path": "woah3.exp",
+      "size": 483354,
+      "sha256": "90daa0d5101d6b0e921e58776038e2325f2c0f6c82c146faf96998db04a39ad7"
+    },
+    {
+      "path": "wondertext_pos.env",
+      "size": 957,
+      "sha256": "517286492962beea77ab885c26f3610d93579e73eefd62a1ef4ceb83ad7c3cc7"
+    },
+    {
+      "path": "y1.jpg",
+      "size": 23686,
+      "sha256": "f3d67c09ece7e69c7594672ce103a1be1ad5a8d1e755dcc91fea925ca27e606a"
+    },
+    {
+      "path": "y3.jpg",
+      "size": 82199,
+      "sha256": "39d235c2c1212d23e92c5ce7ece51c56ac4cec1430bbad5fdb925cefe2bdc4c1"
+    },
+    {
+      "path": "y4.jpg",
+      "size": 93584,
+      "sha256": "19ce9d53a3414e380e0fd0b5c49f46d99cff5c91f94d410a73911d446d378666"
+    }
+  ]
+}

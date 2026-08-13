@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Wonder — XM order inspector</title>
+  <link rel="stylesheet" href="./timeline.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="title-block">
+      <a class="back-link" href="./">← restoration</a>
+      <div>
+        <h1>Wonder order inspector</h1>
+        <p>Compiled effects and their assets against <code>mystified.xm</code></p>
+      </div>
+    </div>
+    <div class="transport" aria-label="Timeline transport">
+      <button id="previous-order" type="button" title="Previous XM order">− order</button>
+      <button id="play" class="primary" type="button">Play</button>
+      <button id="next-order" type="button" title="Next XM order">+ order</button>
+      <label class="time-field"><span>seconds</span><input id="time" type="number" min="0" max="186.5" step="0.001" value="0"></label>
+      <label class="zoom-field"><span>zoom</span><select id="zoom">
+        <option value="5">compact</option>
+        <option value="8" selected>normal</option>
+        <option value="12">detail</option>
+      </select></label>
+      <button id="copy-link" type="button">Copy frame link</button>
+    </div>
+    <input id="scrubber" class="scrubber" type="range" min="0" max="186.5" step="0.001" value="0" aria-label="Show time">
+  </header>
+
+  <main class="workspace">
+    <section class="timeline-panel panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Effect lanes</h2>
+          <p>Click the ruler or a lane to inspect that frame. Bar order is the executable's render layer order.</p>
+        </div>
+        <div id="order-readout" class="order-readout">loading XM…</div>
+      </div>
+      <div id="timeline-scroll" class="timeline-scroll" tabindex="0" aria-label="Wonder effect timeline">
+        <div id="timeline-content" class="timeline-content"></div>
+      </div>
+      <div class="legend" aria-label="Asset legend">
+        <span><i class="swatch scene"></i>EXP scene</span>
+        <span><i class="swatch texture"></i>image / RAW</span>
+        <span><i class="swatch control"></i>ENV control</span>
+        <span><i class="swatch loaded"></i>loaded, not drawn</span>
+        <span><i class="swatch terminal"></i>F00 terminal order</span>
+      </div>
+    </section>
+
+    <aside class="diagnostics">
+      <section class="preview-card panel">
+        <div class="panel-heading compact">
+          <div>
+            <h2>Live restoration</h2>
+            <p id="preview-status">loading renderer…</p>
+          </div>
+          <div class="preview-tools">
+            <output id="seconds-readout">0.000 s</output>
+            <button id="reload-preview" type="button" title="Reload the renderer at the current time">Reload</button>
+            <label class="hot-reload-toggle" title="Watch Wonder source files and reload changed modules">
+              <input id="hot-reload" type="checkbox" checked>
+              <span id="hot-reload-status">hot reload starting…</span>
+            </label>
+          </div>
+        </div>
+        <div class="preview-frame">
+          <iframe id="preview" title="Wonder restoration frame" src="./?t=0&debug&embedded"></iframe>
+        </div>
+      </section>
+
+      <section class="active-panel panel">
+        <div class="panel-heading compact">
+          <div>
+            <h2>Active elements</h2>
+            <p id="active-summary">Waiting for timeline data…</p>
+          </div>
+        </div>
+        <div id="active-elements" class="active-elements"></div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="notice" class="notice" role="status" aria-live="polite"></div>
+  <script type="module" src="./js/timeline-inspector.js"></script>
+</body>
+</html>

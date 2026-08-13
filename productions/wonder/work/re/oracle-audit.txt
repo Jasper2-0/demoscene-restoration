@@ -1,0 +1,86 @@
+# Code pointers in 00433000..00433800
+00433214                                  -> 00401210 FUN_00401210
+0043321c PTR_FUN_0043321c                 -> 00406910 FUN_00406910
+00433230                                  -> 004070c0 FUN_004070c0
+00433234                                  -> 00402340 FUN_00402340
+00433250                                  -> 004070c0 FUN_004070c0
+00433290                                  -> 004070c0 FUN_004070c0
+00433294                                  -> 00403170 FUN_00403170
+00433318 PTR_FUN_00433318                 -> 00408f80 FUN_00408f80
+0043331c                                  -> 00409040 FUN_00409040
+004333a4 PTR_FUN_004333a4                 -> 0040bc40 FUN_0040bc40
+00433458 PTR_FUN_00433458                 -> 0040c2c0 FUN_0040c2c0
+0043345c                                  -> 0040c380 FUN_0040c380
+0043347c PTR_FUN_0043347c                 -> 0040c850 FUN_0040c850
+004334b0 PTR_FUN_004334b0                 -> 0040c850 FUN_0040c850
+004334e8 PTR_FUN_004334e8                 -> 0040c850 FUN_0040c850
+004334f0 PTR_FUN_004334f0                 -> 0040c850 FUN_0040c850
+00433500 PTR_FUN_00433500                 -> 0040d0d0 FUN_0040d0d0
+00433544 PTR_FUN_00433544                 -> 0040d800 FUN_0040d800
+00433550 PTR_FUN_00433550                 -> 0040db20 FUN_0040db20
+0043355c PTR_FUN_0043355c                 -> 0040c850 FUN_0040c850
+00433560                                  -> 0040e100 FUN_0040e100
+00433580 PTR_FUN_00433580                 -> 0040c850 FUN_0040c850
+0043358c PTR_FUN_0043358c                 -> 0040c850 FUN_0040c850
+004335d0 PTR_FUN_004335d0                 -> 0040eac0 FUN_0040eac0
+004335e8 PTR_FUN_004335e8                 -> 0040ee30 FUN_0040ee30
+00433620 PTR_FUN_00433620                 -> 0040f260 FUN_0040f260
+00433628 PTR_FUN_00433628                 -> 0040f390 FUN_0040f390
+004336a0 PTR_FUN_004336a0                 -> 0040f980 FUN_0040f980
+004336b0 PTR_FUN_004336b0                 -> 0040faf0 FUN_0040faf0
+004336b8 PTR_FUN_004336b8                 -> 0040fc90 FUN_0040fc90
+004336e4 PTR_FUN_004336e4                 -> 0040ff20 FUN_0040ff20
+004336ec PTR_FUN_004336ec                 -> 0040c850 FUN_0040c850
+00433700 PTR_FUN_00433700                 -> 004103f0 FUN_004103f0
+00433718 PTR_FUN_00433718                 -> 004107b0 FUN_004107b0
+0043371c                                  -> 004107d0 FUN_004107d0
+0043373c PTR_FUN_0043373c                 -> 00412d20 FUN_00412d20
+00433740 PTR_FUN_00433740                 -> 00412e70 FUN_00412e70
+00433744                                  -> 00412ef0 FUN_00412ef0
+00433750                                  -> 004070c0 FUN_004070c0
+00433754 PTR_FUN_00433754                 -> 00413520 FUN_00413520
+00433758                                  -> 00413560 FUN_00413560
+00433764                                  -> 004070c0 FUN_004070c0
+00433768 PTR_FUN_00433768                 -> 004136b0 FUN_004136b0
+0043377c PTR_FUN_0043377c                 -> 00413700 FUN_00413700
+00433780                                  -> 00413730 FUN_00413730
+00433788                                  -> 00413800 FUN_00413800
+00433790 PTR_FUN_00433790                 -> 00413910 FUN_00413910
+
+# References to 004360c4 DAT_004360c4
+0040c64e FUN_0040c380             WRITE
+0040c695 FUN_0040c380             WRITE
+0040c6be FUN_0040c380             READ
+0040c6ca FUN_0040c380             WRITE
+0040c740 FUN_0040c380             WRITE
+004107f7 FUN_004107d0             WRITE
+00410834 FUN_004107d0             READ
+0041083a FUN_004107d0             WRITE
+00410a5b FUN_004107d0             READ
+00410b2c FUN_004107d0             READ
+00410bcb FUN_004107d0             WRITE
+0040c659 FUN_0040c380             READ
+0040c661 FUN_0040c380             READ
+0040c669 FUN_0040c380             WRITE
+0040c671 FUN_0040c380             WRITE
+0040c6a0 FUN_0040c380             READ
+0040c6a8 FUN_0040c380             READ
+0040c6b0 FUN_0040c380             WRITE
+0040c6b8 FUN_0040c380             WRITE
+0040c654 FUN_0040c380             DATA
+0040c69b FUN_0040c380             DATA
+004089ae <no function>            READ
+00408a98 <no function>            READ
+00408bde <no function>            READ
+004084e4 <no function>            READ
+0040860e <no function>            READ
+
+# References to 00406700 FUN_00406700
+00410882 FUN_004107d0             UNCONDITIONAL_CALL
+
+# References to 00406760 FUN_00406760
+00410897 FUN_004107d0             UNCONDITIONAL_CALL
+
+# References to 0040bce0 FUN_0040bce0
+0040c510 FUN_0040c380             UNCONDITIONAL_CALL
+

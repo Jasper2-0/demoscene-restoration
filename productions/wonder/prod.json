@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "slug": "wonder",
+  "title": "Wonder",
+  "group": "Sunflower",
+  "kind": "restoration",
+  "platform": "Windows",
+  "releaseDate": "1999-09-04",
+  "party": {
+    "name": null,
+    "compo": null,
+    "ranking": null
+  },
+  "ids": {
+    "demozoo": 49,
+    "pouet": 29
+  },
+  "links": {
+    "demozoo": "https://demozoo.org/productions/49/",
+    "pouet": "https://www.pouet.net/prod.php?which=29",
+    "youtube": "https://www.youtube.com/watch?v=dY2g7WG77Pw"
+  },
+  "credits": [
+    {
+      "name": "EvilReal",
+      "role": "Code"
+    },
+    {
+      "name": "Yoghurt",
+      "role": "Code"
+    },
+    {
+      "name": "Camel",
+      "role": "Code"
+    },
+    {
+      "name": "Technomancer",
+      "role": "Code"
+    },
+    {
+      "name": "Visualize",
+      "role": "Graphics"
+    },
+    {
+      "name": "Voomie",
+      "role": "Graphics"
+    },
+    {
+      "name": "Virgill",
+      "role": "Music"
+    }
+  ],
+  "originals": [
+    {
+      "path": "originals/sunflower/wonder_sunflower_final.zip",
+      "urls": [
+        "https://files.scene.org/get/demos/groups/sunflower/wonder_sunflower_final.zip"
+      ],
+      "sha256": "cd99d2d7f4b6bca69f2d2655f5348d6a910e78a6575fcc332e586fa67604cb54",
+      "bytes": 6205529,
+      "note": "final version (on disk)"
+    },
+    {
+      "path": "originals/sunflower/wonder_sunflower.zip",
+      "urls": [
+        "https://files.scene.org/get/demos/groups/sunflower/wonder_sunflower.zip"
+      ],
+      "sha256": "e647779b7ee5c56d936e604fdd4057194fbf93a752347521848638807b74fffa",
+      "bytes": 6188746,
+      "note": "party version, Gravity 1999"
+    }
+  ],
+  "captures": [
+    {
+      "youtube": "7MnD4Ugco1g",
+      "path": "productions/wonder/work/reference/wonder_ref.mkv",
+      "format": "bestvideo+bestaudio",
+      "sha256": null,
+      "alignmentOffsetMs": 0,
+      "note": "10 ms log-energy correlation peaks at zero offset (score 0.7634); capture not kept on disk by policy"
+    }
+  ],
+  "status": {
+    "web": "engineering",
+    "pagesRepo": "wonder-webgl"
+  }
+}
