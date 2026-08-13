@@ -136,6 +136,8 @@ uniform vec3 uLightColor[MAXL];
 uniform sampler2D uEnv;              // RIMG reflection image
 uniform bool uHasEnv;
 uniform float uRefl;
+uniform float uSpec, uShine;         // specularity, shininess
+uniform bool uFogOn; uniform vec3 uFogColor; uniform vec2 uFogRange;
 void main(){
   vec3 base = uColor * (uHasTex ? texture(uTex, vUV).rgb : vec3(1.0));
   vec3 n = normalize(vN);                       // GL_NORMALIZE equivalent
@@ -166,6 +168,26 @@ void main(){
     float m = 2.0 * sqrt(r.x*r.x + r.y*r.y + (r.z + 1.0)*(r.z + 1.0));
     col += texture(uEnv, vec2(r.x/m + 0.5, r.y/m + 0.5)).rgb;
   }
+  // Specular, added AFTER the texture — the engine enables
+  // GL_SEPARATE_SPECULAR_COLOR, so the highlight is not modulated by the
+  // texture the way the diffuse term is (RENDER.md §4.5). Only when the
+  // surface is lit and specularity > 0; the material specular is a grey of
+  // that specularity.
+  if (!uUnlit && uSpec > 0.0) {
+    vec3 V = -normalize(vP);                    // toward the viewer, eye space
+    for (int i = 0; i < MAXL; i++) {
+      if (i >= uNumLights) break;
+      vec3 H = normalize(uLightDir[i] + V);
+      col += uLightColor[i] * uSpec * pow(max(dot(n, H), 0.0), uShine);
+    }
+  }
+  // Fog last: GL_LINEAR over [min,max], the factor running the full 0->1.
+  // GL_FOG_DENSITY is never set and FogMin/MaxAmount are ignored, so this is
+  // an unclamped linear ramp — not the GL_EXP that METHOD.md warns about.
+  if (uFogOn) {
+    float f = clamp((uFogRange.y + vP.z) / (uFogRange.y - uFogRange.x), 0.0, 1.0);
+    col = mix(uFogColor, col, f);
+  }
   o = vec4(col, uAlpha);
 }`;
 const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
@@ -191,6 +213,11 @@ const uLightColor = gl.getUniformLocation(prog, 'uLightColor');
 const uEnv = gl.getUniformLocation(prog, 'uEnv');
 const uHasEnv = gl.getUniformLocation(prog, 'uHasEnv');
 const uRefl = gl.getUniformLocation(prog, 'uRefl');
+const uSpec = gl.getUniformLocation(prog, 'uSpec');
+const uShine = gl.getUniformLocation(prog, 'uShine');
+const uFogOn = gl.getUniformLocation(prog, 'uFogOn');
+const uFogColor = gl.getUniformLocation(prog, 'uFogColor');
+const uFogRange = gl.getUniformLocation(prog, 'uFogRange');
 
 // Texture coordinates, read out of dm2000 itself — NOT from LightWave's
 // documentation, which disagrees (METHOD.md, "the binary is the source of
@@ -409,6 +436,15 @@ const bgVao = gl.createVertexArray();
         alpha: 1 - (s.transparency ?? 0),
         twoSided: (s.sides ?? 1) === 3,
         refl: s.reflection ?? 0,
+        // RENDER.md §4.5: specular only when lit, specularity > 0 and the
+        // surface colour is non-black; material specular is a grey of the
+        // specularity. UNVERIFIED: how LWO GLOS maps to the GL shininess
+        // exponent. RENDER.md records "shininess = surface[+0x30]" but the
+        // loader's LWO GLOS -> that field scaling was not traced. Shipped
+        // GLOS values are 0.065..0.725, which as a raw exponent would give an
+        // almost flat highlight, so the x128 below is an ASSUMPTION.
+        spec: ((s.color ?? [1,1,1]).some((c) => c > 0) ? (s.specular ?? 0) : 0),
+        shine: Math.max(1, (s.glossiness ?? 0.2) * 128),
         // Mask bit 0x80 (sphere-map texgen) is cleared unless reflectivity
         // > 0.95 (RENDER.md §4), so a dim reflection is not a faint one — it
         // is no reflection at all.
@@ -502,6 +538,16 @@ const bgVao = gl.createVertexArray();
   const ambI = scene.ambientIntensity ?? 0, ambC = scene.ambientColor ?? [1, 1, 1];
   gl.uniform3f(uAmbient, ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
 
+  // Fog: enabled only for FogType 1. Colour comes from BackdropColor when the
+  // BackdropFog flag is set, else FogColor (RENDER.md §4).
+  const fogOn = (scene.fog?.type ?? 0) === 1;
+  gl.uniform1i(uFogOn, fogOn ? 1 : 0);
+  if (fogOn) {
+    const fc = scene.backdrop?.fog ? (scene.backdrop.color ?? [0,0,0]) : (scene.fog.color ?? [0,0,0]);
+    gl.uniform3f(uFogColor, fc[0], fc[1], fc[2]);
+    gl.uniform2f(uFogRange, scene.fog.minDist ?? 0, scene.fog.maxDist ?? 100);
+  }
+
   // ---- opaque first, then blended (RENDER.md 8 draw order)
   let textured = 0;
   const passes = [];
@@ -529,6 +575,8 @@ const bgVao = gl.createVertexArray();
       gl.uniform1f(uAlpha, mat.alpha ?? 1);
       gl.uniform1i(uHasEnv, mat.envTex ? 1 : 0);
       gl.uniform1f(uRefl, mat.refl ?? 0);
+      gl.uniform1f(uSpec, mat.spec ?? 0);
+      gl.uniform1f(uShine, mat.shine ?? 16);
       gl.activeTexture(gl.TEXTURE0);
       if (mat.tex) { gl.bindTexture(gl.TEXTURE_2D, mat.tex); textured++; }
       if (mat.envTex) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.envTex); }
