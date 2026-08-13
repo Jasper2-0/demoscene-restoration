@@ -1,5 +1,19 @@
 # LWO inventory — the 50 shipped LightWave objects
 
+> **This file describes the FORMAT, not the engine.** Everything below was
+> read with the published LWO2 spec, so it says what the files contain — not
+> what dm2000 does with them, which is the only thing a port may follow
+> (METHOD.md, "The binary is the source of truth"). Two consequences worth
+> keeping in mind while reading:
+>
+> - the engine's real chunk vocabulary is whatever `FUN_00424d50` /
+>   `FUN_004266a0` / `FUN_00427360` actually read; chunks listed here that it
+>   ignores are not part of its format, however prominent in the standard;
+> - anything here phrased as *behaviour* — n-gon triangulation, UV
+>   projection, smoothing, winding — is a spec-derived expectation awaiting
+>   confirmation against the disassembly. The projection section below is the
+>   known case where the spec and the capture disagree.
+
 Parsed by `work/js/lwo.mjs`. All 50 are `FORM…LWO2` (LightWave 6.0+), big-endian.
 **All 50 parse with zero unknown chunks and zero out-of-range vertex indices.**
 

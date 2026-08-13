@@ -20,6 +20,44 @@ hardware-accelerated 64k intros went head to head, roughly nine months before
 
 ---
 
+## The binary is the source of truth
+
+**The production always takes precedence over external documentation.** File
+format specs, vendor manuals, published tool behaviour and community wisdom
+are *hints about where to look* — never statements about what the program
+does. When a spec and the executable disagree, the executable is right by
+definition, because the executable is the artifact being restored.
+
+This is not a rule about accuracy, it is a rule about what is being made.
+A reconstruction that follows the documentation and looks wrong has not
+"corrected a bug in the original" — it has stopped being a reconstruction.
+Where the original deviates from its own format or from correct rendering,
+the deviation *is* the work: `please the cookie thing` never enables
+`GL_NORMALIZE`, and its streaked chrome is that omission; `lost vegas` uses
+full-range JFIF coefficients where BT.601 is "correct"; its glyph table is
+over-read by characters outside its range, and that is how the group's own
+title spacing happens.
+
+The rule already appears in this document as advice for one case — confirm a
+data layout against *the code that consumes it*, not against your own eyes —
+but it governs everything:
+
+- **Parsing.** Read the container with the spec, then confirm which chunks
+  the engine actually reads. Fields the program ignores are not part of its
+  format however prominent they are in the standard, and a field it
+  misreads must be misread identically.
+- **Numerics.** Any formula — interpolation, projection, colour conversion,
+  attenuation — comes from the disassembly. If a documented formula happens
+  to agree, that is a result to be shown, not an assumption to start from.
+- **Fitting.** An empirical fit against a capture is a hypothesis, never an
+  answer. It is acceptable only as an explicitly marked placeholder, and it
+  is dangerous precisely when it looks convincing.
+
+Lapsus is the worked example of getting this wrong: texture coordinates were
+implemented from LightWave's documented projection rules rather than from
+dm2000, and the response to the mismatch was to fit a pivot to a single
+frame. Both steps consulted the wrong authority.
+
 ## The pipeline
 
 ### 1. Triage
