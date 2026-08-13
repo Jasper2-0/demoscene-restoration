@@ -2437,3 +2437,228 @@ Syrjakyla's. `this+0x08` is allocated by nothing and freed by `vf1`
 | Part_Syrjakyla | 0x4081f0 | backdrop | 0, **unmodified** | — | (dead 2.38489796 s oscillator) |
 | Part_Turska | 0x408460 | backdrop | 0, **pos = base, z += x** | — | period 0.88635204 s |
 | Part_Viherio | 0x4087a0 | **skipped while strobing** | 0 | — | 14-entry table mod 7.090816327 s, 0.1 s windows |
+
+---
+
+## 13. The unlit path with multiple textures
+
+Opened by NOTES.md's "mask-7 surfaces are over-bright" (kaivoalieni 0.231,
+rad_out 0.203, higherbiing −0.003). The question asked was: when a surface is
+unlit (`LUMI > 0.95`) **and** multi-textured, what does the engine actually
+draw? The short answer is **nothing special** — and the real fault is
+elsewhere, in §10.3's `PROJ = 5`. Both halves are below.
+
+### 13.1 The unlit branch is a `glColor4f` substitution and nothing else
+
+`FUN_0040c060` @0x40c060 begins `MOV AL,[ESI+0x68]; TEST AL,AL; JZ 0x40c1e0`
+(0x40c067–0x40c073). The whole unlit branch is **0x40c1e0 … 0x40c224**:
+
+```
+0040c1e0  FLD  [0x0045a310]      ; 1.0
+0040c1e7  FSUB [ESI+0x38]        ; alpha  = 1 − transparency   → arg 4
+0040c1ed  FLD  [ESI+0x24] ×1/255 ; blue   (material diffuse B) → arg 3
+0040c1fb  FLD  [ESI+0x20] ×1/255 ; green                       → arg 2
+0040c208  FLD  [ESI+0x1c] ×1/255 ; red                         → arg 1
+0040c214  CALL [0x0045a184]      ; glColor4f
+0040c21a  PUSH 0xb50 ; CALL [0x0045a188]   ; glDisable(GL_LIGHTING)
+```
+
+(`0x45a310 = 1.0f`, `0x45a5d4 = 1/255`, both read out of `.rdata` at
+file offset VA−0x400000.) It then **falls through to 0x40c225**, which is the
+pass-argument test shared with the lit branch (`MOV EAX,[ESP+0x50]`), i.e. it
+rejoins the common code *before* the unit-0 block at 0x40c231. There is no
+second entry point and no unlit-only texture code anywhere in the function.
+
+**Q1 — what colour does `glColor4f` get?** The **material diffuse**,
+`material[+0x1c/+0x20/+0x24] × 1/255`, alpha `1 − material[+0x38]`. Written by
+the `SURF` builder at **0x42cbc3–0x42cc36**:
+
+```
+0042cbc3  MOV AL,[EBP+0x2c8]     ; the texture mask
+0042cbc9  FLD [EBP+0x24]         ; DIFF level  (tag→field confirmed below)
+0042cbcc  TEST AL,0x1            ; bit 0 = a COLR block is present
+0042cbce  JZ  0x0042cc01
+0042cbd0    FMUL [0x0045accc]    ; ×255 → the SAME value in R, G and B
+0042cbdf    store to material+0x1c/+0x20/+0x24
+0042cc01  else: R,G,B = DIFF × surfaceColour.{r,g,b}   (0x42cc09/0x42cc19/0x42cc24)
+```
+
+So §4.5's "neutral grey `diffuseLevel`" is right, and it is that grey — not the
+surface colour, not white by construction — that reaches `glColor4f`.
+For the three problem surfaces it *happens* to be white: all of
+`KaivoalieniRadOut.lwo`, `rad_out.lwo` and `hirbiRadBack.lwo` carry
+`COLR (1,1,1) · DIFF 1.0 · LUMI 1.0 · SPEC 0 · REFL 0 · TRAN 0`, so
+**`glColor4f(1, 1, 1, 1)`**.
+
+Tag→field mapping verified in the `SURF` parser `FUN_00426a90` (the compares
+are byte-swapped IFF tags): `LUMI` @0x426c28 → `JZ 0x426e45` → `FSTP [EDI+0x28]`
+@0x426e92; `DIFF` @0x426d72 → `FSTP [EDI+0x24]` @0x426e3d; `COLR` @0x426c3b →
+`FSTP [EDI+0x18/+0x1c/+0x20]` @0x426d64–0x426d6a; `GLOS` → `+0x30` @0x426de8;
+`CLRF` → `+0x2d0` @0x426c8d; `ADTR` → `+0x3c` @0x426cfe. Hence §4.5's
+`material[+0x68] = (surface[+0x28] ≤ 0.95)` really is **luminosity**, and the
+grey really is **DIFF**. The flag is computed once at 0x42b8e3–0x42b906
+(`FCOMP [0x45ad34]`, `0.95f`) into the stack byte `[ESP+0x13]`, and copied to
+`material[+0x68]` at 0x42b940.
+
+> Red herring, recorded so nobody chases it twice: that same `[ESP+0x13]` is
+> copied into `[ESP+0x1c]` immediately before every `FUN_0042cf90` call
+> (0x42bb78, 0x42c33a, 0x42c450, 0x42c566, …). It is **not** the lit flag being
+> passed to the texture loader — `[ESP+0x1c]` is a VC6 `std::basic_string`
+> whose byte 0 is the (empty, meaningless) allocator, and MSVC sourced that
+> byte from the adjacent slot. `FUN_0042cf90` is
+> `(surface, &colourName, &alphaName, filterMode)` forwarding straight to
+> `LW::TextureManager::get` @0x414420 (0x42cffc–0x42d00b); the alpha name is
+> always the empty temp, the filter mode is `slot[+0x10] != 0`.
+
+**Q2 — does the unlit path change the units?** **No.** Unit 0 (0x40c231) and
+unit 1 (0x40c2c3) are reached identically from both branches, and the env-mode
+code is byte-for-byte the same: `glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE,
+GL_MODULATE)` on unit 0 (0x40c25f–0x40c26e), and on unit 1 `GL_MODULATE` when
+`material[+0x5c] == 0` (0x40c305) or `GL_ADD` when it is 1 *and* the
+`GL_ARB_texture_env_add` probe byte `[0x4a8f5c]+0x10` is set (0x40c2f2–0x40c303).
+Neither reads `+0x68`. Unit count still comes only from `material[+0x3c]`
+(`JLE` at 0x40c253 and 0x40c2d7).
+
+**Q3 — is the second pass still drawn when unlit?** **Yes.** The pass count is
+`FUN_0040c050` @0x40c050, whose entire body is
+`EDX = material[+0x3c]; EAX = (EDX > 2); return EAX + 1` — it never touches
+`+0x68`. `FUN_00443170` calls it at 0x443179 and 0x443291 and takes the
+two-pass path purely on that. Pass 1's state is 0x40c3de–0x40c48d:
+unit 1 `glDisable(GL_TEXTURE_2D)`, unit 0 re-enabled and bound to
+`material[+0x48]`, `glEnable(GL_BLEND)`, then `material[+0x60]`:
+`0 → glBlendFunc(GL_DST_COLOR, GL_ZERO)` (0x40c431), `1 → glBlendFunc(GL_ONE,
+GL_ONE)` (0x40c42b). Mask 7 sets `+0x60 = 1` at **0x42c622**, so the second
+pass is **additive**, lit or not.
+
+**Q4 — any per-channel scaling only the unlit path gets?** **No.**
+- `GL_TEXTURE_ENV_COLOR` (0x2201) does not appear anywhere in `.text` — a
+  `grep` of the full disassembly for the constant returns nothing. There is no
+  env colour, so `GL_ADD`/`GL_MODULATE` are the only two combiners in play.
+- Pass 1 issues **no `glTexEnvi` at all** (the import at `[0x45a190]` is absent
+  from 0x40c3de–0x40c48d). Unit 0 therefore keeps `GL_MODULATE` from pass 0,
+  and the `glColor4f`/`glMaterialfv` colour set in pass 0 still applies —
+  pass 1 draws `glColor × pass1Texture`, not the raw texel.
+- The **shared tail runs for pass 1 too**: control reaches 0x40c48f from
+  0x40c447 / 0x40c47f / 0x40c48d, so depth (`+0x64`), fog (`+0x6a`) and cull
+  (`+0x6b`) are all re-issued. `material[+0x6a]` is **never written by the
+  `SURF` builder** (no store to `+0x6a` anywhere in 0x42b8a0–0x42cc79), so it
+  keeps the ctor default 1 and **fog applies to the additive pass as well** —
+  a fogged additive pass contributes `f·LUMI + (1−f)·fogColour`, i.e. the glow
+  is attenuated by distance and the fog colour is added a second time.
+- Depth for pass 1 is `+0x64 = 3` → `glDepthMask(GL_TRUE)`, `GL_LEQUAL`
+  (0x40c4cc–0x40c4e0), not a no-write pass.
+
+### 13.2 The implementable rule
+
+For a surface with texture mask *N*, luminosity *L*, diffuse level *D*,
+transparency *T*, surface colour *C*:
+
+1. **Colour.** `col = (L > 0.95)`? Draw unlit: emit `glColor4f`-equivalent
+   `K = (D, D, D)` if the mask has bit 1 (a `COLR` block), else `K = D·C`;
+   alpha `1 − T`; **no lighting term at all** (not even ambient — 0x40c21a
+   disables `GL_LIGHTING` outright). If `L ≤ 0.95`, the *same* `K` goes to
+   `GL_DIFFUSE`, with `GL_AMBIENT = (1,1,1)` unconditionally (0x42b90b) and
+   `GL_EMISSION = (0,0,0)` (never written).
+2. **Units** — identical in both cases:
+   - mask 0 → no texture. masks 1, 4 → unit 0 only.
+   - mask 0x80 → unit 0 + `GL_SPHERE_MAP` texgen.
+   - mask 3 → unit 0 = COLR, unit 1 = LUMI, unit-1 env **`GL_ADD`**.
+   - mask 5 → unit 0 = COLR, unit 1 = DIFF, unit-1 env `GL_MODULATE`.
+   - mask 0x81 → unit 0 = COLR, unit 1 = RIMG sphere-mapped, env `GL_ADD`.
+   - **mask 7 → unit 0 = COLR (slot +0x98), unit 1 = DIFF (slot +0x140,
+     `GL_MODULATE`), pass-1 texture = LUMI (slot +0xec)**, read straight off
+     the register usage in the mask-7 branch: `EBX = surf+0x98` (0x42b947),
+     `ESI = surf+0x140` (0x42b99b), `LEA ESI,[EBP+0xec]` (0x42c4df); binds at
+     0x42c3cd (`unit 0`), 0x42c4d4 (`unit 1`), 0x42c617 (`pass 1`); env writes
+     `+0x5c = 0` @0x42c4e6 and `+0x60 = 1` @0x42c622.
+3. **Pass 0.** `frag = K · tex0(uv0)`, then `· tex1(uv1)` (MODULATE) or
+   `+ tex1(uv1)` (ADD). Blend from `material[+0x58]` (§4.4), depth from `+0x64`,
+   fog from `+0x6a`, cull from `+0x6b`.
+4. **Pass 1** (mask 7 only, and **only** because `material[+0x3c] > 2`):
+   same geometry, same indices, **unit 1 off**, unit 0 = the LUMI texture
+   sampled with the **third** UV set (`group[+0x24]`, stride 8 — 0x4433cc),
+   `frag = K · texLumi(uv2)`, `glEnable(GL_BLEND)` with `glBlendFunc(GL_ONE,
+   GL_ONE)`, `glDepthMask(GL_TRUE)`, `GL_LEQUAL`, **and the same fog as pass 0**.
+
+So an unlit mask-7 surface is exactly
+`K·COLR·DIFF  +  K·LUMI`, both terms fogged, with `K = (D,D,D,1−T)`.
+
+### 13.3 This does *not* explain the over-brightness — `PROJ = 5` does
+
+Nothing above makes an unlit mask-7 surface brighter than a faithful
+implementation: the unlit path is a pure `glColor4f`-for-`glMaterialfv` swap,
+and for these three surfaces the colour it sets is white. **The unlit path is
+not the fault.** The fault is one line further down the pipeline:
+
+All three problem objects project **every** `BLOK` with **`PROJ 5` (UV map)**,
+and they are the *only* objects in the archive that do. A scan of all 49
+shipped `.lwo` files gives a `PROJ` histogram of `{0: 25, 5: 60, 1: 4}`, and
+every one of the 60 `PROJ 5` blocks lives in `KaivoalieniRadOut.lwo` (15),
+`hirbiRadBack.lwo` (27) or `rad_out.lwo` (18). Each carries a full set of
+`TXUV` `VMAP`s — one per surface *per channel family*, e.g. `color0001` for the
+COLR block and `diffuse0001` for that surface's LUMI and DIFF blocks — and each
+`BLOK` names its own map in its `VMAP` subchunk.
+
+The engine handles this. The texgen dispatcher `FUN_0042b0c0` @0x42b0c0 does
+`ECX = chan[+0x00] (= PROJ+1); DEC ECX; CMP ECX,5; JA skip;
+JMP [ECX*4 + 0x42b128]`, and the table at 0x42b128 — read out of the image at
+file offset 0x2b128 — is **six** entries:
+
+| PROJ | table entry | worker |
+|---:|---|---|
+| 0 planar | 0x42b0e9 | `FUN_0042b140` |
+| 1 cylindrical | 0x42b101 | `FUN_0042b500` |
+| 2 spherical | 0x42b0f5 | `FUN_0042b2b0` |
+| 3 cubic | 0x42b117 | **skip — writes nothing** |
+| 4 front | 0x42b117 | **skip — writes nothing** |
+| 5 **UV** | 0x42b10d | **`FUN_0042b720`** |
+
+`FUN_0042b720` picks up the per-channel `VMAP` handle
+(`MOV EBP,[ECX + chan*0x54 + 0xac]`, 0x42b736), searches the layer's map list
+by name (0x42b74d–0x42b789), looks the point up in the map's tree
+(`FUN_0042d040` @0x42b816), and writes `u = uv.u`, `v = 1.0 − uv.v`
+(`FLD [0x45a310]; FSUB` at 0x42b82e/0x42b841); a point absent from the map gets
+the static `(0,0)` at `0x4a9988`. This is already documented in **§10.3** — it
+was recovered and then not carried into the port.
+
+`productions/lapsus/web/js/main.js`'s `projectUV` has `case 1`, `case 2`,
+`case 3: case 4: → (0,0)`, and `default: → planar`. There is **no `case 5`**,
+so all 60 UV-mapped blocks fall into the planar branch and are projected on
+`AXIS`/`SIZE`/`CNTR` that were never meant to be used. That mis-samples all
+three textures — COLR, DIFF and LUMI — on all three objects at once.
+
+Why it read as *over-bright* and then as *over-dark*: before the TGA decoder
+landed, the DIFF and LUMI channels (all `.tga`) failed to load, so the
+surfaces drew as `white × COLR` with no modulation — visibly blown out. With
+the decoder in place they now modulate, but by texels fetched at planar
+coordinates: the DIFF/LUMI bakes are thin strips (`diffuse0001kaivoalieni.tga`
+is 256×32, mean 40/255; `luminosity0001kaivoalieni.tga` 256×32, mean 10/255)
+and the planar projection smears them into streaks. A fresh render of
+`kaivoalieni` at t=6.75 s is now near-black with radial streaks where the
+capture is a smooth warm-brown corridor — the same bug, the other side of it.
+That is also why swapping the two texture-order hypotheses moved the score by
+nothing: both were fetching from the wrong coordinates.
+
+**To fix**: implement `PROJ 5` per §10.3 — resolve the block's `VMAP` name in
+the layer's `TXUV` maps, `u = uv.u`, `v = 1 − uv.v`, `(0,0)` for unmapped
+points — and keep §10.4's slot routing (COLR → uv0, DIFF → uv1, LUMI → the
+pass-1 side array), which means the pass-1 draw must bind its own UV buffer
+rather than reusing uv1.
+
+### 13.4 Smaller deviations found while reading, all in the same function
+
+Cited so a port can close them without re-deriving:
+
+- Pass 1 currently emits the raw LUMI texel. The engine emits
+  `glColor × texel` — unit 0 keeps `GL_MODULATE` because pass 1 issues no
+  `glTexEnvi` (0x40c3de–0x40c48d). Identical only while `D = 1` and `T = 0`.
+- Pass 1 is **fogged** (0x40c48f tail, `material[+0x6a]` never cleared). Only
+  `higherbiing` has `FogType 1`, so this bites there and not in kaivoalieni /
+  rad_out (both `FogType 0`).
+- Pass 1 uses `glDepthMask(GL_TRUE)` + `GL_LEQUAL` (depth mode 3), not a
+  no-write pass.
+- Pass 1's texcoord array is the stride-8 side array `group[+0x24]`
+  (0x4433cc), a third UV set — not uv1 reused.
+- Pass 1 never re-issues `glClientActiveTextureARB(GL_TEXTURE1)` /
+  `glDisableClientState`, so unit 1's texcoord array stays enabled across the
+  draw; harmless only because unit 1's `GL_TEXTURE_2D` is off.

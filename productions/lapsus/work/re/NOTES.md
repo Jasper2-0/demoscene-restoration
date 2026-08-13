@@ -559,3 +559,36 @@ adjusting coefficients until it looks right.
    before mp3#2 would finish. Part 1 ≈ 0–107 s, part 2 ≈ 107–219 s.
 4. Hair `.txt` + `epes` particle sprites: parse formats after the Ghidra pass
    shows the consuming code.
+
+## Mask-7 "over-brightness" — SOLVED 2026-08-13, see `RENDER.md` §13
+
+Not the unlit path. `FUN_0040c060`'s unlit branch (0x40c1e0–0x40c224) is a
+pure `glColor4f(diffuse/255, 1−transparency)` + `glDisable(GL_LIGHTING)`
+substitution: it falls through to 0x40c225 and shares the unit-0/unit-1/
+blend/depth/fog/cull code with the lit branch byte for byte. Both units stay
+enabled, the env modes are unchanged, the second pass is still drawn (the pass
+count `FUN_0040c050` @0x40c050 reads only `material[+0x3c]`), and there is no
+texture-env colour anywhere in `.text`. For these three surfaces
+(`COLR (1,1,1) · DIFF 1 · LUMI 1 · TRAN 0`) the unlit colour is plain white.
+
+The actual fault: all three objects — and **only** these three in the whole
+archive (`PROJ` histogram over 49 LWOs: `{0: 25, 5: 60, 1: 4}`) — use
+**`PROJ 5`, UV mapping**, with a `TXUV` `VMAP` per surface per channel family.
+The engine implements it (`FUN_0042b0c0`'s jump table at 0x42b128 has six
+entries; index 5 → `FUN_0042b720`, `u = uv.u`, `v = 1 − uv.v`), and
+`RENDER.md` §10.3 already documented it. `web/js/main.js`'s `projectUV` has no
+`case 5`, so every UV block falls into `default:` = planar. All three textures
+on all three objects are therefore sampled at the wrong coordinates.
+
+That also explains the score history: pre-TGA the DIFF/LUMI channels simply
+did not load and the surfaces drew as `white × COLR` — blown out. With the TGA
+decoder they modulate, but by strip textures (`diffuse0001kaivoalieni.tga` is
+256×32, mean 40/255) fetched planar, so `kaivoalieni` at t=6.75 is now
+near-black with radial streaks. And it explains why swapping the two
+texture-order hypotheses moved nothing: both read from the wrong UVs.
+
+Next: implement `PROJ 5` per §10.3, keep §10.4's slot routing (COLR → uv0,
+DIFF → uv1, LUMI → the pass-1 side array), and give the pass-1 draw its own UV
+buffer instead of reusing uv1. §13.4 lists four smaller pass-1 deviations
+(pass 1 modulates by `glColor`, is fogged, writes depth, uses the third UV
+set).

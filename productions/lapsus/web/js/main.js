@@ -17,7 +17,7 @@
 //   fovX       = 2·atan(1/zoom);  fovY = 0.75·fovX AS AN ANGLE
 //   frustum(±tan(fovX/2)·near, ±tan(0.375·fovX)·near, near, far), near=1 far=100
 //   frontFace(CW), cullFace(BACK)
-import { parseLWS, evalEnvelope } from '../../work/js/lws.mjs';
+import { parseLWS, evalEnvelope, MORPH_EPSILON } from '../../work/js/lws.mjs';
 import { parseLWO } from '../../work/js/lwo.mjs';
 import { decodeTGA } from '../../work/js/tga.mjs';
 import { parseHair, buildStrands, simulate, toLines, msvcRand } from '../../work/js/hair.mjs';
@@ -144,19 +144,35 @@ uniform float uSpec, uShine;         // specularity, shininess
 uniform sampler2D uTex1;             // second texture unit
 uniform bool uHasTex1, uTex1Add;     // unit-1 env: GL_ADD when true, else MODULATE
 uniform bool uPass1;                 // mask-7 second pass: additive LUMI only
+uniform bool uTexGen0;               // unit-0 GL_SPHERE_MAP texgen (mask 0x80)
 uniform bool uFogOn; uniform vec3 uFogColor; uniform vec2 uFogRange;
+// GL_SPHERE_MAP exactly as the fixed-function pipeline derives it, from the
+// eye-space normal and the eye vector.
+vec2 sphereMap(vec3 n, vec3 p){
+  vec3 u = normalize(p);
+  vec3 r = u - 2.0 * n * dot(n, u);
+  float m = 2.0 * sqrt(r.x*r.x + r.y*r.y + (r.z + 1.0)*(r.z + 1.0));
+  return vec2(r.x/m + 0.5, r.y/m + 0.5);
+}
 void main(){
   // Mask 7 (COLR+DIFF+LUMI) draws a SECOND additive pass carrying only the
   // LUMI texture, on its own UV set (RENDER.md §4.5, mat[+0x60] = 1).
   if (uPass1) { o = vec4(texture(uTex1, vUV1).rgb, 1.0); return; }
-  vec3 base = uColor * (uHasTex ? texture(uTex, vUV).rgb : vec3(1.0));
+  vec3 n = normalize(vN);                       // GL_NORMALIZE equivalent
+  if (uTwoSided && !gl_FrontFacing) n = -n;
+  // MASK 0x80 — a reflection image and NOTHING else. The engine binds the
+  // sphere map to texture unit ZERO (0x42bd1e: setTexCount(1),
+  // setTexture(unit 0, refl), setTexGen(unit 0, SPHERE_MAP)), and unit 0's env
+  // mode is unconditionally GL_MODULATE (§4.4 @0x40c231). So on these surfaces
+  // the reflection MULTIPLIES the lit colour; it is only ADDED when it lands on
+  // unit 1, which happens for mask 0x81 (a colour texture as well).
+  vec2 uv0 = uTexGen0 ? sphereMap(n, vP) : vUV;
+  vec3 base = uColor * (uHasTex ? texture(uTex, uv0).rgb : vec3(1.0));
   // Unit 1: GL_MODULATE for a DIFF texture (mask 5), GL_ADD for LUMI (mask 3).
   if (uHasTex1) {
     vec3 t1 = texture(uTex1, vUV1).rgb;
     if (uTex1Add) base += t1; else base *= t1;
   }
-  vec3 n = normalize(vN);                       // GL_NORMALIZE equivalent
-  if (uTwoSided && !gl_FrontFacing) n = -n;
   vec3 col;
   if (uUnlit) {
     col = base;
@@ -177,12 +193,7 @@ void main(){
   // that mask bit 0x80 is cleared unless surface reflectivity > 0.95. So REFL
   // is a threshold, not a coefficient, and multiplying by it here was
   // inventing an attenuation the fixed-function pipeline cannot express.
-  if (uHasEnv) {
-    vec3 u = normalize(vP);
-    vec3 r = u - 2.0 * n * dot(n, u);
-    float m = 2.0 * sqrt(r.x*r.x + r.y*r.y + (r.z + 1.0)*(r.z + 1.0));
-    col += texture(uEnv, vec2(r.x/m + 0.5, r.y/m + 0.5)).rgb;
-  }
+  if (uHasEnv) col += texture(uEnv, sphereMap(n, vP)).rgb;
   // Specular, added AFTER the texture — the engine enables
   // GL_SEPARATE_SPECULAR_COLOR, so the highlight is not modulated by the
   // texture the way the diffuse term is (RENDER.md §4.5). Only when the
@@ -236,6 +247,7 @@ const uFogRange = gl.getUniformLocation(prog, 'uFogRange');
 const uHasTex1 = gl.getUniformLocation(prog, 'uHasTex1');
 const uTex1Add = gl.getUniformLocation(prog, 'uTex1Add');
 const uPass1 = gl.getUniformLocation(prog, 'uPass1');
+const uTexGen0 = gl.getUniformLocation(prog, 'uTexGen0');
 
 // Texture coordinates, read out of dm2000 itself — NOT from LightWave's
 // documentation, which disagrees (METHOD.md, "the binary is the source of
@@ -305,17 +317,27 @@ function meshFromLayer(layer, obj) {
       const a = poly[0], b = poly[i], c = poly[i + 1];
       g.push(a, b, c);
       idx.push(a, b, c);
-      const ax = P[a*3], ay = P[a*3+1], az = P[a*3+2];
-      const ux = P[b*3]-ax, uy = P[b*3+1]-ay, uz = P[b*3+2]-az;
-      const vx = P[c*3]-ax, vy = P[c*3+1]-ay, vz = P[c*3+2]-az;
-      const nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
-      for (const k of [a, b, c]) { nrm[k*3] += nx; nrm[k*3+1] += ny; nrm[k*3+2] += nz; }
     }
   });
-  for (let i = 0; i < n; i++) {
-    const l = Math.hypot(nrm[i*3], nrm[i*3+1], nrm[i*3+2]) || 1;
-    nrm[i*3] /= l; nrm[i*3+1] /= l; nrm[i*3+2] /= l;
-  }
+  // Face-normal accumulation, factored out because a morphed mesh has to redo
+  // it every frame (the deltas are large enough on silli to change the shading
+  // completely, not just the silhouette).
+  const buildNormals = (pts, out) => {
+    out.fill(0);
+    for (let t = 0; t < idx.length; t += 3) {
+      const a = idx[t], b = idx[t+1], c = idx[t+2];
+      const ax = pts[a*3], ay = pts[a*3+1], az = pts[a*3+2];
+      const ux = pts[b*3]-ax, uy = pts[b*3+1]-ay, uz = pts[b*3+2]-az;
+      const vx = pts[c*3]-ax, vy = pts[c*3+1]-ay, vz = pts[c*3+2]-az;
+      const nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
+      for (const k of [a, b, c]) { out[k*3] += nx; out[k*3+1] += ny; out[k*3+2] += nz; }
+    }
+    for (let i = 0; i < n; i++) {
+      const l = Math.hypot(out[i*3], out[i*3+1], out[i*3+2]) || 1;
+      out[i*3] /= l; out[i*3+1] /= l; out[i*3+2] /= l;
+    }
+  };
+  buildNormals(P, nrm);
   // UVs are per-surface (each surface has its own projection), but a point can
   // only carry one UV in a shared buffer. Every surface in these objects
   // shares the same SIZE/CENTER/AXIS, so one projection per LAYER is exact
@@ -332,9 +354,22 @@ function meshFromLayer(layer, obj) {
   const posBuf = mkBuf(P), nrmBuf = mkBuf(nrm);
   const uvFor = (blk) => {
     const a = new Float32Array(n * 2);
-    if (blk) for (let i = 0; i < n; i++) {
-      const [u, v] = projectUV(P[i*3], P[i*3+1], P[i*3+2], blk);
-      a[i*2] = u; a[i*2+1] = v;
+    if (blk && blk.projection === 5) {
+      // PROJ 5 is UV MAPPING: coordinates come from the named TXUV VMAP, not
+      // from geometry. `v` is FLIPPED (v = 1 - uv.v) — the only projection
+      // mode that flips (RENDER.md §10.3). All 60 PROJ-5 blocks in the
+      // archive belong to KaivoalieniRadOut / hirbiRadBack / rad_out, so
+      // omitting this mode planar-projected those three objects entirely.
+      const map = layer.uvMaps?.[blk.uvMap] ??
+        Object.values(layer.uvMaps ?? {}).find((m) => m.type === 'TXUV');
+      if (map) for (const [pt, vals] of map.entries) {
+        if (pt < n) { a[pt*2] = vals[0]; a[pt*2+1] = 1 - vals[1]; }
+      }
+    } else if (blk) {
+      for (let i = 0; i < n; i++) {
+        const [u, v] = projectUV(P[i*3], P[i*3+1], P[i*3+2], blk);
+        a[i*2] = u; a[i*2+1] = v;
+      }
     }
     return mkBuf(a);
   };
@@ -374,7 +409,35 @@ function meshFromLayer(layer, obj) {
     if (P[i+k] < mn[k]) mn[k] = P[i+k];
     if (P[i+k] > mx[k]) mx[k] = P[i+k];
   }
-  return { parts, count: idx.length, centre: [0,1,2].map((k) => (mn[k] + mx[k]) / 2) };
+  // ---- LW_MorphMixer support. The MORF vertex maps hold RELATIVE deltas and
+  // the engine composes them additively — FUN_0041be60 @0x41bfd6 walks
+  // `out = base + sum_i(w_i * delta_i)` with one pointer per active target,
+  // striding numMorphs*12 bytes per vertex. UVs are NOT recomputed: the engine
+  // bakes them into the vertex buffer at LOAD time from the raw PNTS
+  // (RENDER.md §10.1), so they stay on the unmorphed positions.
+  const morphMaps = new Map();
+  for (const [name, m] of Object.entries(layer.uvMaps ?? {}))
+    if (m.type === 'MORF' && m.dim === 3) morphMaps.set(name, m.entries);
+  const morphed = morphMaps.size ? new Float32Array(P.length) : null;
+  let morphState = '';
+  const applyMorph = (active) => {         // [{ name, w }] with |w| > epsilon
+    const key = active.map((a) => a.name + ':' + a.w.toFixed(5)).join(',');
+    if (key === morphState) return;
+    morphState = key;
+    morphed.set(P);
+    for (const { name, w } of active) {
+      const e = morphMaps.get(name);
+      if (!e) continue;                    // engine throws MorphMapNotFound here
+      for (const [pt, v] of e) {
+        morphed[pt*3] += w * v[0]; morphed[pt*3+1] += w * v[1]; morphed[pt*3+2] += w * v[2];
+      }
+    }
+    buildNormals(morphed, nrm);
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, morphed, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf); gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.DYNAMIC_DRAW);
+  };
+  return { parts, count: idx.length, centre: [0,1,2].map((k) => (mn[k] + mx[k]) / 2),
+           morphMaps, applyMorph: morphed ? applyMorph : null };
 }
 
 gl.bindAttribLocation(prog, 0, 'aPos');
@@ -631,7 +694,22 @@ const bgVao = gl.createVertexArray();
       const blk = s.blocks.find((b) => b.channel === 'COLR') ?? s.blocks[0];
       const bDiff = s.blocks.find((b) => b.channel === 'DIFF') ?? null;
       const bLumi = s.blocks.find((b) => b.channel === 'LUMI') ?? null;
-      const tex = await texOf(blk);
+      // The surface's texture MASK (RENDER.md §4.5) is built from which of the
+      // eight name slots are non-empty; bit 0x80 is the reflection image and is
+      // cleared unless reflectivity > 0.95. `mask 0x80` — reflection and
+      // NOTHING else — is 26 of the archive's 73 surfaces, and the engine
+      // handles it at 0x42bd1e as ONE texture on UNIT 0 with sphere-map texgen:
+      //   setTexCount(mat, 1)          @0x42be1c -> mat[+0x3c] = 1
+      //   setTexture(mat, 0, refl)     @0x42be30 -> mat[+0x40] = tex
+      //   setTexGen(mat, 0, 1)         @0x42be3f -> mat[+0x4c] = SPHERE_MAP
+      // Unit 0's env mode is always GL_MODULATE, so the reflection MULTIPLIES
+      // the lit colour. Treating it as unit 1 / GL_ADD (which is only right for
+      // mask 0x81, i.e. WITH a colour texture) turns every all-metal object
+      // into a white silhouette: base white + a full-brightness env texel.
+      const reflTex = (s.reflection ?? 0) > 0.95 && s.reflectionImage
+        ? await texOf({ imageIndex: s.reflectionImage }) : null;
+      const mask80 = !!reflTex && s.blocks.length === 0;
+      const tex = mask80 ? reflTex : await texOf(blk);
       // unit 1 is DIFF (modulate) when present, else LUMI (add). With all
       // three, LUMI moves to the additive second pass instead.
       const tex1 = await texOf(bDiff ?? bLumi);
@@ -648,6 +726,7 @@ const bgVao = gl.createVertexArray();
       const matColor = blk0 ? [dl, dl, dl] : [sc[0]*dl, sc[1]*dl, sc[2]*dl];
       mats.set(s.name, {
         tex, tex1, texPass1, tex1Add: !bDiff && !!bLumi, color: matColor,
+        texGen0: mask80,
         // RENDER.md §8: luminosity > 0.95 is drawn unlit via glColor4f
         unlit: (s.luminosity ?? 0) > 0.95,
         diffuse: s.diffuse ?? 1,
@@ -680,8 +759,11 @@ const bgVao = gl.createVertexArray();
         shine: Math.max(1, (s.glossiness ?? 0.2) * 128),
         // Mask bit 0x80 (sphere-map texgen) is cleared unless reflectivity
         // > 0.95 (RENDER.md §4), so a dim reflection is not a faint one — it
-        // is no reflection at all.
+        // is no reflection at all. This slot is the ADDITIVE unit-1 sphere map
+        // of mask 0x81 only: when the reflection is the surface's *sole*
+        // texture (mask 0x80) it belongs on unit 0 and is handled above.
         envTex: await (async () => {
+          if (mask80) return null;
           if ((s.reflection ?? 0) <= 0.95) return null;
           const c = s.reflectionImage ? lwo.clips.find((c) => c.index === s.reflectionImage) : null;
           if (!c?.file) return null;
@@ -817,6 +899,18 @@ const bgVao = gl.createVertexArray();
   gl.uniform1i(uEnv, 2);
   gl.uniform1i(gl.getUniformLocation(prog, 'uTex1'), 1);
 
+  // ---- LW_MorphMixer displacement, before anything reads the geometry.
+  // Weight = the MorfForm envelope sampled at localTime, and a target is
+  // dropped entirely unless |w| > 0.01 (FUN_0041be60 @0x41beb4 against
+  // +/-_DAT_0045acdc). Five scenes use it; silli is the one where it dominates.
+  for (const d of drawables) {
+    if (!d.mesh.applyMorph) continue;
+    const active = (d.item.morphs ?? [])
+      .map((m) => ({ name: m.name, w: evalEnvelope(m.envelope, T) }))
+      .filter((m) => Math.abs(m.w) > MORPH_EPSILON);
+    d.mesh.applyMorph(active);
+  }
+
   // ---- lights. LightType 0 is a DISTANT light: direction only, taken from
   // the item's world +Z and negated to point toward the light (RENDER.md 8).
   // Light-model ambient = scene ambient colour x intensity; pene sets
@@ -898,6 +992,7 @@ const bgVao = gl.createVertexArray();
       gl.uniform1i(uHasTex1, mat.tex1 ? 1 : 0);
       gl.uniform1i(uTex1Add, mat.tex1Add ? 1 : 0);
       gl.uniform1i(uPass1, 0);
+      gl.uniform1i(uTexGen0, mat.texGen0 ? 1 : 0);
       gl.activeTexture(gl.TEXTURE0);
       if (mat.tex) { gl.bindTexture(gl.TEXTURE_2D, mat.tex); textured++; }
       if (mat.tex1) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.tex1); }
