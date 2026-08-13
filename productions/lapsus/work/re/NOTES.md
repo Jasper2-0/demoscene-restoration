@@ -410,6 +410,18 @@ A single-frame renderer has no history, so these cannot be scored fairly by
 `allparts.mjs` and their numbers should be read as "not applicable" rather
 than "wrong". Needs a ping-pong FBO and a driven clock.
 
+**2b. Mask-7 texture ORDERING is not the fault — both readings tested.**
+With the TGA decoder in place, the two candidate assignments were measured:
+DIFF on unit 1 with LUMI additive (RENDER.md's literal reading) gives
+kaivoalieni 0.231 / rad_out 0.203 / higherbiing −0.003; LUMI on unit 1 with
+DIFF additive (textures filling units in slot order) gives 0.212 / 0.206 /
+0.033. Both are within noise of each other, so the remaining fault lies
+elsewhere — most likely in the **unlit path**, since every one of these
+surfaces carries LUMI 1.0 and is therefore drawn fullbright via `glColor4f`,
+where the interaction between "unlit" and a modulating second texture is
+unspecified in the notes. Read 0x42ca0f and the unlit branch of the material
+apply before touching the texture assignment again.
+
 **2. Mask-7 surfaces render too bright.** `kaivoalieni`, `rad_out` and
 `higherbiing` all score low and all draw `*RadOut`/`hirbiRadBack` objects
 whose surfaces are COLR+LUMI+DIFF **with LUMI 1.0**, i.e. unlit *and*
