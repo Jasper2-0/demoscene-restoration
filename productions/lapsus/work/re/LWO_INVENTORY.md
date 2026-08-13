@@ -46,10 +46,32 @@ question for `re/RENDER.md`; `RIMG` (reflection image) and `REFL` on 55
 surfaces hint at environment mapping, which pairs with the `envshit1.tga`
 texture name.
 
-**UVs live in `VMAP TXUV` keyed by point index** — note LWO's per-point (not
-per-polygon-vertex) UV storage, so a point shared between polygons with
-different UVs needs splitting at export time. No `VMAD` (discontinuous UV)
-chunks ship, so that case does not arise here.
+**Most objects have NO texture UVs at all — corrected.** An earlier note here
+said UVs live in `VMAP TXUV`; that is true for only 3 of the 50 files. The
+other blocks name a **projection** (`PROJ`) plus an `AXIS`, `SIZE` and
+`CNTR`, and the coordinates are computed from the geometry: 60 blocks are UV,
+22 planar, 4 cylindrical. Where TXUV does exist, note LWO's per-point (not
+per-polygon-vertex) storage, so a point shared between polygons with
+different UVs needs splitting. No `VMAD` (discontinuous UV) chunks ship.
+
+Two traps in the projection parameters, both found by rendering:
+
+- **`AXIS` appears twice per block and the two mean different things.** The
+  one inside the `IMAP` header / `TMAP` is the texture-space axis; the one at
+  `BLOK` level beside `PROJ` is the *projection* axis. Taking the first gives
+  every surface axis=Y, which projects a front-facing texture top-down and
+  smears it in streaks down the model.
+- **Vertical mapping is `0.5 − d/size`, not `0.5 + d/size`.** Image V runs
+  downward from the first row while world Y runs up, and rows are not flipped
+  at upload (RENDER.md §8). Inverting it samples the black surround of a
+  front-projected texture instead of the subject, which looks like "the model
+  failed to texture" rather than like a flipped axis.
+
+**Several textures are pre-rendered images of the object itself**, with
+lighting baked in and a black surround — e.g. `naamioB.jpg` (512×1024) is a
+front view of the hulluolli bust, planar-projected along Z back onto the
+geometry. That is why those surfaces carry `LUMI 1.0` and are drawn unlit:
+the shading is already in the texture.
 
 Coordinates are LightWave's: **Y up, left-handed (+Z into the screen)**. The
 parser does not convert; conversion is the renderer's decision.

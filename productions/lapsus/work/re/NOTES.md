@@ -118,10 +118,20 @@ validates the whole transform chain at once:
   `frontFace(CW)`
 - near = 1.0, far = 100.0
 
-Remaining differences are exactly the unimplemented layers: no textures, no
-material/lighting model, so the statue is flat grey and `naamiotaus.lwo` —
-the background plane at z≈19.4 that carries the blurred colonnade in the
-original — renders as an untextured wall.
+**Textures added the same day** and the frame now matches the capture closely:
+statue, background colonnade, tone and framing all read correctly. Texture
+coordinates are *computed*, not read — see `LWO_INVENTORY.md`: most objects
+carry no TXUV map, only a projection + axis + size + centre. Surfaces with
+`LUMI 1.0` are drawn unlit per RENDER.md §8, which is right because several
+textures are pre-rendered views of the object with the lighting already baked
+in.
+
+Still open on this frame: ours sits a fraction smaller and further left than
+the reference, and the reference is slightly warmer/higher contrast. Candidates
+are a sub-frame time offset (the demo is free-running, so the capture's frame
+is not exactly at t=4.8), and the fact that no lighting, fog or fader is
+implemented yet. Worth settling with a small time sweep before assuming a
+transform error.
 
 Two format facts cost a debugging round each and are now in
 `LWS_INVENTORY.md`: **cameras carry 6 motion channels, not 9**, and

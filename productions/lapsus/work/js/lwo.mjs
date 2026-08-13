@@ -113,7 +113,7 @@ function parseBlock(b, start, len) {
   blk.type = head.id;                                    // IMAP / PROC / SHDR
   const [ord] = readStr(b, head.start, head.start + head.len);
   blk.ordinal = ord;
-  const walk = (list) => {
+  const walk = (list, blockLevel = false) => {
     for (const c of list) {
       const o = c.start;
       switch (c.id) {
@@ -126,13 +126,24 @@ function parseBlock(b, start, len) {
         case 'VMAP': blk.uvMap = readStr(b, o, o + c.len)[0]; break;
         case 'SIZE': blk.size = [f32(b, o), f32(b, o + 4), f32(b, o + 8)]; break;
         case 'CNTR': blk.center = [f32(b, o), f32(b, o + 4), f32(b, o + 8)]; break;
-        case 'TMAP': walk(subChunks(b, o, o + c.len)); break;   // nested
+        // AXIS appears TWICE per block and the two mean different things: the
+        // one inside the IMAP header/TMAP is the texture-space axis, while the
+        // one at BLOK level beside PROJ is the PROJECTION axis. Taking the
+        // first one gave every surface axis=Y, which projects a face texture
+        // top-down and smears it vertically down the model — a very
+        // recognisable artifact once seen. Only the block-level one counts.
+        case 'AXIS': if (blockLevel) blk.axis = u16(b, o); else blk.texAxis = u16(b, o); break;
+        case 'NEGA': blk.negative = !!u16(b, o); break;
+        case 'WRPW': blk.wrapW = f32(b, o); break;   // cylindrical/spherical
+        case 'WRPH': blk.wrapH = f32(b, o); break;   // wrap counts
+        case 'ROTA': blk.rotation = [f32(b, o), f32(b, o + 4), f32(b, o + 8)]; break;
+        case 'TMAP': walk(subChunks(b, o, o + c.len), false); break;   // nested
         default: blk.unknown.push({ id: c.id, len: c.len });
       }
     }
   };
-  walk(subChunks(b, head.start + pad(ord.length + 1), end));
-  walk(top.slice(1));
+  walk(subChunks(b, head.start + pad(ord.length + 1), end), false);  // IMAP header
+  walk(top.slice(1), true);                                         // BLOK level (has PROJ)
   return blk;
 }
 
