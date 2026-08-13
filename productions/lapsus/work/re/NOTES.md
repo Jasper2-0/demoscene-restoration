@@ -471,6 +471,39 @@ so emitter velocity is nonsense — harmless solely because
 `VelocityMultiplier` is 0, and it should be ported as zero rather than
 "fixed".
 
+### FINAL STANDING (all 21 parts render)
+
+hulluolli 0.999 · kuubiotekniikka 0.995 · pene 0.959 · made 0.865 ·
+turska 0.827 · diskojea 0.733 · flu2 0.688 · hairball 0.560 · paleksi 0.547 ·
+krediili 0.523 · syrjakyla 0.515 · viherio 0.488 · pehko 0.410 · hedi 0.324 ·
+kartonki 0.319 · morko 0.290 · kaivoalieni 0.231 · rad_out 0.203 · empt 0.000 ·
+higherbiing −0.003 · silli −0.147. **Median 0.515**, up from 0.324 at the
+start of the closing pass and from "11 of 21 not rendering at all" before it.
+
+Everything specified is now implemented: texgen, materials, multi-texturing
+including the mask-7 second pass, specular, linear fog, depth sorting, the
+blend/depth mode table, faders, backdrops, TGA decoding, animated camera
+zoom, per-part camera cuts and perturbations, hair, particles, and frame
+feedback (as a replayed decay window, since the default framebuffer persists
+across draw calls — no FBO required).
+
+### What is genuinely left
+
+1. **Mask-7 surfaces are over-bright** — kaivoalieni 0.231, rad_out 0.203,
+   higherbiing −0.003, all drawing `*RadOut`/`hirbiRadBack` objects. Ordering
+   has been ruled out empirically (both assignments score within noise), and
+   the textures now load, so the fault is in the **unlit path**: every one of
+   these surfaces carries LUMI 1.0 and is drawn fullbright via `glColor4f`,
+   and how that composes with a modulating unit-1 texture is not covered by
+   the notes. Read the unlit branch at 0x42ca0f and `FUN_0040c060` @0x40c5b0.
+2. **`silli` renders the right object from the wrong viewpoint** — visible in
+   its side-by-side. Its camera is wrong *before* feedback enters into it, so
+   chase the camera, not the trail.
+3. **`Part_Empt` has no scene at all**; its content is the stamping routine in
+   its own vf2 (RENDER.md §12: three phases over 1.3 + 8.0 + 3.7 = 13.0 s,
+   `design1.tga` stamped in a jittered fan with `rand()`-driven alpha).
+4. hedi / kartonki / morko sit at ~0.3 with no single identified cause.
+
 ### The two remaining structural gaps
 
 **1. Frame feedback needs a real frame loop.** Silli (depth-only clear, 20 %
