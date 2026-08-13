@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "slug": "tesla",
+  "title": "Tesla",
+  "group": "Sunflower",
+  "kind": "evidence",
+  "platform": "Browser, Windows",
+  "releaseDate": "2000-07-20",
+  "party": {
+    "name": null,
+    "compo": null,
+    "ranking": null
+  },
+  "ids": {
+    "demozoo": 53,
+    "pouet": 33
+  },
+  "links": {
+    "demozoo": "https://demozoo.org/productions/53/",
+    "pouet": "https://www.pouet.net/prod.php?which=33",
+    "youtube": "https://www.youtube.com/watch?v=Peq6aGCd6_E"
+  },
+  "credits": [
+    {
+      "name": "Yoghurt",
+      "role": "Code"
+    },
+    {
+      "name": "Saffron",
+      "role": "Graphics"
+    },
+    {
+      "name": "Radix",
+      "role": "Music"
+    },
+    {
+      "name": "Lluvia",
+      "role": "Music"
+    },
+    {
+      "name": "mrdoob",
+      "role": "Code"
+    }
+  ],
+  "originals": [
+    {
+      "path": "originals/sunflower/tesla_sunflower.zip",
+      "urls": [
+        "https://files.scene.org/get/demos/groups/sunflower/tesla_sunflower.zip"
+      ],
+      "sha256": "6a354dd5e91045b738071fd6ec7e894de3ea1959c53bb160cb570821912b3dee",
+      "bytes": 7367658,
+      "note": "release"
+    },
+    {
+      "path": "originals/sunflower/tesla_src.zip",
+      "urls": [
+        "https://files.scene.org/get/demos/groups/sunflower/tesla_src.zip"
+      ],
+      "sha256": "d87a7a8089a48e55d1d1726d71c19efee2fc980b562c297ee13e117334c9735d",
+      "bytes": 137480,
+      "note": "released source tree — the SOURCE_LINEAGE.md evidence base"
+    }
+  ],
+  "captures": [],
+  "status": {
+    "web": "none",
+    "pagesRepo": null
+  }
+}
