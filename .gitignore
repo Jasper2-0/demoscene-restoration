@@ -1,0 +1,58 @@
+# -- dependencies & environments -------------------------------------------
+.DS_Store
+__pycache__/
+*.pyc
+node_modules/
+.venv/
+tools/bin/
+
+# -- build output (fully regenerable) --------------------------------------
+dist/
+
+# -- original release archives: never in a public repo. Rehydrate with
+#    `node tools/fetch/originals.mjs` from the prod.json manifests. ---------
+originals/*
+!originals/README.md
+
+# -- per-production exclusions ---------------------------------------------
+# Ghidra project databases embed the analyzed original binary.
+productions/*/work/ghidra/
+productions/*/work/ghidra-project/
+# The unzipped original releases (and tesla's released source tree): pristine
+# copyrighted payload, rehydrated by unzipping the archives that
+# tools/fetch/originals.mjs materializes. The unpack scripts and MANIFEST
+# hashes that consume them ARE committed.
+productions/*/work/src/
+productions/tesla/work/source/
+# Original executables (packed and depacked) — the unpack SCRIPTS are
+# committed, their binary inputs/outputs are not. sonnet_img.bin is the one
+# deliberate exception: the readable site ships it as runtime data already.
+productions/*/work/unpacked/*.exe
+productions/ptct/work/unpacked/party-extracted/frame_upx0_image.bin
+productions/ptct/work/atg/atg2/atg.exe
+productions/ptct/work/atg/atglib/example.exe
+# Upstream iXalance release tarballs — belongs to the ixalance-js import phase.
+productions/ptct/work/ixalance/
+# Regenerable audio renders (baked soundtrack intermediates).
+productions/ptct/work/webixs/*.wav
+productions/lost-vegas/work/audio/*.wav
+# The licensed RinneRadio track ships inside the original archive; until the
+# energia site is published it stays out of the public repo.
+productions/energia/web/assets/energia.mp3
+# Reference captures are recorded, not distributed (see docs/…TODO §0).
+# Rehydrate with `node tools/fetch/capture.mjs <slug>`.
+productions/*/work/reference/
+# Verify output is regenerable screenshot/report volume; the harness
+# scripts that produce it are code and stay in.
+productions/*/work/verify/*
+!productions/*/work/verify/*.mjs
+!productions/*/work/verify/*.sh
+# Baked output is regenerable by the committed generators. Sonnet's two
+# escape-hatch PNGs ship in dist, so they ride along.
+productions/*/work/baked/*
+!productions/sonnet/work/baked/tex
+productions/sonnet/work/baked/tex/*
+!productions/sonnet/work/baked/tex/11.png
+!productions/sonnet/work/baked/tex_2x
+productions/sonnet/work/baked/tex_2x/*
+!productions/sonnet/work/baked/tex_2x/11.png

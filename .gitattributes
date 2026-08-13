@@ -1,0 +1,23 @@
+* text=auto
+*.sh text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+*.bin binary
+*.xm binary
+*.ixa binary
+*.png binary
+*.jpg binary
+*.mp3 binary
+*.flac binary
+*.wasm binary
+MANIFEST.sha256 text eol=lf
+
+# Preserved artifact trees: NEVER normalized. These are byte-exact copies of
+# original release data (SHA-256-gated against the preserved extractions) or
+# vendored third-party trees kept verbatim; CRLF is part of the artifact.
+productions/*/web/assets/** -text
+productions/*/work/unpacked/** -text
+productions/*/work/extracted/** -text
+productions/*/work/atg/** -text
+productions/*/work/webixs/** -text
+productions/*/work/re/oracle/fixtures/** -text
