@@ -54,7 +54,22 @@ async function describe(filename, relative) {
   };
 }
 
+const present = async (p) => fs.access(p).then(() => true, () => false);
+
 for (const configuration of configurations) {
+  // Gitignored inputs (work/src payload, the energia MP3) are absent on a
+  // fresh clone until rehydrated from originals/. Skip that configuration
+  // with an actionable message instead of throwing — build-wonder.sh greps
+  // for its own production's verified line, so a skip elsewhere never
+  // green-lights a build it shouldn't.
+  const inputs = [configuration.source, ...configuration.extras.map((e) => e.source)];
+  const absent = [];
+  for (const input of inputs) if (!await present(input)) absent.push(path.relative(repo, input));
+  if (absent.length) {
+    console.log(`${configuration.name}: SKIPPED — missing ${absent.join(', ')} ` +
+      `(rehydrate: node tools/fetch/originals.mjs, then unzip into work/src)`);
+    continue;
+  }
   const paths = await walk(configuration.source);
   const expected = await Promise.all([
     ...paths.map((relative) => describe(path.join(configuration.source, relative), relative)),
