@@ -377,6 +377,50 @@ Every part scoring 0.000 is now explained: `hairball`, `krediili` and `pehko`
 need the hair system; `empt` has **no `.lws` at all** (its content is drawn
 entirely by its custom vf2); `silli` is a frame-feedback part.
 
+## Standing (2026-08-13) — `node work/verify/allparts.mjs`
+
+| r | part | note |
+|---:|---|---|
+| 0.999 | hulluolli | |
+| 0.995 | kuubiotekniikka | remainder is its loading2.jpg cross-dissolve |
+| 0.959 | pene | |
+| 0.865 | made | |
+| 0.827 | turska | |
+| 0.733 | diskojea | |
+| 0.688 | flu2 | |
+| 0.547 | paleksi | |
+| 0.515 | syrjakyla | |
+| 0.488 | viherio | strobe gates the CLEAR — needs a frame loop |
+| 0.324 | hedi | |
+| 0.319 | kartonki | |
+| 0.290 | morko | |
+| 0.278 | rad_out | mask-7 surfaces, over-bright |
+| 0.229 | kaivoalieni | mask-7 surfaces, over-bright |
+| 0.114 | higherbiing | mask-7 surfaces (hirbiRadBack) |
+| 0.000 | empt, krediili, pehko, hairball | hair system / no scene |
+| −0.114 | silli | frame feedback |
+
+### The two remaining structural gaps
+
+**1. Frame feedback needs a real frame loop.** Silli (depth-only clear, 20 %
+black quad), Pehko (no clear, 5 %), Part_Empt (clears exactly once in the
+whole process) and Viherio (its strobe gates the *clear*, so frames
+accumulate ~0.12 s per hit) all depend on what was in the buffer previously.
+A single-frame renderer has no history, so these cannot be scored fairly by
+`allparts.mjs` and their numbers should be read as "not applicable" rather
+than "wrong". Needs a ping-pong FBO and a driven clock.
+
+**2. Mask-7 surfaces render too bright.** `kaivoalieni`, `rad_out` and
+`higherbiing` all score low and all draw `*RadOut`/`hirbiRadBack` objects
+whose surfaces are COLR+LUMI+DIFF **with LUMI 1.0**, i.e. unlit *and*
+carrying an additive third pass. Visually the geometry, camera and
+composition match well (see the kaivoalieni side-by-side) — only the tunnel
+walls are wrong: ours bright grey-white where the capture is warm brown.
+The combination "unlit + modulated DIFF + additive LUMI" is where to look,
+and it should be settled by reading the material apply
+(`FUN_0040c060` @0x40c5b0 and the mask dispatch at 0x42ca0f) rather than by
+adjusting coefficients until it looks right.
+
 ## Next steps
 
 1. Textures + materials: LWO `SURF`/`BLOK` → GL state per `RENDER.md` §8
