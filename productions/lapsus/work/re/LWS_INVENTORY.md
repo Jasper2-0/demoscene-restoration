@@ -6,10 +6,25 @@ is spantype 0 = TCB (Kochanek-Bartels) except a handful of spantype 3
 (Linear) in `rad_out.lws`; every envelope ends `Behaviors 1 1` (Reset).
 Motion channels are always 9: `px py pz  h p b  sx sy sz` (meters / radians).
 
-**Open question for the engine pass:** frame ranges are almost all `1-60` at
-30 fps = 2 s, but parts visibly run 5–15 s in the capture — the engine must
-loop, stretch, or drive envelope time nonlinearly. Resolve from the dm2000
-sequencer before trusting any timing derived from `LastFrame`.
+**RESOLVED — do not derive timing from `LastFrame`.** The `FirstFrame`/
+`LastFrame`/`Preview*` headers are LightWave *authoring* metadata and the
+engine never reads them. Envelope key times are **absolute seconds**, and the
+keys run far past the nominal 2 s range (paleksi, kartonki, viherio, rad_out
+all key out to 20 s). Verified two ways:
+
+1. In the evaluator `FUN_0041ab80` (read from `disasm.asm` — the decompiler
+   dropped its math, x87-audit **SUSPECT**, 118 x87 instrs): keys are a
+   24-byte stride array (`ADD EBX,0x18`; the `0x2aaaaaab`+`SAR 2` magic is
+   division by 24), the search compares the query time against `key[i].t` at
+   offset 0, and the TCB 4-point stencil (k-2,k-1,k,k+1) **clamps** its
+   indices. There is no modulo, no wrap, no scaling anywhere in the function.
+2. Cross-check against the recovered schedule (`re/ENGINE.md` §5): 19 of 20
+   scheduled scenes have `maxKeyTime >= partDuration`. The single exception,
+   `kuubiotekniikka` (12.0 s of keys in a 13.8 s slot), is consistent with
+   clamping — it holds its final pose for the last 1.8 s.
+
+So a part's animation is simply "evaluate every envelope at the part's
+localTime, in seconds, clamped at both ends".
 
 | scene | frames | objects | nulls | lights | cameras | keys | fog |
 |---|---|---:|---:|---:|---:|---:|---:|

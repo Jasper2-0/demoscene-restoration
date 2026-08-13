@@ -73,10 +73,46 @@ Ghidra 12.1.2 headless (install: `~/tools/ghidra_12.1.2_PUBLIC`, JDK 21 at
   `data/<Name>.lws` path. The part table / sequencing that instantiates them
   in order is the next target.
 
+## Engine recovered (2026-08-13) — see `re/ENGINE.md`
+
+The whole sequencing model is out, and the exe ships **full MSVC RTTI** (108
+mangled class names), so every class has its real name: `Demo`, `DemoPart`,
+`Part_<Name>`, `Music`, `Timer`, `FadeIn/FadeOut/RandomFadeIn/RandomFadeOut`,
+`LW::Scene`, `LW::TextureManager`. That is an enormous head start — no
+guessing at class boundaries.
+
+- **Timeline is hardcoded**, not scripted: `Demo::loadPhase` (0x402860)
+  builds two literal schedules of 0x20-byte entries
+  `{partIndex, start, duration, localTime, fadeIn*, fadeInDur, fadeOut*,
+  fadeOutDur}`. Full play order + fades in ENGINE.md §5.
+- **Clock is QPC wall time**, reset right after each `FSOUND_PlaySound`; FMOD
+  is never queried for position. Per-phase time ≈ time since that half's MP3
+  started — which is exactly what the capture alignment measured.
+- **Independent confirmation**: the hard exit constant at 0x45a324 is
+  **112.0 s**, and the capture gives 219.1 − 106.96 = **112.14 s**. Static
+  analysis and the audio-aligned capture agree without either being fitted to
+  the other.
+- **Mid-demo loader**: `Part_LoadPart2` (draws pics/loading2.jpg) stays
+  current past its 1.5 s duration; at localTime 2.5 it calls `loadPhase(2)`,
+  which destroys phase-1 parts + the TextureManager, loads the phase-2 scenes
+  (~5 s, screen frozen, mp3#1 still playing), then StopSound → play mp3#2 →
+  reset clock. Matches the two-halves structure Jasper described.
+- **Dead content**: `Part_Mela`, `Part_Sittis`, `Part_Kieku`,
+  `Part_StartPart2` are registered but never scheduled — so `mela.lws`,
+  `sittis.lws`, `kieku.lws` ship unused. (Resolves the 23-scenes-vs-21-
+  factories discrepancy from LWS_INVENTORY.md; `pehko` is scheduled and
+  `flu2` is its own part.)
+- The 0x45c688 records were **MSVC RTTI**, not a part registry — hypothesis
+  killed. Nothing sequencing-related runs at CRT init.
+
 ## Next steps
 
-1. Find the part table: who calls the per-part constructors, in what order,
-   and how music time (FSOUND) drives part switching + the mid-demo loader.
+1. Per-part draw functions (the `vf2` of each factory) and `LW::Scene`
+   rendering internals — several sit near x87-audit SUSPECT entries, so read
+   `disasm.asm` for those rather than the C.
+2. LWO (binary IFF) parser — `work/js/lws.mjs` already covers the scenes.
+3. Fader material modes 1/3 blend semantics (ENGINE.md §6).
+4. `data/hairs/*.txt` + the tauno particle system formats.
 2. LWS parser first (text; small), render one scene's camera + object motion
    against a stub renderer; LWO parser second.
 3. ~~Reference capture~~ DONE: youtube oP3lrBNVKBs pinned (219.1 s). Jasper:

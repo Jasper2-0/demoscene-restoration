@@ -136,10 +136,15 @@ export function parseLWS(text) {
 }
 
 // TCB (Kochanek-Bartels) envelope evaluation — the only span type Lapsus uses.
-// Behaviors "1 1" (Reset): before the first key / after the last, hold 0? —
-// LightWave "Reset" returns the envelope to 0 outside the keyed range; VERIFY
-// against the engine's own evaluator (dm2000 may clamp instead) before
-// trusting edges. Marked as the current assumption, not fact.
+//
+// Edge behaviour is CLAMP, not LightWave's nominal "Reset", and `t` is
+// absolute seconds. Both facts come from the engine's own evaluator
+// FUN_0041ab80, read out of disasm.asm because Ghidra dropped its float math
+// (x87-audit SUSPECT): 24-byte key stride, the span search compares against
+// key[i].t at offset 0, and the 4-point stencil clamps its indices at both
+// ends. No modulo and no time scaling exist in that function — see
+// re/LWS_INVENTORY.md. The `Behaviors 1 1` in the files is authoring
+// metadata the engine never reads.
 export function evalEnvelope(env, t) {
   const K = env.keys;
   if (!K.length) return 0;
