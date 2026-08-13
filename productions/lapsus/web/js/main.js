@@ -112,11 +112,11 @@ const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer:
 if (!gl) throw new Error('WebGL2 required');
 
 const VS = `#version 300 es
-in vec3 aPos; in vec3 aNormal; in vec2 aUV;
+in vec3 aPos; in vec3 aNormal; in vec2 aUV; in vec2 aUV1;
 uniform mat4 uMV, uProj;
-out vec3 vN, vP; out vec2 vUV;
+out vec3 vN, vP; out vec2 vUV, vUV1;
 void main(){ vec4 p = uMV * vec4(aPos,1.0); vP = p.xyz;
-  vN = mat3(uMV) * aNormal; vUV = aUV; gl_Position = uProj * p; }`;
+  vN = mat3(uMV) * aNormal; vUV = aUV; vUV1 = aUV1; gl_Position = uProj * p; }`;
 // Fixed-function-equivalent lighting, per RENDER.md §8: per-light diffuse
 // only (no per-light ambient), light-model ambient from the scene, and the
 // LWO surface's own diffuse coefficient. No hardcoded fill light — pene has
@@ -124,7 +124,7 @@ void main(){ vec4 p = uMV * vec4(aPos,1.0); vP = p.xyz;
 // is genuinely black, and an invented ambient floor would wash it out.
 const FS = `#version 300 es
 precision highp float;
-in vec3 vN, vP; in vec2 vUV; out vec4 o;
+in vec3 vN, vP; in vec2 vUV, vUV1; out vec4 o;
 uniform vec3 uColor, uAmbient;
 uniform sampler2D uTex;
 uniform bool uHasTex, uUnlit, uTwoSided;
@@ -137,9 +137,20 @@ uniform sampler2D uEnv;              // RIMG reflection image
 uniform bool uHasEnv;
 uniform float uRefl;
 uniform float uSpec, uShine;         // specularity, shininess
+uniform sampler2D uTex1;             // second texture unit
+uniform bool uHasTex1, uTex1Add;     // unit-1 env: GL_ADD when true, else MODULATE
+uniform bool uPass1;                 // mask-7 second pass: additive LUMI only
 uniform bool uFogOn; uniform vec3 uFogColor; uniform vec2 uFogRange;
 void main(){
+  // Mask 7 (COLR+DIFF+LUMI) draws a SECOND additive pass carrying only the
+  // LUMI texture, on its own UV set (RENDER.md §4.5, mat[+0x60] = 1).
+  if (uPass1) { o = vec4(texture(uTex1, vUV1).rgb, 1.0); return; }
   vec3 base = uColor * (uHasTex ? texture(uTex, vUV).rgb : vec3(1.0));
+  // Unit 1: GL_MODULATE for a DIFF texture (mask 5), GL_ADD for LUMI (mask 3).
+  if (uHasTex1) {
+    vec3 t1 = texture(uTex1, vUV1).rgb;
+    if (uTex1Add) base += t1; else base *= t1;
+  }
   vec3 n = normalize(vN);                       // GL_NORMALIZE equivalent
   if (uTwoSided && !gl_FrontFacing) n = -n;
   vec3 col;
@@ -218,6 +229,9 @@ const uShine = gl.getUniformLocation(prog, 'uShine');
 const uFogOn = gl.getUniformLocation(prog, 'uFogOn');
 const uFogColor = gl.getUniformLocation(prog, 'uFogColor');
 const uFogRange = gl.getUniformLocation(prog, 'uFogRange');
+const uHasTex1 = gl.getUniformLocation(prog, 'uHasTex1');
+const uTex1Add = gl.getUniformLocation(prog, 'uTex1Add');
+const uPass1 = gl.getUniformLocation(prog, 'uPass1');
 
 // Texture coordinates, read out of dm2000 itself — NOT from LightWave's
 // documentation, which disagrees (METHOD.md, "the binary is the source of
@@ -302,31 +316,53 @@ function meshFromLayer(layer, obj) {
   // only carry one UV in a shared buffer. Every surface in these objects
   // shares the same SIZE/CENTER/AXIS, so one projection per LAYER is exact
   // here; a layer whose surfaces disagreed would need vertex splitting.
-  const firstBlk = obj.surfaces.find((s) => s.blocks.length)?.blocks[0] ?? null;
-  const uv = new Float32Array(n * 2);
-  if (firstBlk) {
-    for (let i = 0; i < n; i++) {
-      const [s, t] = projectUV(P[i*3], P[i*3+1], P[i*3+2], firstBlk);
-      uv[i*2] = s; uv[i*2+1] = t;
-    }
-  }
-  const vao = gl.createVertexArray();
-  gl.bindVertexArray(vao);
-  const bind = (loc, data, size) => {
+  // Position and normal are shared; UVs are NOT. Each surface has its own
+  // BLOK projections, and a channel's coordinates come from ITS OWN block —
+  // so every surface group gets its own VAO with uv0/uv1 computed for that
+  // surface. (The engine's vertex is stride 48 with uv0@32 and uv1@40.)
+  const mkBuf = (data) => {
     const b = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    return b;
   };
-  bind(0, P, 3); bind(1, nrm, 3); bind(2, uv, 2);
-  // One element buffer per surface group, drawn with that surface's texture.
+  const posBuf = mkBuf(P), nrmBuf = mkBuf(nrm);
+  const uvFor = (blk) => {
+    const a = new Float32Array(n * 2);
+    if (blk) for (let i = 0; i < n; i++) {
+      const [u, v] = projectUV(P[i*3], P[i*3+1], P[i*3+2], blk);
+      a[i*2] = u; a[i*2+1] = v;
+    }
+    return mkBuf(a);
+  };
   const parts = [];
   for (const [surfName, list] of groups) {
+    const surf = obj.surfaces.find((x) => x.name === surfName);
+    const bColr = surf?.blocks.find((b) => b.channel === 'COLR') ?? surf?.blocks[0] ?? null;
+    // Second unit: DIFF modulates (mask 5), LUMI adds (mask 3). With all
+    // three present it is mask 7 — units 0+1 modulate and LUMI becomes a
+    // separate additive PASS (RENDER.md §4.5).
+    const bDiff = surf?.blocks.find((b) => b.channel === 'DIFF') ?? null;
+    const bLumi = surf?.blocks.find((b) => b.channel === 'LUMI') ?? null;
+    const bSecond = bDiff ?? bLumi;
+    const bPass1 = (bDiff && bLumi) ? bLumi : null;
+
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const attach = (loc, buf, size) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+    attach(0, posBuf, 3); attach(1, nrmBuf, 3);
+    attach(2, uvFor(bColr), 2);
+    attach(3, uvFor(bSecond ?? bColr), 2);
     const ib = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(list), gl.STATIC_DRAW);
-    parts.push({ surfName, ib, count: list.length });
+    gl.bindVertexArray(null);
+    parts.push({ surfName, vao, ib, count: list.length,
+      secondIsAdd: !bDiff && !!bLumi, hasSecond: !!bSecond, pass1Blk: bPass1,
+      pass1Uv: bPass1 ? uvFor(bPass1) : null });
   }
-  gl.bindVertexArray(null);
   // Bounding-sphere centre (bbox midpoint) in object space — the sort key the
   // engine uses, transformed to camera space per frame (RENDER.md §4 step 5).
   let mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
@@ -334,12 +370,13 @@ function meshFromLayer(layer, obj) {
     if (P[i+k] < mn[k]) mn[k] = P[i+k];
     if (P[i+k] > mx[k]) mx[k] = P[i+k];
   }
-  return { vao, parts, count: idx.length, centre: [0,1,2].map((k) => (mn[k] + mx[k]) / 2) };
+  return { parts, count: idx.length, centre: [0,1,2].map((k) => (mn[k] + mx[k]) / 2) };
 }
 
 gl.bindAttribLocation(prog, 0, 'aPos');
 gl.bindAttribLocation(prog, 1, 'aNormal');
 gl.bindAttribLocation(prog, 2, 'aUV');
+gl.bindAttribLocation(prog, 3, 'aUV1');
 
 // RENDER.md §8: RGBA8, REPEAT/REPEAT, LINEAR mag, LINEAR_MIPMAP_NEAREST min
 // (no trilinear — the mip popping is original), and rows are NOT flipped.
@@ -467,10 +504,19 @@ const bgVao = gl.createVertexArray();
       // original. No shipped BLOK has ENAB=0, so this is latent here — but
       // honouring a field the engine ignores is a deviation waiting to
       // happen. See LWO_INVENTORY.md, "the engine's real vocabulary".
+      const texOf = async (b) => {
+        const c = b ? lwo.clips.find((c) => c.index === b.imageIndex) : null;
+        if (!c?.file) return null;
+        try { return await loadTexture(c.file); } catch { return null; }
+      };
       const blk = s.blocks.find((b) => b.channel === 'COLR') ?? s.blocks[0];
-      const clip = blk ? lwo.clips.find((c) => c.index === blk.imageIndex) : null;
-      let tex = null;
-      if (clip?.file) { try { tex = await loadTexture(clip.file); } catch { tex = null; } }
+      const bDiff = s.blocks.find((b) => b.channel === 'DIFF') ?? null;
+      const bLumi = s.blocks.find((b) => b.channel === 'LUMI') ?? null;
+      const tex = await texOf(blk);
+      // unit 1 is DIFF (modulate) when present, else LUMI (add). With all
+      // three, LUMI moves to the additive second pass instead.
+      const tex1 = await texOf(bDiff ?? bLumi);
+      const texPass1 = (bDiff && bLumi) ? await texOf(bLumi) : null;
       // Diffuse colour, per RENDER.md §4.5: with NO colour texture the
       // material is surfaceColour x diffuseLevel, but WITH one it is a
       // neutral grey diffuseLevel in all three channels — the texture
@@ -482,7 +528,7 @@ const bgVao = gl.createVertexArray();
       const blk0 = s.blocks.find((b) => b.channel === 'COLR');
       const matColor = blk0 ? [dl, dl, dl] : [sc[0]*dl, sc[1]*dl, sc[2]*dl];
       mats.set(s.name, {
-        tex, color: matColor,
+        tex, tex1, texPass1, tex1Add: !bDiff && !!bLumi, color: matColor,
         // RENDER.md §8: luminosity > 0.95 is drawn unlit via glColor4f
         unlit: (s.luminosity ?? 0) > 0.95,
         diffuse: s.diffuse ?? 1,
@@ -573,7 +619,8 @@ const bgVao = gl.createVertexArray();
 
   gl.uniformMatrix4fv(uProj, false, proj);
   gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
-  gl.uniform1i(uEnv, 1);
+  gl.uniform1i(uEnv, 2);
+  gl.uniform1i(gl.getUniformLocation(prog, 'uTex1'), 1);
 
   // ---- lights. LightType 0 is a DISTANT light: direction only, taken from
   // the item's world +Z and negated to point toward the light (RENDER.md 8).
@@ -635,7 +682,6 @@ const bgVao = gl.createVertexArray();
       const d = o.d;
       if (((mat.blendMode ?? 0) !== 0) !== blended) continue;
       gl.uniformMatrix4fv(uMV, false, o.mv);
-      gl.bindVertexArray(d.mesh.vao);
       if (blended) {
         gl.enable(gl.BLEND);
         if (mat.blendMode === 1) gl.blendFunc(gl.ONE, gl.ONE);              // additive
@@ -654,11 +700,25 @@ const bgVao = gl.createVertexArray();
       gl.uniform1f(uRefl, mat.refl ?? 0);
       gl.uniform1f(uSpec, mat.spec ?? 0);
       gl.uniform1f(uShine, mat.shine ?? 16);
+      gl.uniform1i(uHasTex1, mat.tex1 ? 1 : 0);
+      gl.uniform1i(uTex1Add, mat.tex1Add ? 1 : 0);
+      gl.uniform1i(uPass1, 0);
       gl.activeTexture(gl.TEXTURE0);
       if (mat.tex) { gl.bindTexture(gl.TEXTURE_2D, mat.tex); textured++; }
-      if (mat.envTex) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.envTex); }
+      if (mat.tex1) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.tex1); }
+      if (mat.envTex) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, mat.envTex); }
+      gl.bindVertexArray(part.vao);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.ib);
       gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
+      // mask 7: second, additive pass carrying only the LUMI texture
+      if (mat.texPass1) {
+        gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.depthMask(false);
+        gl.uniform1i(uPass1, 1);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.texPass1);
+        gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
+        gl.uniform1i(uPass1, 0);
+        if (!blended) { gl.disable(gl.BLEND); gl.depthMask(true); }
+      }
     }
   }
   gl.disable(gl.BLEND); gl.depthMask(true);
