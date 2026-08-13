@@ -58,8 +58,12 @@ browser-native (TGA needs a tiny loader).
    main loop: GLUT callbacks, part table, music-time → part switching.
 2. LWS parser first (text; small), render one scene's camera + object motion
    against a stub renderer; LWO parser second.
-3. Identify which of the two MP3s plays (party vs final mix? radix "mikko
-   mix") and pick a reference capture — captures[] in prod.json is still
-   empty; pin youtube id + alignment offset once chosen.
+3. ~~Reference capture~~ DONE: youtube oP3lrBNVKBs pinned (219.1 s). Jasper:
+   **the two MP3s play in order; there is a loading part in the middle.**
+   10 ms log-energy correlation against the capture: mp3#1 starts at
+   **6.41 s** (score 0.81), mp3#2 at **106.96 s** (score 0.88). mp3#1 is cut
+   before its natural end (would reach 117.4 s) — consistent with
+   `FSOUND_StopSound` in the imports; the capture ends at 219.1 s, ~7 s
+   before mp3#2 would finish. Part 1 ≈ 0–107 s, part 2 ≈ 107–219 s.
 4. Hair `.txt` + `epes` particle sprites: parse formats after the Ghidra pass
    shows the consuming code.
