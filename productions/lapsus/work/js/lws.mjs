@@ -121,6 +121,32 @@ export function parseLWS(text) {
       // BackdropFog is set. 3 of the 23 scenes carry a non-black value —
       // higherbiing, kuubiotekniikka and silli — so ignoring it clears those
       // to black incorrectly.
+      // BGImage is the scene's BACKDROP IMAGE, and its argument is a nested
+      // block rather than a value on the same line:
+      //     BGImage
+      //     { Clip
+      //       { Still
+      //         "data/lwo/textures/eHollow.jpg"
+      //       }
+      //     }
+      // Six scenes use it, and it is a large part of what they look like —
+      // pene's is the "A MATUREFURK production" title card, kuubiotekniikka's
+      // is the portrait the cubes fly over. A first-token keyword scan makes
+      // this look like a bare keyword with no argument, which is exactly the
+      // mistake that hid it.
+      case 'BGImage': {
+        const block = [];
+        let depth = 0;
+        while (i < lines.length) {
+          const t = next().trim();
+          depth += (t.match(/\{/g) ?? []).length - (t.match(/\}/g) ?? []).length;
+          block.push(t);
+          if (depth <= 0 && block.length > 1) break;
+        }
+        const m = block.join(' ').match(/"([^"]+)"/);
+        if (m) scene.backdropImage = m[1];
+        break;
+      }
       case 'BackdropColor': scene.backdrop.color = rest.map(Number); break;
       case 'BackdropFog': scene.backdrop.fog = Number(rest[0]); break;
       // Parsed for completeness, but NOT present in the binary, so the engine

@@ -259,10 +259,25 @@ gl.bindAttribLocation(prog, 2, 'aUV');
 
 // RENDER.md §8: RGBA8, REPEAT/REPEAT, LINEAR mag, LINEAR_MIPMAP_NEAREST min
 // (no trilinear — the mip popping is original), and rows are NOT flipped.
+// Texture references in the assets come in three shapes: relative to
+// data/lwo ("textures/x.jpg"), relative to the archive root
+// ("data/lwo/textures/x.jpg"), and — for 15 of the 80 CLIP entries —
+// ABSOLUTE PATHS FROM THE ARTISTS' OWN MACHINES, e.g.
+// "D:lapsus/textures/…" and "C:Documents and Settings/Administrator/
+// Desktop/lapsus/kaivoalieni/lwo/textures/…". Every texture in the archive
+// lives in one directory, and the basename of all 86 references resolves
+// there (the sole exception is kieku's, and kieku is one of the three scenes
+// the engine never schedules), so basename lookup is sufficient.
+//
+// UNVERIFIED AGAINST THE ENGINE: dm2000's own normalisation was not found in
+// the STIL parser (FUN_00426230) and presumably lives in LW::TextureManager.
+// This rule matches the evidence but is not read from the binary — treat it
+// as the next thing to confirm, not as fact.
+const TEXDIR = 'work/unpacked/lapsus_dat/data/lwo/textures/';
 const texCache = new Map();
 async function loadTexture(file) {
   if (texCache.has(file)) return texCache.get(file);
-  const url = ROOT + 'work/unpacked/lapsus_dat/' + file.replace(/\\/g, '/');
+  const url = ROOT + TEXDIR + file.replace(/\\/g, '/').split('/').pop();
   const img = new Image();
   await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('image ' + file)); img.src = url; });
   const tex = gl.createTexture();
@@ -277,6 +292,23 @@ async function loadTexture(file) {
   texCache.set(file, tex);
   return tex;
 }
+
+// Full-screen backdrop image (LWS `BGImage`). Scene::render draws it before
+// the 3D (RENDER.md §draw order), with no depth interaction.
+const BG_VS = `#version 300 es
+const vec2 P[4] = vec2[4](vec2(-1.,-1.), vec2(1.,-1.), vec2(-1.,1.), vec2(1.,1.));
+out vec2 vUV;
+void main(){ vec2 p = P[gl_VertexID]; vUV = vec2(p.x*.5+.5, .5-p.y*.5);
+  gl_Position = vec4(p,0.,1.); }`;
+const BG_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 o; uniform sampler2D uTex;
+void main(){ o = vec4(texture(uTex, vUV).rgb, 1.0); }`;
+const bgProg = gl.createProgram();
+gl.attachShader(bgProg, sh(gl.VERTEX_SHADER, BG_VS));
+gl.attachShader(bgProg, sh(gl.FRAGMENT_SHADER, BG_FS));
+gl.linkProgram(bgProg);
+const bgVao = gl.createVertexArray();
 
 (async () => {
   const scene = parseLWS(await (await fetch(DATA + SCENE + '.lws')).text());
@@ -331,6 +363,27 @@ async function loadTexture(file) {
   gl.frontFace(gl.CW);                        // paired with the Scale(1,1,-1)
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  // ---- backdrop image, before the 3D and with depth disabled
+  let bgTex = null;
+  if (scene.backdropImage) {
+    // loadTexture resolves by basename, so the three path shapes in the
+    // assets all land in the same place — no probing, no spurious 404s.
+    try { bgTex = await loadTexture(scene.backdropImage); } catch { bgTex = null; }
+  }
+  if (bgTex) {
+    gl.useProgram(bgProg);
+    gl.bindVertexArray(bgVao);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, bgTex);
+    gl.uniform1i(gl.getUniformLocation(bgProg, 'uTex'), 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.useProgram(prog);
+  }
 
   gl.uniformMatrix4fv(uProj, false, proj);
   gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);

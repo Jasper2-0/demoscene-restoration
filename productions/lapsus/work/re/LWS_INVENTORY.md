@@ -37,8 +37,34 @@ Consequences that bite a port:
 - **`FogMinAmount` / `FogMaxAmount` are absent**, independently confirming
   RENDER.md §8's instruction to ignore them.
 - **`ShowObject` is absent**, so per-item visibility flags do nothing.
-- `BGImage` appears in six scenes but always bare, with no filename, so no
-  background image is ever loaded despite the keyword being supported.
+- **`BGImage` is the scene's backdrop image, and it is much of what these
+  scenes look like.** An earlier draft of this file said it "appears bare,
+  with no filename, so no background image is ever loaded" — **wrong**, and
+  wrong for an instructive reason: its argument is a *nested block*, not a
+  value on the same line, so a first-token-per-line keyword scan sees a bare
+  keyword.
+
+  ```
+  BGImage
+  { Clip
+    { Still
+      "data/lwo/textures/eHollow.jpg"
+    }
+  }
+  ```
+
+  `pene` → `MatureFurkTitle.jpg` — the "A MATUREFURK production" title card,
+  which is why that one-object scene appeared to contain a whole composition.
+  `kuubiotekniikka` → `eHollow.jpg`, the portrait its cubes fly over.
+  Also `diskojea` → `eLemonb.jpg`, `made` → `End_Mature.jpg`,
+  `turska` → `She_On_The_Beach.jpg`, `kieku` → `Shittie.jpg`.
+
+  Paths are inconsistent: some archive-root relative
+  (`data/lwo/textures/…`), some relative to `data/lwo` (`textures/…`), so a
+  port must try both. Five of the six resolve on disk; the only one that does
+  not is `kieku` — one of the three scenes the engine never schedules. An
+  unused scene pointing at a missing file is a small consistency check in
+  itself.
 
 ### Correction to an earlier claim in this file
 
