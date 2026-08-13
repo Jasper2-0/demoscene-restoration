@@ -589,6 +589,26 @@ const bgVao = gl.createVertexArray();
   // range per shot; everything else uses camera 0 unaltered. Without this the
   // part renders from the wrong viewpoint for most of its 14s and scores a
   // NEGATIVE correlation — it is not a subtle error.
+  // Per-part camera perturbation (RENDER.md §12). Applied AFTER the scene
+  // tick, as the engine does. Syrjakyla deliberately gets nothing: its
+  // oscillator is dead code that nothing reads, so it renders as generic.
+  let camShift = [0, 0, 0], camOverwriteZ = null;
+  if (/^paleksi$/i.test(SCENE)) {
+    // env = pow(1 - phase/P, 5), tripled during the FIRST period only
+    const P = 1.1924489795918367;
+    const phase = T % P;
+    let env = Math.pow(1 - phase / P, 5);
+    if (T < P) env *= 3;
+    camShift[0] = 0.5 * (env * Math.sin(40 * phase));
+  } else if (/^turska$/i.test(SCENE)) {
+    // Period 0.8863520408163266s, kick v=50/x=2, damped. The direction vector
+    // is never initialised in the engine, so this collapses to a pure Z dolly
+    // — reproduce the collapse, not the intent.
+    const P = 0.8863520408163266;
+    const phase = T % P;
+    camOverwriteZ = 2 * Math.pow(Math.max(0, 1 - phase / P), 3);
+  }
+
   let camIndex = Number(qs.get('cam') ?? -1);
   if (camIndex < 0) {
     camIndex = 0;
@@ -609,7 +629,12 @@ const bgVao = gl.createVertexArray();
   const top = Math.tan(0.375 * fovX) * NEAR;   // fovY = 0.75*fovX AS AN ANGLE
   const proj = M.frustum(-right, right, -top, top, NEAR, FAR);
 
-  const camWorld = cam ? worldMatrix(cam, T) : M.ident();
+  let camWorld = cam ? worldMatrix(cam, T) : M.ident();
+  if (camShift[0] || camShift[1] || camShift[2] || camOverwriteZ != null) {
+    camWorld = new Float32Array(camWorld);
+    camWorld[12] += camShift[0]; camWorld[13] += camShift[1]; camWorld[14] += camShift[2];
+    if (camOverwriteZ != null) camWorld[14] += camOverwriteZ;
+  }
   const view = M.mul(M.scale(1, 1, -1), M.invRigid(camWorld));
 
   const bg = scene.backdrop?.color ?? [0, 0, 0];
@@ -620,6 +645,14 @@ const bgVao = gl.createVertexArray();
   gl.cullFace(gl.BACK);
   gl.frontFace(gl.CW);                        // paired with the Scale(1,1,-1)
   gl.viewport(0, 0, canvas.width, canvas.height);
+  // Feedback parts do not clear colour: Silli clears DEPTH ONLY and lays a
+  // 20% black quad (a black FadeIn at 0.8 — RENDER.md §12 corrects §7's 30%);
+  // Pehko clears nothing and uses 5%; Part_Empt clears exactly once in the
+  // whole process. A single-frame renderer has no history to accumulate, so
+  // it clears anyway and stamps the quad — the trail itself needs a
+  // ping-pong FBO and a real frame loop.
+  const FEEDBACK = { silli: 0.20, pehko: 0.05, empt: 0.10 };
+  const fbAlpha = FEEDBACK[SCENE] ?? null;
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   // ---- backdrop image, before the 3D and with depth disabled
@@ -645,6 +678,8 @@ const bgVao = gl.createVertexArray();
     gl.enable(gl.CULL_FACE);
     gl.useProgram(prog);
   }
+
+  if (fbAlpha != null) drawFade('in', 3, 1 - fbAlpha);   // black quad at fbAlpha
 
   gl.uniformMatrix4fv(uProj, false, proj);
   gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
