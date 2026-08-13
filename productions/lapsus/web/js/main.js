@@ -541,6 +541,51 @@ gl.bindAttribLocation(parProg, 1, 'aUV');
 gl.bindAttribLocation(parProg, 2, 'aAlpha');
 gl.linkProgram(parProg);
 
+// Picture — a 2D sprite in a virtual 640x480 ortho, used by Part_Empt's
+// stamping and by the loading screens. Alpha comes from a SEPARATE `_a`
+// image as (R+G+B)/3 (RENDER.md §8), and material transparency scales it
+// (mode 3 = SRC_ALPHA / ONE_MINUS_SRC_ALPHA).
+const PIC_VS = `#version 300 es
+const vec2 P[4] = vec2[4](vec2(0.,0.), vec2(1.,0.), vec2(0.,1.), vec2(1.,1.));
+uniform vec4 uRect;                  // x, y, w, h in virtual 640x480 pixels
+out vec2 vUV;
+void main(){
+  vec2 q = P[gl_VertexID];
+  vUV = vec2(q.x, 1.0 - q.y);
+  vec2 px = uRect.xy + q * uRect.zw;
+  gl_Position = vec4(px.x / 320.0 - 1.0, 1.0 - px.y / 240.0, 0., 1.);
+}`;
+const PIC_FS = `#version 300 es
+precision highp float; in vec2 vUV; out vec4 o;
+uniform sampler2D uTex, uAlphaTex; uniform float uOpacity; uniform bool uHasAlpha;
+void main(){
+  vec3 c = texture(uTex, vUV).rgb;
+  vec3 a = uHasAlpha ? texture(uAlphaTex, vUV).rgb : vec3(1.0);
+  o = vec4(c, ((a.r + a.g + a.b) / 3.0) * uOpacity);
+}`;
+const picProg = gl.createProgram();
+gl.attachShader(picProg, sh(gl.VERTEX_SHADER, PIC_VS));
+gl.attachShader(picProg, sh(gl.FRAGMENT_SHADER, PIC_FS));
+gl.linkProgram(picProg);
+const picVao = gl.createVertexArray();
+
+function drawPicture(tex, alphaTex, x, y, w, h, opacity) {
+  gl.useProgram(picProg);
+  gl.bindVertexArray(picVao);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.uniform1i(gl.getUniformLocation(picProg, 'uTex'), 0);
+  if (alphaTex) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, alphaTex); }
+  gl.uniform1i(gl.getUniformLocation(picProg, 'uAlphaTex'), 1);
+  gl.uniform1i(gl.getUniformLocation(picProg, 'uHasAlpha'), alphaTex ? 1 : 0);
+  gl.uniform1f(gl.getUniformLocation(picProg, 'uOpacity'), opacity);
+  gl.uniform4f(gl.getUniformLocation(picProg, 'uRect'), x, y, w, h);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
+  gl.useProgram(prog);
+}
+
 const bgProg = gl.createProgram();
 gl.attachShader(bgProg, sh(gl.VERTEX_SHADER, BG_VS));
 gl.attachShader(bgProg, sh(gl.FRAGMENT_SHADER, BG_FS));
@@ -548,7 +593,15 @@ gl.linkProgram(bgProg);
 const bgVao = gl.createVertexArray();
 
 (async () => {
-  const scene = parseLWS(await (await fetch(DATA + SCENE + '.lws')).text());
+  // Part_Empt has NO .lws at all — it is pure 2D and its content is its own
+  // stamping routine — so a missing scene file is legitimate here, not an
+  // error. Everything downstream reads empty lists and skips.
+  let scene = { objects: [], lights: [], cameras: [], fog: {}, backdrop: {}, unhandled: [] };
+  {
+    const res = await fetch(DATA + SCENE + '.lws');
+    if (res.ok) scene = parseLWS(await res.text());
+    else if (!/^empt$/i.test(SCENE)) throw new Error(`no scene ${SCENE}.lws`);
+  }
   const drawables = [];
   for (const obj of scene.objects) {
     if (!obj.file) continue;                              // null objects: transform only
@@ -643,6 +696,13 @@ const bgVao = gl.createVertexArray();
   }
 
   let textured = 0, hairLines = 0, particleCount = 0, camIndex = 0, zoomAt = 0, fovX = 0;
+  const emptRand = msvcRand();
+  let emptTex = null, emptAlphaTex = null;
+  if (/^empt$/i.test(SCENE)) {
+    const PICS = 'work/unpacked/lapsus_dat/data/pics/';
+    try { emptTex = await loadTexture('design1.tga', PICS); } catch {}
+    try { emptAlphaTex = await loadTexture('design1_a.tga', PICS); } catch {}
+  }
 
   // ONE FRAME of the demo, at time `T`. Feedback parts call this repeatedly
   // without clearing so the buffer accumulates, which is what the original
@@ -897,6 +957,39 @@ const bgVao = gl.createVertexArray();
     gl.drawArrays(gl.LINES, 0, verts.length / 3);
     gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
     gl.useProgram(prog);
+  }
+
+  // ---- Part_Empt: no LW::Scene at all — its content IS this stamping
+  // routine (RENDER.md §12.1). Three mutually exclusive phases whose timers
+  // run in sequence and sum to 1.3 + 8.0 + 3.7 = 13.0s, exactly its slot.
+  // `rand01` draws from the shared MSVC stream. All coordinates are in the
+  // virtual 640x480 space and are TRUNCATED, and note phase C's y uses a
+  // MINUS (screen y grows downward).
+  if (/^empt$/i.test(SCENE) && emptTex) {
+    const r01 = () => emptRand() * (1 / 32767);
+    const stamp = (x, y, op) =>
+      drawPicture(emptTex, emptAlphaTex, Math.trunc(x), Math.trunc(y), 256, 256, op);
+    if (T < 1.3) {                                    // phase A
+      drawFade('in', 3, 1 - 0.1);                     // black veil at alpha 0.1
+      const X = 8 * T - 8, A = X * X;
+      const N = Math.max(1, Math.trunc((X - 2.0) * 3.0));
+      for (let i = 0; i < N; i++)
+        stamp((r01() - 0.5) * A + 50.0, (r01() - 0.5) * A + 180.0, r01());
+    } else if (T < 9.3) {                             // phase B
+      drawFade('in', 3, 1 - 0.1);
+      const J = 5.759998321533203;                    // = X^2 at t0 = 1.3
+      stamp((r01() - 0.5) * J + 50.0, (r01() - 0.5) * J + 180.0, r01());
+    } else {                                          // phase C
+      const d = T - 9.3;
+      drawFade('in', 3, 1 - (0.9 - 0.05 * d));        // veil deepens with d
+      const Y = 8 * d + 2.4, A2 = 1.5 * Y * Y;
+      const N = Math.max(1, Math.trunc(28 * d + 1.4));
+      for (let i = 0; i < N; i++) {
+        const ang = 0.7853981852531433 + 2.094395160675049 * (r01() - 0.5);
+        const rr = (r01() - 0.1) * A2;
+        stamp(50.0 + rr * Math.cos(ang), 180.0 - rr * Math.sin(ang), r01());
+      }
+    }
   }
 
   // ---- particles. Part_Pehko clones one system per hair node; the emitter

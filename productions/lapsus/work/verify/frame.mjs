@@ -60,7 +60,11 @@ await withPage(
     const info = await page.evaluate(() => window.__lapsusInfo ?? null);
     const err = await page.evaluate(() => window.__lapsusError ?? null);
     if (err) throw new Error('renderer: ' + err);
-    assertClean({ errors, failedRequests }, server);
+    // Part_Empt genuinely has no .lws — it is pure 2D and its content is its
+    // own stamping routine — so that one 404 is expected, not a fault. Named
+    // explicitly rather than by loosening the check.
+    assertClean({ errors, failedRequests }, server,
+      { ignore: [/\/favicon\.ico$/, /\/empt\.lws$/] });
     console.log('  ' + JSON.stringify(info));
     if (info.glError !== 0) throw new Error(`gl.getError = 0x${info.glError.toString(16)}`);
     fs.writeFileSync(ours, await shootCanvas(page, { canvasSelector: '#c', warmupFrames: 2 }));
