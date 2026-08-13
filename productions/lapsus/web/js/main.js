@@ -20,7 +20,8 @@
 import { parseLWS, evalEnvelope } from '../../work/js/lws.mjs';
 import { parseLWO } from '../../work/js/lwo.mjs';
 import { decodeTGA } from '../../work/js/tga.mjs';
-import { parseHair, buildStrands, simulate, toLines } from '../../work/js/hair.mjs';
+import { parseHair, buildStrands, simulate, toLines, msvcRand } from '../../work/js/hair.mjs';
+import { parseParticles, simulateSystem, frameOf, billboard } from '../../work/js/particles.mjs';
 
 const ROOT = new URL('../../', import.meta.url).href;
 const DATA = ROOT + 'work/unpacked/lapsus_dat/data/';
@@ -400,9 +401,13 @@ gl.bindAttribLocation(prog, 3, 'aUV1');
 const TEXDIR = 'work/unpacked/lapsus_dat/data/lwo/textures/';
 const texCache = new Map();
 const texSize = new Map();   // GL texture -> [w, h], for the backdrop fit
-async function loadTexture(file) {
-  if (texCache.has(file)) return texCache.get(file);
-  const url = ROOT + TEXDIR + file.replace(/\\/g, '/').split('/').pop();
+async function loadTexture(file, dir = TEXDIR) {
+  const key = dir + file;
+  if (texCache.has(key)) return texCache.get(key);
+  // `dir` lets a caller opt out of basename-into-data/lwo/textures resolution:
+  // the particle frames live in data/particles/tauno/ and their ColorTexture
+  // pattern is already archive-relative.
+  const url = ROOT + dir + file.replace(/\\/g, '/').split('/').pop();
   const tex = gl.createTexture();
   let w, h;
   if (/\.tga$/i.test(url)) {
@@ -430,7 +435,7 @@ async function loadTexture(file) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
   texSize.set(tex, [w, h]);
-  texCache.set(file, tex);
+  texCache.set(key, tex);
   return tex;
 }
 
@@ -516,6 +521,25 @@ gl.attachShader(hairProg, sh(gl.VERTEX_SHADER, HAIR_VS));
 gl.attachShader(hairProg, sh(gl.FRAGMENT_SHADER, HAIR_FS));
 gl.bindAttribLocation(hairProg, 0, 'aPos');
 gl.linkProgram(hairProg);
+
+// Particles (RENDER.md §11): GL_QUADS billboards, additive, depth test on
+// with depthMask(FALSE). Only Part_Pehko uses the system, cloning ONE system
+// per hair node.
+const PAR_VS = `#version 300 es
+in vec3 aPos; in vec2 aUV; in float aAlpha;
+uniform mat4 uMV, uProj; out vec2 vUV; out float vA;
+void main(){ vUV = aUV; vA = aAlpha; gl_Position = uProj * uMV * vec4(aPos,1.0); }`;
+const PAR_FS = `#version 300 es
+precision highp float; in vec2 vUV; in float vA; out vec4 o;
+uniform sampler2D uTex; uniform vec3 uTint;
+void main(){ o = vec4(texture(uTex, vUV).rgb * vA * uTint, 1.0); }`;
+const parProg = gl.createProgram();
+gl.attachShader(parProg, sh(gl.VERTEX_SHADER, PAR_VS));
+gl.attachShader(parProg, sh(gl.FRAGMENT_SHADER, PAR_FS));
+gl.bindAttribLocation(parProg, 0, 'aPos');
+gl.bindAttribLocation(parProg, 1, 'aUV');
+gl.bindAttribLocation(parProg, 2, 'aAlpha');
+gl.linkProgram(parProg);
 
 const bgProg = gl.createProgram();
 gl.attachShader(bgProg, sh(gl.VERTEX_SHADER, BG_VS));
@@ -825,6 +849,7 @@ const bgVao = gl.createVertexArray();
   // data/hairs/<name>.txt; every strand shares ONE root, the null's world
   // origin, so the animated nulls drive the hair purely by parenting.
   let hairLines = 0;
+  const hairNodes = [];        // emitter positions for the particle systems
   for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
     const name = nullObj.name.replace(/^Hair_/, '');
     let txt;
@@ -836,6 +861,8 @@ const bgVao = gl.createVertexArray();
     const root = [w[12], w[13], w[14]];
     const strands = simulate(buildStrands(h), root, h.gravity, T);
     const verts = toLines(strands, root);
+    if (/^pehko$/i.test(SCENE))
+      for (const st of strands) for (let i = 1; i < st.nodes.length; i++) hairNodes.push(st.nodes[i].pos);
     hairLines += verts.length / 6;
 
     gl.useProgram(hairProg);
@@ -860,6 +887,67 @@ const bgVao = gl.createVertexArray();
     gl.useProgram(prog);
   }
 
+  // ---- particles. Part_Pehko clones one system per hair node; the emitter
+  // positions are therefore the simulated hair nodes, which is why this runs
+  // after the hair above.
+  let particleCount = 0;
+  if (hairNodes.length) {
+    let ptxt = null;
+    try { ptxt = await (await fetch(DATA + 'particles/tauno/tauno.txt')).text(); } catch {}
+    if (ptxt && !/not found/i.test(ptxt)) {
+      const pp = parseParticles(ptxt);
+      const rand = msvcRand();
+      // camera forward axis in world space, for the billboard basis
+      const camZ = [camWorld[8], camWorld[9], camWorld[10]];
+      const byFrame = new Map();
+      for (const node of hairNodes) {
+        for (const q of simulateSystem(pp, node, T, 1 / 60, rand)) {
+          const f = frameOf(q, pp, 40);
+          if (!byFrame.has(f)) byFrame.set(f, []);
+          byFrame.get(f).push(q);
+          particleCount++;
+        }
+      }
+      gl.useProgram(parProg);
+      gl.uniformMatrix4fv(gl.getUniformLocation(parProg, 'uMV'), false, view);
+      gl.uniformMatrix4fv(gl.getUniformLocation(parProg, 'uProj'), false, proj);
+      gl.uniform1i(gl.getUniformLocation(parProg, 'uTex'), 0);
+      // RENDER.md §11.4: the tint computes to r in [0.0135,0.017] and
+      // g,b in [0.010,0.0125] — only ~1.5% additive contribution per sprite,
+      // which is what keeps 720 overlapping sprites from blowing out. The
+      // bytes were unambiguous but wanted a capture check; this is it.
+      gl.uniform3f(gl.getUniformLocation(parProg, 'uTint'), 0.0153, 0.0113, 0.0113);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+      gl.depthMask(false); gl.disable(gl.CULL_FACE);
+      gl.activeTexture(gl.TEXTURE0);
+      for (const [f, list] of byFrame) {
+        let tex = null;
+        try {
+          tex = await loadTexture(`epes${String(f).padStart(3, '0')}.jpg`,
+                                  'work/unpacked/lapsus_dat/data/particles/tauno/');
+        } catch { continue; }
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        const pos = [], uv = [], al = [];
+        for (const q of list) {
+          const c = billboard(q, camZ);
+          const uvs = [[0,1],[1,1],[1,0],[0,0]];
+          for (const i of [0,1,2, 0,2,3]) {          // quad -> 2 triangles
+            pos.push(...c[i]); uv.push(...uvs[i]); al.push(q.alpha);
+          }
+        }
+        const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+        const put = (loc, data, size) => { const b = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, b);
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+          gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0); };
+        put(0, pos, 3); put(1, uv, 2); put(2, al, 1);
+        gl.drawArrays(gl.TRIANGLES, 0, pos.length / 3);
+      }
+      gl.disable(gl.BLEND); gl.depthMask(true); gl.enable(gl.CULL_FACE);
+      gl.useProgram(prog);
+    }
+  }
+
   // Scheduled fade for this part, from ?fadein=/?fadeout= (kind:dur:mode[:rgb]).
   // The sequencer computes the ramp as (t - start)/dur for a fade-in and
   // (t - (start + dur - fadeOutDur))/fadeOutDur for a fade-out (ENGINE.md §4);
@@ -876,7 +964,7 @@ const bgVao = gl.createVertexArray();
   window.__lapsusInfo = {
     scene: SCENE, t: T, camera: camIndex, objects: drawables.length,
     triangles: drawables.reduce((a, d) => a + d.mesh.count / 3, 0),
-    texturedGroups: textured, hairLines,
+    texturedGroups: textured, hairLines, particleCount,
     zoom: zoomAt, fovXdeg: fovX * 180 / Math.PI, near: NEAR,
     glError: gl.getError(),
   };
