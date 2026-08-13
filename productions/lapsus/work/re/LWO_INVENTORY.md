@@ -1,18 +1,62 @@
 # LWO inventory — the 50 shipped LightWave objects
 
-> **This file describes the FORMAT, not the engine.** Everything below was
-> read with the published LWO2 spec, so it says what the files contain — not
-> what dm2000 does with them, which is the only thing a port may follow
-> (METHOD.md, "The binary is the source of truth"). Two consequences worth
-> keeping in mind while reading:
->
-> - the engine's real chunk vocabulary is whatever `FUN_00424d50` /
->   `FUN_004266a0` / `FUN_00427360` actually read; chunks listed here that it
->   ignores are not part of its format, however prominent in the standard;
-> - anything here phrased as *behaviour* — n-gon triangulation, UV
->   projection, smoothing, winding — is a spec-derived expectation awaiting
->   confirmation against the disassembly. The projection section below is the
->   known case where the spec and the capture disagree.
+> **The sections below describe the FORMAT.** What dm2000 actually consumes
+> is narrower, and that — not the spec — is what a port must follow
+> (METHOD.md, "The binary is the source of truth"). The engine's real
+> vocabulary is recovered immediately below; read it first and treat the
+> format listing as background.
+
+## The engine's real vocabulary
+
+Every 4-byte chunk id compared anywhere in `.text`, recovered by scanning the
+disassembly for printable immediates and attributing them to their enclosing
+function. **A chunk the engine never compares is not part of its format**,
+however prominent in the standard or however many files carry it.
+
+| parser | VA | ids it compares |
+|---|---|---|
+| container check | `FUN_0041d9c0` | `FORM` `LWO2` |
+| top level | `FUN_00424d50` | `TAGS` `PNTS` `POLS` `PTAG` `VMAP` `SURF` `CLIP` `ENVL` |
+| POLS type | `FUN_00425650` | `FACE` |
+| CLIP sub-chunk | `FUN_00426230` | `STIL` |
+| envelope | `FUN_00425a40` | `KEY ` `SPAN` `TCB ` `LINE` |
+| SURF | `FUN_00426a90` | `BLOK` `COLR` `DIFF` `SPEC` `REFL` `TRAN` `LUMI` `GLOS` `SIDE` `SMAN` `ADTR` `CLRF` `RIMG` |
+| BLOK | `FUN_00427360` | `IMAP` `TMAP` `CHAN` `PROJ` `AXIS` `IMAG` `VMAP` `WRPW` `WRPH` `PIXB` |
+| TMAP | `FUN_00427900` | `CNTR` `SIZE` `ROTA` |
+
+### Present in the files, never read
+
+Confirmed absent from `.text` — searched by big-endian id, zero hits each:
+
+- **top level: `LAYR`, `BBOX`** — in all 50 files and both ignored. So there
+  is no layer pivot and no file-supplied bounding box; the engine derives its
+  own bounds, and texgen reads raw `PNTS` (RENDER.md §10).
+- **SURF: `RFOP` `BUMP` `RSAN` `CLRH` `SHRP` `TROP` `LCOL` `LSIZ`** — the
+  reflection/refraction options, bump intensity and line-render settings are
+  authoring residue as far as this program is concerned.
+- **BLOK: `ENAB` `WRAP` `CSYS` `OREF` `NEGA` `OPAC` `FALL` `AAST` `STCK`
+  `TAMP`** — note especially:
+  - `ENAB` — a "disabled" texture layer **is still drawn**. No shipped BLOK
+    has `ENAB=0`, so this is latent, but a port must not filter on it.
+  - `WRAP` — wrap mode comes from the engine's own GL state (REPEAT), never
+    from the asset. Earlier analysis here treated it as meaningful; it is not.
+  - `CSYS` / `OREF` — no world-space or reference-object projection exists.
+  - `OPAC` — per-layer opacity is not honoured.
+- **`ROTA` is compared but never consumed**: `FUN_00427900` matches the id and
+  stores at +0x84, and no float is ever read back. Parsed ≠ used.
+- **VMAP types are never checked.** `TXUV` appears nowhere in `.text`, nor do
+  `MORF`, `PICK` or `VMAD`. The engine takes `VMAP` chunks without validating
+  what kind they are, selecting by *name* via the BLOK's `VMAP` sub-chunk. The
+  archive ships 40 TXUV, 20 MORF, 3 PICK and 1 MNVW map, so morph and
+  selection maps are as eligible as UV maps here.
+
+### What this changes for a port
+
+Only these surface fields can affect the image: `COLR` `DIFF` `SPEC` `REFL`
+`TRAN` `LUMI` `GLOS` `SIDE` `SMAN` `ADTR` `CLRF` `RIMG`, plus the `BLOK`
+projection set. Anything else in the format listing below is inert, and
+implementing it would be a deviation — the reverse of the usual failure, but a
+deviation all the same.
 
 Parsed by `work/js/lwo.mjs`. All 50 are `FORM…LWO2` (LightWave 6.0+), big-endian.
 **All 50 parse with zero unknown chunks and zero out-of-range vertex indices.**

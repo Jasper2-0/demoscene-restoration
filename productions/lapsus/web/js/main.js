@@ -288,7 +288,12 @@ async function loadTexture(file) {
     // surface name -> { texture, color, unlit }
     const mats = new Map();
     for (const s of lwo.surfaces) {
-      const blk = s.blocks.find((b) => b.channel === 'COLR' && b.enabled !== false) ?? s.blocks[0];
+      // NOT filtered on ENAB: the engine never compares that chunk id
+      // anywhere in .text, so a "disabled" layer is still drawn by the
+      // original. No shipped BLOK has ENAB=0, so this is latent here — but
+      // honouring a field the engine ignores is a deviation waiting to
+      // happen. See LWO_INVENTORY.md, "the engine's real vocabulary".
+      const blk = s.blocks.find((b) => b.channel === 'COLR') ?? s.blocks[0];
       const clip = blk ? lwo.clips.find((c) => c.index === blk.imageIndex) : null;
       let tex = null;
       if (clip?.file) { try { tex = await loadTexture(clip.file); } catch { tex = null; } }
