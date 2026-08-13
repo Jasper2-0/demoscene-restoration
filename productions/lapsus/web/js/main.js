@@ -494,7 +494,15 @@ const bgVao = gl.createVertexArray();
   const drawables = [];
   for (const obj of scene.objects) {
     if (!obj.file) continue;                              // null objects: transform only
-    const url = ROOT + 'work/unpacked/lapsus_dat/' + obj.file.replace(/\\/g, '/');
+    // Object paths come in three shapes, exactly like the texture refs:
+    // archive-relative ("data/lwo/x.lwo", 84 of them), a BARE FILENAME with no
+    // directory at all (49), and absolute paths from a third artist's machine
+    // ("H:Lapsus/viherio/lwo/x.lwo", 18). Every .lwo lives in one directory,
+    // so resolve by basename. 136 of the 151 references resolve; the 15 that
+    // do not belong entirely to kieku/mela/sittis — the three scenes the
+    // engine never schedules.
+    const url = ROOT + 'work/unpacked/lapsus_dat/data/lwo/'
+      + obj.file.replace(/\\/g, '/').split('/').pop();
     const lwo = parseLWO(new Uint8Array(await (await fetch(url)).arrayBuffer()));
     // surface name -> { texture, color, unlit }
     const mats = new Map();
