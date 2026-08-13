@@ -111,7 +111,21 @@ export function parseLWS(text) {
       case 'LightColor': if (current) current.color = rest.map(Number); break;
       case 'LightIntensity': if (current) current.intensity = Number(rest[0]); break;
       case 'CameraName': if (current) current.name = rest.join(' '); break;
-      case 'ZoomFactor': if (current?.kind === 'camera') current.zoom = Number(rest[0]); break;
+      // ZoomFactor is either a literal or the token "(envelope)" followed by
+      // a nested Envelope block — i.e. the camera zoom can be ANIMATED.
+      // higherbiing, made and silli all use the envelope form, and reading it
+      // as Number() yields NaN, which propagates into fovX = 2*atan(1/NaN)
+      // and produces a broken projection rather than an obviously wrong one.
+      case 'ZoomFactor': {
+        if (current?.kind !== 'camera') break;
+        if (/^\(envelope\)/.test(rest[0] ?? '')) {
+          while (i < lines.length && !peek().includes('Envelope')) i++;
+          next();                                  // "{ Envelope"
+          next();                                  // key count
+          current.zoomEnvelope = parseEnvelope();
+        } else current.zoom = Number(rest[0]);
+        break;
+      }
       case 'FogType': scene.fog.type = Number(rest[0]); break;
       case 'FogMinDist': scene.fog.minDist = Number(rest[0]); break;
       case 'FogMaxDist': scene.fog.maxDist = Number(rest[0]); break;

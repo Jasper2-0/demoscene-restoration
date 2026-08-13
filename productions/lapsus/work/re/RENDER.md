@@ -1223,3 +1223,593 @@ does not touch its UVs.
 - [ ] `WRAP`, `CSYS` and `ROTA` are ignored by the engine — do not honour them.
 - [ ] §4.5's channel-slot names are LWO2 `COLR/LUMI/DIFF/SPEC/–/REFL/TRAN`, not
       LWOB's `CTEX/DTEX/…`.
+
+---
+
+## 12. Per-part draw functions
+
+The nine parts that do **not** use the generic `vf2` `FUN_00406e50`
+(clear → `scene->tick(localTime, dt)` → `render(getCamera(0))`, ENGINE.md §5).
+
+**Provenance.** Five of the nine (`0x4057b0`, `0x4072b0`, `0x407800`,
+`0x408460`, `0x4087a0`) are vtable-only and are *absent from
+`re/disasm.asm`* — Ghidra never made functions of them. They were disassembled
+directly out of `work/src/Lapsus.exe` with `ndisasm -b32` at the identity
+mapping (file offset = VA − 0x400000, spot-checked at 0x60b0). The other four
+(`0x4060b0`, `0x406b20`, `0x407e30`, `0x4081f0`) are read from `disasm.asm`.
+**Every float below is decoded from the raw image**, not from Ghidra's C; all
+nine are x87-heavy and `re/targeted2.c` drops or mangles most of the arithmetic
+(it renders `0.8` as `0x3f4ccccd`, loses whole FPU stack slots, and invents
+`unaff_retaddr` for the `localTime` argument).
+
+### 12.0 Shared CRT helpers used by these functions
+
+Identified from asm, since the x87 audit flags several of them:
+
+| VA | function | evidence |
+|---|---|---|
+| `0x4306a2` | `rand()` — MSVC LCG, returns `(seed>>16) & 0x7fff`, i.e. **0…32767** | 0x4306aa `imul 0x343fd`, 0x4306b0 `add 0x269ec3` |
+| `0x430ac8` | `__ftol` — **truncate toward zero** | 0x430ad7 `or ah,0x0c` sets x87 RC = 11 before `FISTP` |
+| `0x430aef` | `floor(double)` | 0x4345ec sets the CW from `[0x466750] = 0x173f` (RC = 01, round-down), `FRNDINT` at 0x434481, CW restored at 0x430b8c |
+| `0x430bc0` | `_CIpow(base = ST1, exp = ST0)` | 0x430bc3 `fxch`, base→`[esp]`, exp→`[esp+8]`, core 0x430be2; descriptor at 0x466750 literally spells `"pow"` |
+| `0x430dea` | `_CIfmod(ST1 mod ST0)` | `jmp 0x434de0` with `edx = 0x466770`, whose descriptor spells `"fmod"`; the `FPREM` loop is at 0x430df4–0x430e11 |
+
+`rand01` below always means `rand() * _DAT_0045a308` where
+`0x45a308 = 0x38000100 = 3.0518509447574615e-05 = 1/32767` — so
+`rand01 ∈ [0, 1]` inclusive.
+
+`Picture` fields (§5.5): `+0x14` = x, `+0x18` = y, `+0x1c` = `Material*`.
+Camera/item fields (§1.1): `+0x4c/0x50/0x54` = position, `+0xbc` = matrixValid.
+
+**Resolved while doing this — `Picture`'s `mode` argument** (§9 open item).
+`FUN_0040a700` @0x40a994–0x40a9db allocates the picture's `Material` and writes
+`material[+0x64] = 0` (**depth test off**), `material[+0x58] = mode`
+(**the blend mode of §4.4**), `FUN_0040c020(material, 1)` → `material[+0x3c] = 1`
+(one texture), `material[+0x6b] = 1` (**culling disabled**). Everything else is
+the `FUN_0040bef0` default: unlit, diffuse white, transparency 0. So `mode 3`
+(all part pictures) = ordinary alpha blending with `alpha = 1 − transparency`,
+and `mode 0` (loading screens) = opaque.
+
+---
+
+### 12.1 `Part_Empt::vf2` — `forced_0x4057b0` @0x4057b0
+
+Factory layout (ctor `FUN_00405550` zeroes `+4…+0x18`; create `FUN_00405570`):
+`+0x08` = `Picture("data/pics/design1.tga", alpha "data/pics/design1_a.tga",
+mode 3)` (x/y not set at create), `+0x18` = a **private black `FadeIn`**
+(`operator new(0x14)`, `FUN_00404840`, vtable `0x45a2d0`, `material[+0x58] = 3`,
+diffuse and fader RGB all 0). `+0x0c/+0x10/+0x14` are three phase timers.
+There is **no `LW::Scene`** — this part is pure 2D.
+
+**The clear happens exactly once in the whole process.** @0x4057b0–0x4057e9:
+
+```
+if (DAT_00468f1c == 0) { clear(black /* three zero floats on the stack */); DAT_00468f1c = 1; }
+```
+
+`DAT_00468f1c` is written nowhere else in `.text` (2 references total, both in
+this function). So from frame 2 of Part_Empt onward **nothing is ever cleared** —
+Part_Empt is a full frame-feedback part, a third one alongside Silli and Pehko
+(§7.3 does not mention it; see §12.10).
+
+Three mutually exclusive phases, gated on the timers. Constants:
+`0x45a3cc = 1.2999999523162842`, `0x45a3c8 = 8.0`, `0x45a3c4 = 2.0`,
+`0x45a3c0 = 50.0`, `0x45a3bc = 180.0`, `0x45a3b8 = 5.759998321533203`,
+`0x45a3b4 = 0.05`, `0x45a3b0 = 0.9`, `0x45a39c = 1.5`,
+`0x45a398 = 2.094395160675049 (2π/3)`, `0x45a394 = 0.7853981852531433 (π/4)`,
+`0x45a390 = 0.1`, `0x45a32c = 3.0`, `0x45a330 = 0.5`,
+doubles `0x45a3a8 = 2.0`, `0x45a3a0 = 3.5`, `0x45a388 = 50.0`, `0x45a380 = 180.0`.
+
+**Phase A — `t0 = this[+0x0c] < 1.3`** (@0x4057f3–0x4058eb):
+
+```
+fader.draw(0.9)                       // black FadeIn, mode 3 → alpha 0.1
+X  = 8*t0 - 8                          // t0 read BEFORE the increment
+this[+0x0c] += dt
+N  = max(1, trunc((X - 2.0) * 3.0))
+A  = X * X
+repeat N times:
+    picture.x = trunc((rand01 - 0.5) * A + 50.0)
+    picture.y = trunc((rand01 - 0.5) * A + 180.0)
+    picture.material.blendMode  = 3
+    picture.material.transparency = rand01          // fresh rand()
+    Picture::draw(picture)
+```
+
+`N` is 1 for the entire phase (`X ≤ 2.4` ⇒ `(X−2)·3 ≤ 1.2`). `A` is the jitter
+box in virtual pixels: 64 at `t0 = 0`, **0 at `t0 = 1.0`**, 5.76 at `t0 = 1.3`.
+
+**Phase B — `t0 ≥ 1.3` and `t1 = this[+0x10] < 8.0`** (@0x4058fa–0x4059bb):
+
+```
+fader.draw(0.9)
+this[+0x10] += dt
+picture.x = trunc((rand01 - 0.5) * 5.759998321533203 + 50.0)
+picture.y = trunc((rand01 - 0.5) * 5.759998321533203 + 180.0)
+picture.material.blendMode  = 3
+picture.material.transparency = rand01
+Picture::draw(picture)                 // exactly one copy
+```
+
+5.759998 is `X²` at `t0 = 1.3`, i.e. the jitter is continuous across the A→B
+seam.
+
+**Phase C — `t1 ≥ 8.0`** (@0x4059be–0x405b21):
+
+```
+d = this[+0x14]
+fader.draw(0.9 - 0.05*d)               // veil deepens: alpha 0.1 → 0.285 at d=3.7
+this[+0x14] += dt
+Y  = 8*(d + 1.3) - 8                   // = 8d + 2.4
+N  = max(1, trunc((Y - 2.0) * 3.5))    // = trunc(28d + 1.4)
+A2 = 1.5 * Y*Y
+B2 = 0.05 * Y
+repeat N times:
+    ang = 0.7853981852531433 + 2.094395160675049 * (rand01 - 0.5)   // 45° ± 60°
+    r   = (rand01 - 0.1) * A2
+    picture.x = trunc(50.0  + r*cos(ang))
+    picture.y = trunc(180.0 - r*sin(ang))          // note the MINUS (y is down)
+    picture.material.blendMode = 3
+    if (rand01 + B2 <= 0.0) picture.material.transparency = 0.0
+    else                    picture.material.transparency = rand01' + B2   // a SECOND rand() call
+    Picture::draw(picture)
+```
+
+The double `rand()` in the transparency branch is literal (0x405ab6 for the
+test, 0x405ada for the value) — the test call's value is discarded. Since
+`Y > 0` always, the `0.0` branch is unreachable, but the **extra `rand()` call
+still happens** and shifts the sequence; a bit-exact port must call `rand()`
+twice here.
+
+`transparency` exceeds 1 as `d` grows (`B2 = 0.4d + 0.12`), so `alpha =
+1 − transparency` goes negative and GL clamps it to 0 — the slides thin out as
+the spray widens (`A2` = 8.6 px at `d = 0`, ~1536 px at `d = 3.7`).
+
+Phase lengths **1.3 + 8.0 + 3.7 = 13.0 s** = Part_Empt's scheduled duration
+(ENGINE.md §5). Independent confirmation that the three timers simply track
+`localTime`.
+
+GL-state delta vs. the generic path: no `glClear` at all after frame 1; the only
+state comes from the fader and picture materials (both unlit, depth test off,
+culling off, `SRC_ALPHA/ONE_MINUS_SRC_ALPHA`).
+
+---
+
+### 12.2 `Part_HigherBiing::vf2` — `FUN_004060b0` @0x4060b0
+
+**§7.3.13 is correct as written; the constants are byte-confirmed** —
+`_DAT_0045a414 = 4.5` (`0x40900000`), `_DAT_0045a410 = 10.600000381469727`
+(`0x4129999a`).
+
+```
+clear(scene + 0xc0);                                // backdrop colour, §7.2
+if (localTime < 4.5) {                              // 0x4060c7 FLD/FCOMP/TEST AH,1
+    scene[+0xec] = 7.5f;  scene[+0xf0] = 13.0f;     // 0x40f00000 / 0x41500000
+    scene->tick(localTime, dt);   cam = 0;
+} else if (localTime < 10.6) {
+    scene[+0xec] = 15.0f; scene[+0xf0] = 30.0f;     // 0x41700000 / 0x41f00000
+    scene->tick(localTime, dt);   cam = 1;
+} else {
+    scene[+0xec] = 9.5f;  scene[+0xf0] = 18.0f;     // 0x41180000 / 0x41900000
+    scene->tick(localTime, dt);   cam = 2;
+}
+scene->render(scene->getCamera(cam));
+```
+
+`scene+0xec` / `+0xf0` are fog min / max distance (§4.1 step 3).
+The override is written **before** `tick` — that is safe: `LW::Scene::tick`
+(`FUN_004150b0`, read end-to-end at 0x4150b0–0x4151db) never writes `+0xec` or
+`+0xf0`; it only touches item motions, camera zoom→fov, lights, particle
+systems and hair. Fog min/max are load-time LWS values that nothing else
+animates.
+
+`higherbiing.lws` carries 3 cameras (`LWS_INVENTORY.md`), so the indices are
+real. Nothing else is perturbed — no camera offset, no overlay, no extra clear.
+
+---
+
+### 12.3 `Part_Kuubiotekniikka::vf2` — `FUN_00406b20` @0x406b20
+
+**§7.3.14 confirmed**, plus the identity of the image.
+
+```
+clear(scene + 0xc0);
+scene->tick(localTime, dt);
+scene->render(scene->getCamera(0));
+if (localTime < 1.0f) {                     // 0x406b5c, _DAT_0045a310 = 1.0
+    picture.material.transparency = localTime;   // raw float store, 0x406b77
+    Picture::draw(picture);                      // 0x406b7d
+}
+```
+
+`picture` is `this+0x08`, built by `FUN_004068e0` @0x406a76 as
+`Picture("data/pics/loading2.jpg", alpha "" /* DAT_00468f0c, an all-zero byte */,
+mode 3)` with x = y = 0. **It is the phase-2 loading screen** — the same JPEG
+that was frozen on screen during the ~5 s `loadPhase(2)` (ENGINE.md §7.4).
+So phase 2 opens by cross-dissolving the still loading screen into the first 3D
+scene over exactly one second: `alpha = 1 − localTime`, opaque at t = 0,
+gone at t = 1.
+
+No blend mode is set per-frame — it comes from the `mode 3` ctor argument
+(§12.0). Fog: the overlay quad sits at eye-z 0 in the 640×480 ortho, so even
+though `material[+0x6a] = 1` and `kuubiotekniikka.lws` has `FogType 1`, the
+`GL_LINEAR` factor at distance 0 clamps to 1 and the quad is unfogged.
+
+---
+
+### 12.4 `Part_Paleksi::vf2` — `forced_0x4072b0` @0x4072b0
+
+Factory: `+0x04` scene `data/Paleksi.lws`, `+0x08`
+`Picture("data/pics/eDezign.jpg", alpha "data/pics/eDezign_a.jpg", mode 3)` with
+**x = 0x80 = 128, y = 0xe0 = 224** set at create (`FUN_00407050` @0x407245/0x40724c).
+(`vf1` @0x407270 also writes `this[+0x14] = 30.0f`; `vf2` never reads it — dead.)
+
+Constants: doubles `0x45a4f0 = 1.1924489795918367` (**period P**),
+`0x45a4f8 = 0.8386103029265788` (= 1/P), `0x45a4e8 = 1.0`, `0x45a4e0 = 5.0`,
+`0x45a4d0 = 1.5`, `0x45a4c8 = 128.0`, `0x45a4c0 = 10.5`, `0x45a4b8 = 224.0`;
+floats `0x45a4d8 = 40.0`, `0x45a32c = 3.0`, `0x45a330 = 0.5`.
+
+```
+A     = floor(localTime * (1/P)) * P            // 0x4072c7 floor, 0x4072cc
+phase = localTime - A                           // time since the last impulse
+env   = pow(1.0 - phase*(1/P), 5.0)             // 0x4072f7 _CIpow
+if (A < P) env *= 3.0                           // 0x407300..0x40730d — FIRST period only
+S     = env * sin(phase * 40.0)                 // 0x407320 FSIN
+
+picture.x = trunc(S * 1.5  + 128.0)             // 0x40733a
+picture.y = trunc(S * 10.5 + 224.0)             // 0x407352
+
+clear(scene + 0xc0);                            // 0x407369
+scene->tick(localTime, dt);                     // 0x40737b
+cam = getCamera(0);
+cam.position.x += S * 0.5;                      // 0x407384 / 0x40739f — ADDITIVE, post-tick
+cam.position.y, .z unchanged;  cam[+0xbc] = 0;
+scene->render(getCamera(0));                    // 0x4073ea
+Picture::draw(picture);                         // 0x4073f2 — overlay LAST
+```
+
+So it is not a plain sine wobble: it is a **1.19245 s-periodic decaying burst**,
+`(1 − phase/P)^5 · sin(40·phase)` — ≈ 7.6 oscillations per impulse, amplitude
+decaying to zero by the end of each period, and **tripled during the very first
+period** (`localTime < P`). The same scalar drives three things at three gains:
+camera X (×0.5), overlay X (×1.5), overlay Y (×10.5) — the `eDezign` logo mostly
+bounces vertically.
+
+The camera write is *additive on top of the tick result*, so `paleksi.lws`'s
+camera animation is preserved (contrast Turska, §12.8).
+
+---
+
+### 12.5 `Part_Pehko::vf2` — `forced_0x407800` @0x407800
+
+**§7.3.2 confirmed** (no clear, fader at 0.95, `DAT_004a900c` gating), and the
+particle loop is now decoded.
+
+Factory (create `FUN_00407490`): `+0x04` scene `data/pehko.lws` (`DAT_00463af4`),
+`+0x0c` particle-system **template** parsed from
+`data/particles/tauno/tauno.txt` by `FUN_0040c620` (0x180 bytes),
+`+0x10/+0x14/+0x18` a `vector<ParticleSystem*>` (object / begin / end),
+`+0x20` a private black `FadeIn` (mode 3, RGB 0).
+
+```
+DAT_004a900c = 1;                       // 0x407806 — suppress Scene::render's hair block (§4.6)
+fader.draw(0.95f);                      // 0x407812 PUSH 0x3f733333 → alpha 0.05
+                                        //   *** no glClear of any kind ***
+scene->tick(localTime, dt);             // 0x40782b
+scene->render(scene->getCamera(0));     // 0x40783e
+h = scene[+0x68][0];                    // the FIRST hair mesh only (0x407843–0x407866)
+for (s = 0; s < ((h[+0xdc] - h[+0xd8]) >> 2); ++s) {
+    strand = ((void**)h[+0xd8])[s];
+    n = (strand[+0x1c] - strand[+0x18]) / 0x14;        // 20-byte records
+    for (p = 0; p < n; ++p) {
+        ps = vectorBegin[n * s + p];                   // FLAT index, assumes equal n
+        rec = strand[+0x18] + p*0x14;
+        ps.position (+0x4c,+0x50,+0x54) = rec[0..2];   // 3 floats, absolute
+        ps[+0xbc] = 0;
+        FUN_0040d440(ps, dt);                          // particle-system update(dt)
+        ps->vf1(scene->getCamera(0));                  // draw (same slot Scene::render uses, §4.1.9)
+    }
+}
+DAT_004a900c = 0;
+```
+
+One `ParticleSystem` instance is cloned from the tauno template per 20-byte
+record at create time (`FUN_00407490` @0x407437–0x407446), in the same nested
+order — so the flat index `n*s + p` matches, provided every strand has the same
+record count. That assumption is baked in; a port should just keep a
+per-strand list of instances.
+
+Draw order per frame: **black 5 % quad → 3D scene → particles**, on top of
+whatever was in the colour *and depth* buffers from the previous swap.
+
+---
+
+### 12.6 `Part_Silli::vf2` — `FUN_00407e30` @0x407e30
+
+```
+FUN_0040b7e0(display);           // 0x407e39 — DEPTH-ONLY clear (§7.2). Colour survives.
+fader.draw(0.8f);                // 0x407e43 PUSH 0x3f4ccccd
+scene->tick(localTime, dt);      // 0x407e58
+scene->render(scene->getCamera(0));
+```
+
+`this+0x08` is a private black `FadeIn` created by `FUN_00407ca0`
+(vtable `0x45a2d0`, `material[+0x58] = 3`, diffuse and fader RGB = 0).
+Per §6, mode 3 `FadeIn::draw(v)` writes `transparency = v`, and §4.4 gives
+`glColor4f(0,0,0, 1 − transparency)`.
+
+> **`0x3f4ccccd` is 0.8, not 0.7.** The black quad is therefore drawn at
+> **alpha 0.20**, i.e. the previous frame survives at 80 % per frame — not the
+> 30 %/70 % stated in §7.3.1 and §8. See §12.10.
+
+No camera manipulation, no overlay, no parameter overrides.
+
+---
+
+### 12.7 `Part_Syrjakyla::vf2` — `FUN_004081f0` @0x4081f0
+
+**This part does not touch the camera. §7.3.15 is wrong about it.**
+
+```
+clear(scene + 0xc0);                      // 0x408202
+scene->tick(localTime, dt);               // 0x408214
+scene->render(scene->getCamera(0));       // 0x408227   <-- render happens HERE
+
+// ...and only then, an oscillator whose state nothing ever reads:
+v  = this[+0x14];  x = this[+0x10];  T = this[+0x0c];
+v' = v - x/dt;              this[+0x14] = v';          // 0x40822c–0x408238
+x' = x + v'*dt;             this[+0x10] = x';          // 0x40823b–0x408242  (== v*dt)
+v''= v' - dt*v'*40.0;       this[+0x14] = v'';         // 0x408245–0x408255, _DAT_0045a4d8 = 40.0
+T += dt;                    this[+0x0c] = T;
+if (T >= 2.3848979591836734) { this[+0x14] = 50.0f; this[+0x0c] = T - 2.3848979591836734; }
+                                                        // double at 0x45a560; 0x42480000 = 50.0
+```
+
+`this[+0x0c/+0x10/+0x14]` are read by nothing else — a `.text` scan finds
+no other consumer, and the function returns immediately after the store at
+0x40827c/0x408285. The oscillator is **dead code**.
+
+`Part_Syrjakyla::create` (`FUN_00408050`) additionally builds a private
+**white additive `FadeOut`** at `this+0x08` (vtable `0x45a2c4`,
+`material[+0x58] = 1`, diffuse and fader RGB = `0x437f0000` = 255.0) — and
+`vf2` never draws it either. Two abandoned effects; the part renders exactly
+like the generic path. Its period, 2.38489796 s, is precisely 2× Paleksi's.
+
+**A port should implement `Part_Syrjakyla` as the plain generic `vf2`.**
+(The white flash that *is* visible at its start comes from the schedule's
+`white 0.5` FadeIn, ENGINE.md §5, not from this object.)
+
+---
+
+### 12.8 `Part_Turska::vf2` — `forced_0x408460` @0x408460
+
+Factory: `+0x04` scene, `+0x08` period accumulator, `+0x0c` displacement `x`,
+`+0x10` velocity `v`, `+0x14/0x18/0x1c` **base position**, `+0x20/0x24/0x28`
+**direction vector**.
+
+`Part_Turska::create` `FUN_004082f0` @0x4083e2–0x40840c ends with
+`scene->tick(0.0f, 0.0f); p = getCamera(0)->position; this[+0x14..0x1c] = p;` —
+the base is camera 0's position at scene time 0. **`this[+0x20..0x28] is never
+written`** — not by the ctor (`FUN_004082c0` zeroes it), not by create, not by
+`vf1` (`FUN_00408430` only clears `+4…+0x10`). The direction is permanently
+`(0,0,0)`.
+
+```
+clear(scene + 0xc0);                       // 0x408475
+scene->tick(localTime, dt);                // 0x408487
+
+v' = v - x/dt;   this[+0x10] = v';         // 0x40848c–0x408498
+x' = x + v'*dt;  this[+0x0c] = x';         // 0x40849b–0x4084a2   (== v*dt, old v)
+v''= v' - dt*v'*10.0;  this[+0x10] = v'';  // _DAT_0045a580 = 10.0
+T += dt;  this[+0x08] = T;
+if (T >= 0.8863520408163266) {             // double at 0x45a578
+    this[+0x10] = 50.0f;                   // 0x42480000
+    this[+0x0c] =  2.0f;                   // 0x40000000
+    this[+0x08] = T - 0.8863520408163266;
+}
+
+x = this[+0x0c];
+cam = getCamera(0);
+cam.position = ( base.x + 0.1*x*dir.x,
+                 base.y + 0.1*x*dir.y,
+                 base.z + 0.1*x*dir.z + x );     // _DAT_0045a390 = 0.1; the extra +x is z-only
+cam[+0xbc] = 0;
+scene->render(getCamera(0));
+```
+
+With `dir = (0,0,0)` this collapses to
+
+> **`camera0.position = (base.x, base.y, base.z + x)`** — a pure Z (dolly) shake,
+> re-kicked every **0.8863520408163266 s** with `v = 50, x = 2`, damped at
+> `v *= (1 − 10·dt)`.
+
+Two things a port must not get wrong:
+
+1. The write is an **absolute overwrite**, not an offset — every frame camera 0's
+   position is reset to its create-time snapshot. Harmless for the shipped
+   `turska.lws` (its camera has a single key per channel: position
+   `(11.78975, 48.05761, −54.49221)`, constant), but if the scene is ever edited
+   the animation would be discarded.
+2. The recurrence is **frame-rate dependent**. Substituting `x = v·dt` gives
+   `v_{n+1} = (v_n − v_{n−1}·dt_{n−1}/dt_n)·(1 − 10·dt_n)`; at a fixed dt the
+   roots are complex with `|z| = sqrt(1 − 10·dt)` and argument ≈ 1.10 rad, i.e.
+   an oscillation with a period of **≈ 5.5–5.7 *frames*** whatever the frame
+   rate (≈ 95 ms at 60 fps, ≈ 180 ms at 30 fps). Reproduce it literally at a
+   fixed 60 Hz step; do not "fix" it into a time-based spring.
+
+---
+
+### 12.9 `Part_Viherio::vf2` — `forced_0x4087a0` @0x4087a0
+
+**The strobe does not gate the scene draw — it gates the *clear*.** §9's
+description ("gates whether its scene draws at all in a given frame") is wrong;
+`tick` and `render` run unconditionally every frame. See §12.10.
+
+Two globals, both used only here (verified: 5 references to `0x463c64` and 4 to
+`0x468f24` in the whole image, all inside this function):
+
+| VA | meaning | initial value |
+|---|---|---|
+| `DAT_00463c64` | seconds since the current strobe started | **1000000.0** (`0x49742400`, a static initialiser in `.data`) |
+| `DAT_00468f24` | strobe-active flag (byte) | 0 (`.bss`) |
+
+Constants: double `0x45a5a0 = 7.090816326530613` (cycle length),
+double `0x45a598 = 0.1` (both the window width **and** the strobe duration),
+`0x45a30c = 0.0`.
+
+#### The table — fully decoded
+
+`ECX = 0x463c2c` at 0x4087c3; the loop advances by 4 and runs while
+`ECX < 0x463c64` (0x4087fb). So it is **14 contiguous `float`s at
+`0x463c2c … 0x463c60` inclusive**, immediately following the string
+`"data/Turska.lws"` (0x463c1c–0x463c2b) and immediately preceding the
+accumulator at 0x463c64. Entry 0 shares the string's tail padding but is a
+genuine array element.
+
+| # | VA | raw | value (s) | Δ from previous | Δ / 0.11079401 |
+|---:|---|---|---:|---:|---:|
+| 0 | 0x463c2c | `0x00000000` | 0.000000000 | — | — |
+| 1 | 0x463c30 | `0x3f62e7f8` | 0.886352062 | 0.886352 | 8 |
+| 2 | 0x463c34 | `0x3f9bff7a` | 1.218734026 | 0.332382 | 3 |
+| 3 | 0x463c38 | `0x3fc68af9` | 1.551116109 | 0.332382 | 3 |
+| 4 | 0x463c3c | `0x3fff44f7` | 1.994292140 | 0.443176 | 4 |
+| 5 | 0x463c40 | `0x402a2dfa` | 2.659056187 | 0.664764 | 6 |
+| 6 | 0x463c44 | `0x403f73b9` | 2.991438150 | 0.332382 | 3 |
+| 7 | 0x463c48 | `0x4054b978` | 3.323820114 | 0.332382 | 3 |
+| 8 | 0x463c4c | `0x40711677` | 3.766996145 | 0.443176 | 4 |
+| 9 | 0x463c50 | `0x408dd0fb` | 4.431760311 | 0.664764 | 6 |
+| 10 | 0x463c54 | `0x409873da` | 4.764142036 | 0.332382 | 3 |
+| 11 | 0x463c58 | `0x40a316ba` | 5.096524239 | 0.332382 | 3 |
+| 12 | 0x463c5c | `0x40b14539` | 5.539700031 | 0.443176 | 4 |
+| 13 | 0x463c60 | `0x40cda238` | 6.426052094 | 0.886352 | 8 |
+
+Every entry is an exact multiple of **u = 0.110794005 s**
+(= 0.8863520408163266 / 8, i.e. Turska's impulse period over 8), and the cycle
+length 7.090816326530613 s = **64 u** = 8 × Turska's period. In units of `u` the
+onsets are `0, 8, 11, 14, 18, 24, 27, 30, 34, 40, 43, 46, 50, 58` out of 64 —
+a 16th-note rhythm figure that repeats every two bars. (*inference*: the
+musical reading; the arithmetic itself is exact.)
+
+#### The algorithm (byte-exact)
+
+```
+T = fmod(localTime, 7.090816326530613);        // 0x4087a6/0x4087ae
+acc  = DAT_00463c64;                           // 0x4087bd
+flag = DAT_00468f24;                           // 0x4087b7
+
+for (i = 0; i < 14; ++i) {                     // 0x4087c8–0x408801
+    e = table[i];
+    if (T >= e && T < e + 0.1 && flag == 0) {  // 0x4087cc / 0x4087db / 0x4087ea
+        flag = 1;
+        acc  = 0.0;                            // 0x4087f2
+    }
+}
+DAT_00463c64 = acc;                            // 0x408803
+DAT_00468f24 = flag;                           // 0x408809
+if (acc > 0.1) DAT_00468f24 = 0;               // 0x40880f–0x40881c
+
+scene->tick(localTime, dt);                    // 0x408830  — ALWAYS
+if (DAT_00468f24 == 0) clear(scene + 0xc0);    // 0x408835–0x40884e — clear is SKIPPED while strobing
+scene->render(scene->getCamera(0));            // 0x408861  — ALWAYS
+DAT_00463c64 += dt;                            // 0x408866–0x408871
+```
+
+Semantics for a port:
+
+- The strobe **arms** on the first frame whose `T` falls inside any window
+  `[e, e+0.1)`; the `flag == 0` guard means it fires once per window even though
+  the window spans several frames.
+- It stays armed until the accumulator exceeds 0.1 s. `acc` is set to 0 on the
+  arming frame and incremented by `dt` at the *end* of every frame, and the
+  test is `acc > 0.1` (strictly greater), so the un-cleared run is the arming
+  frame plus every frame while `acc ≤ 0.1` — **7 frames ≈ 0.117 s at 60 fps**.
+- While armed, `glClear` is not issued: neither colour **nor depth**. The scene
+  is re-rendered on top of the retained buffer, so successive frames pile up
+  (and the stale depth buffer rejects fragments behind the previous frame's
+  geometry). With GLUT double buffering the retained content is the frame
+  *before last* (same caveat as §7.3.1/2).
+- The clear is issued **after** `tick` and **before** `render` — irrelevant to
+  the result, but note the clear colour is the scene backdrop, read fresh.
+- `DAT_00463c64` starts at 1 000 000, so the flag is forced off on the first
+  frame and the first table hit (entry 0 = 0.0, i.e. `localTime = 0`) arms
+  immediately. Neither global is reset by create/destroy, but nothing else
+  touches them.
+- Viherio's slot is 10.46 s (ENGINE.md §5) and the cycle is 7.0908 s, so the
+  table plays through once and then restarts, reaching entry 7 (`3.3238 s`,
+  the last onset ≤ 10.46 − 7.0908 = 3.369) before the part ends:
+  **14 + 8 = 22 strobes** in total.
+
+`Part_Viherio::create` (`FUN_004085f0`) also allocates a private black `FadeIn`
+at `this+0x0c` (mode 3, RGB 0) which `vf2` **never draws** — dead, like
+Syrjakyla's. `this+0x08` is allocated by nothing and freed by `vf1`
+(`FUN_00408750`) as a null.
+
+---
+
+### 12.10 Corrections to §7 / §8 / §9
+
+1. **§7.3.1 and §8 "Frame" — Silli's black quad is `0.8`, not `0.7`.**
+   `PUSH 0x3f666666` (0.9) is Part_Empt's constant; Silli pushes
+   `0x3f4ccccd` = **0.8** at 0x407e43. Mode-3 `FadeIn` ⇒ `alpha = 1 − v`, so the
+   quad is drawn at **20 % alpha and the previous frame survives at 80 %**, not
+   the "30 % / 70 %" in §7.3.1 and the "30 % black quad" in the §8 checklist.
+   (Pehko's 0.95 → 5 % is correct.)
+
+2. **§7.3.15 — `Part_Syrjakyla` does *not* perturb the camera.** It renders
+   before it updates its oscillator, and no code anywhere reads that state
+   (§12.7). Its private white additive `FadeOut` is never drawn either. Port it
+   as the generic `vf2`.
+
+3. **§7.3.15 — `Part_Turska` does not do `x += impulse`; it *overwrites*
+   camera 0's position** with a create-time snapshot plus a **Z-only** offset,
+   because the direction vector at `this+0x20..0x28` is never initialised
+   (§12.8). And the oscillator is frame-rate-, not time-, parameterised.
+
+4. **§7.3.15 — `Part_Paleksi` is not "a sine wobble on X".** It is a
+   `pow(1 − phase/P, 5)`-enveloped 40 rad/s sine burst re-armed every
+   1.19244898 s (tripled in the first period), driving camera X (×0.5) *and*
+   the `eDezign` overlay picture's X (×1.5) and Y (×10.5) (§12.4).
+
+5. **§7.3.15 — "They also set `camera[+0xbc] = 0` afterwards so the shaken
+   matrix is used"** is a true byte-fact but a no-op: §3 established that
+   `+0xbc` is never set back to 1 anywhere in `.text`, so the world matrix is
+   rebuilt on every query regardless. Nothing depends on that store.
+
+6. **§9 — Viherio's table-driven strobe does not gate the scene draw.**
+   `tick` and `render` are unconditional; the strobe suppresses the **colour +
+   depth clear** for ~0.1 s per hit (§12.9). Table fully decoded above.
+
+7. **§7.3 and §8 — there is a *third* frame-feedback part: `Part_Empt`.**
+   It clears exactly once in the whole process (guarded by `DAT_00468f1c`,
+   0x4057b0/0x4057e9) and never again; every subsequent frame composites a
+   black quad at alpha 0.1 (0.285 by the end) plus N stamped copies of
+   `design1.tga` over the retained buffer (§12.1). The §8 "Frame" checklist item
+   needs a third exception.
+
+8. **§9 — `Picture`'s `mode` argument is resolved**: it is the material blend
+   mode (`material[+0x58]`, written at 0x40a9c4), and the picture ctor also
+   forces depth mode 0, texture count 1 and culling off (§12.0).
+
+9. **§7.3.13 (HigherBiing) and §7.3.14 (Kuubiotekniikka) are confirmed**, with
+   two additions: the fog write precedes `tick` and survives because
+   `Scene::tick` never writes `+0xec/+0xf0`; and Kuubiotekniikka's overlay image
+   is `data/pics/loading2.jpg`, i.e. the phase-2 loading screen dissolving into
+   the demo.
+
+10. *(ENGINE.md §5 footnote)* `Part_Empt`'s `vf1` is **`0x405760`**, not the
+    shared default `0x407fe0` — vtable `0x45a374 = {0x405570, 0x405760,
+    0x4057b0}`.
+
+### 12.11 Summary table
+
+| part | vf2 | clear | camera | overlay | time gating |
+|---|---|---|---|---|---|
+| Part_Empt | 0x4057b0 | **once ever**, black | — (no scene) | design1.tga ×N + black quad 0.9→0.715 | 1.3 s / 8.0 s / rest |
+| Part_HigherBiing | 0x4060b0 | backdrop | **cuts 0→1→2** | — | 4.5 s, 10.6 s + fog (7.5,13)/(15,30)/(9.5,18) |
+| Part_Kuubiotekniikka | 0x406b20 | backdrop | 0 | loading2.jpg, `transparency = t` | `t < 1.0` |
+| Part_Paleksi | 0x4072b0 | backdrop | 0, `x += 0.5·S` | eDezign.jpg at (128,224)+(1.5,10.5)·S | period 1.19244898 s, ×3 first period |
+| Part_Pehko | 0x407800 | **none** | 0 | black quad 0.95 + hand-drawn particles | — |
+| Part_Silli | 0x407e30 | **depth only** | 0 | black quad **0.8** | — |
+| Part_Syrjakyla | 0x4081f0 | backdrop | 0, **unmodified** | — | (dead 2.38489796 s oscillator) |
+| Part_Turska | 0x408460 | backdrop | 0, **pos = base, z += x** | — | period 0.88635204 s |
+| Part_Viherio | 0x4087a0 | **skipped while strobing** | 0 | — | 14-entry table mod 7.090816327 s, 0.1 s windows |

@@ -584,7 +584,22 @@ const bgVao = gl.createVertexArray();
     }
   }
 
-  const cam = scene.cameras[0];
+  // ---- per-part camera / fog overrides (RENDER.md §7).
+  // Part_HigherBiing cuts between THREE cameras and rewrites the scene fog
+  // range per shot; everything else uses camera 0 unaltered. Without this the
+  // part renders from the wrong viewpoint for most of its 14s and scores a
+  // NEGATIVE correlation — it is not a subtle error.
+  let camIndex = Number(qs.get('cam') ?? -1);
+  if (camIndex < 0) {
+    camIndex = 0;
+    if (/^higherbiing$/i.test(SCENE)) {
+      if (T >= 10.6) { camIndex = 2; scene.fog.minDist = 9.5;  scene.fog.maxDist = 18.0; }
+      else if (T >= 4.5) { camIndex = 1; scene.fog.minDist = 15.0; scene.fog.maxDist = 30.0; }
+      else { camIndex = 0; scene.fog.minDist = 7.5;  scene.fog.maxDist = 13.0; }
+      scene.fog.type = scene.fog.type ?? 1;
+    }
+  }
+  const cam = scene.cameras[Math.min(camIndex, scene.cameras.length - 1)];
   const zoom = cam?.motion?.length >= 9 ? null : cam?.zoom ?? 3.2;
   // ZoomFactor may be a static header value or an envelope; prefer the envelope
   const zoomAt = cam?.zoomEnvelope ? evalEnvelope(cam.zoomEnvelope, T) : (cam?.zoom ?? 3.2);
@@ -751,7 +766,7 @@ const bgVao = gl.createVertexArray();
   gl.finish();
 
   window.__lapsusInfo = {
-    scene: SCENE, t: T, objects: drawables.length,
+    scene: SCENE, t: T, camera: camIndex, objects: drawables.length,
     triangles: drawables.reduce((a, d) => a + d.mesh.count / 3, 0),
     texturedGroups: textured,
     zoom: zoomAt, fovXdeg: fovX * 180 / Math.PI, near: NEAR,
