@@ -1,0 +1,201 @@
+<!doctype html>
+<meta charset="utf-8">
+<canvas id="screen" width="32" height="32"></canvas>
+<script type="module">
+  import { MiniGL } from '../js/minigl.js';
+
+  const canvas = document.querySelector('#screen');
+  const mgl = new MiniGL(canvas);
+  const gl = mgl.gl;
+
+  const readCenter = () => {
+    gl.finish();
+    const pixel = new Uint8Array(4);
+    gl.readPixels(16, 16, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+    return [...pixel];
+  };
+  const closeTo = (actual, expected, tolerance = 2) =>
+    expected.every((value, index) => Math.abs(actual[index] - value) <= tolerance);
+  const drawQuad = ({ uv0 = [0, 0], uv1 = [0, 0], z = 0, normal = [0, 0, 1] } = {}) => {
+    mgl.normal3(...normal);
+    mgl.begin(mgl.QUADS);
+    for (const [x, y] of [[-1,-1], [1,-1], [1,1], [-1,1]]) {
+      mgl.texCoord2(...uv0);
+      mgl.multiTexCoord2(1, ...uv1);
+      mgl.vertex3(x, y, z);
+    }
+    mgl.end();
+  };
+
+  mgl.activeTexture(0);
+  const red = mgl.createTextureFromData(Uint8Array.of(255, 0, 0, 255), 1, 1);
+  mgl.enableTexture(true);
+  mgl.texEnv({ mode: 'replace' });
+
+  mgl.activeTexture(1);
+  const blue = mgl.createTextureFromData(Uint8Array.of(0, 0, 255, 255), 1, 1);
+  mgl.enableTexture(true);
+  mgl.texEnv({
+    mode: 'combine',
+    color: [0, 0, 0, 0.25],
+    rgb: {
+      operation: 'interpolate',
+      sources: ['texture', 'previous', 'constant'],
+      operands: ['src_color', 'src_color', 'src_alpha'],
+    },
+    alpha: {
+      operation: 'replace',
+      sources: ['previous', 'texture', 'constant'],
+      operands: ['src_alpha', 'src_alpha', 'src_alpha'],
+    },
+  });
+
+  mgl.activeTexture(0);
+  mgl.enableBlend(false);
+  drawQuad();
+  const combinePixel = readCenter();
+
+  // Unit 1's texture matrix and UV stream must not inherit unit 0 state.
+  mgl.activeTexture(0);
+  mgl.enableTexture(false);
+  mgl.activeTexture(1);
+  const blueYellow = mgl.createTextureFromData(Uint8Array.of(
+    0, 0, 255, 255, 255, 255, 0, 255,
+  ), 2, 1);
+  mgl.enableTexture(true);
+  mgl.texEnv({ mode: 'replace' });
+  mgl.matrixMode(mgl.TEXTURE);
+  mgl.loadIdentity();
+  mgl.translate(-0.5, 0, 0);
+  mgl.matrixMode(mgl.MODELVIEW);
+  mgl.clear();
+  drawQuad({ uv1: [0.75, 0.5] });
+  const textureMatrixPixel = readCenter();
+
+  // Sphere-map coordinates override UV1; this normal reflects the eye vector
+  // into the blue half of the same two-texel texture.
+  mgl.activeTexture(1);
+  mgl.matrixMode(mgl.TEXTURE);
+  mgl.loadIdentity();
+  mgl.matrixMode(mgl.MODELVIEW);
+  mgl.texGenSphereMap(true);
+  mgl.clear();
+  drawQuad({ uv1: [0.75, 0.5], z: 0.5, normal: [Math.SQRT1_2, 0, Math.SQRT1_2] });
+  const spherePixel = readCenter();
+  mgl.texGenSphereMap(false);
+
+  // GL_NORMALIZE is independent fixed-function state. With it enabled, a
+  // length-four normal must produce the same yellow-side reflection as its
+  // unit vector; using the raw magnitude wraps this texture back to blue.
+  mgl.texGenSphereMap(true);
+  mgl.enableNormalize(true);
+  mgl.clear();
+  drawQuad({
+    uv1: [0.25, 0.5],
+    z: 0.5,
+    normal: [-3.8637033051562732, 0, 1.035276180410083],
+  });
+  const normalizePixel = readCenter();
+  mgl.enableNormalize(false);
+  mgl.texGenSphereMap(false);
+
+  // Indexed-array normals take the same fixed-function lighting path as
+  // immediate normals. A back-facing normal receives only global ambient .2.
+  mgl.enableTexture(false);
+  mgl.enableLighting(true);
+  mgl.setLights([{ pos: [0, 0, 1, 0], diffuse: [1, 1, 1] }]);
+  mgl.color4(1, 1, 1, 1);
+  mgl.clear();
+  mgl.drawElements(
+    new Float32Array([-1,-1,0, 1,-1,0, 1,1,0, -1,1,0]),
+    new Float32Array(8),
+    new Uint32Array([0,1,2, 0,2,3]),
+    null,
+    new Float32Array([0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1]),
+  );
+  const normalPixel = readCenter();
+  mgl.enableLighting(false);
+
+  // Indexed draws carry genuinely independent UV arrays. Unit 0 samples red
+  // from its left texel while unit 1 samples blue from its right texel; if the
+  // second stream accidentally aliases the first, the result stays red.
+  mgl.activeTexture(0);
+  mgl.createTextureFromData(Uint8Array.of(
+    255, 0, 0, 255, 0, 255, 0, 255,
+  ), 2, 1);
+  mgl.enableTexture(true);
+  mgl.texEnv({ mode: 'replace' });
+  mgl.activeTexture(1);
+  mgl.createTextureFromData(Uint8Array.of(
+    0, 0, 0, 255, 0, 0, 255, 255,
+  ), 2, 1);
+  mgl.enableTexture(true);
+  mgl.texEnv({ mode: 'add' });
+  mgl.enableBlend(false);
+  mgl.color4(1, 1, 1, 1);
+  mgl.clear();
+  mgl.drawElements(
+    new Float32Array([-1,-1,0, 1,-1,0, 1,1,0, -1,1,0]),
+    new Float32Array([0.25,0.5, 0.25,0.5, 0.25,0.5, 0.25,0.5]),
+    new Uint32Array([0,1,2, 0,2,3]),
+    null,
+    null,
+    null,
+    new Float32Array([0.75,0.5, 0.75,0.5, 0.75,0.5, 0.75,0.5]),
+  );
+  const independentUvPixel = readCenter();
+
+  // Linear fixed-function fog: a white quad halfway through [0, 1] becomes
+  // half intensity against the black fog target.
+  mgl.activeTexture(0);
+  mgl.enableTexture(false);
+  mgl.activeTexture(1);
+  mgl.enableTexture(false);
+  mgl.fogExpOff();
+  mgl.fog(0, 1);
+  mgl.enableFog(true);
+  mgl.color4(1, 1, 1, 1);
+  mgl.clear();
+  drawQuad({ z: -0.5 });
+  const fogPixel = readCenter();
+  mgl.enableFog(false);
+
+  // SRC_ALPHA / ONE_MINUS_SRC_ALPHA over the opaque black clear color.
+  mgl.enableBlend(true);
+  mgl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  mgl.color4(1, 0, 0, 0.25);
+  mgl.clear();
+  drawQuad();
+  const blendPixel = readCenter();
+  mgl.enableBlend(false);
+
+  // Energia's design compositor uses this unusual fixed-function pair.
+  // A half-gray source over black yields .5 * (1 - .5) = .25.
+  mgl.enableBlend(true);
+  mgl.blendFunc(mgl.ONE_MINUS_SRC_COLOR, mgl.SRC_COLOR);
+  mgl.color4(0.5, 0.5, 0.5, 1);
+  mgl.clear();
+  drawQuad();
+  const sourceColorBlendPixel = readCenter();
+  mgl.enableBlend(false);
+
+  mgl.lineWidth(1);
+  mgl.viewport(0, 0, 32, 32);
+  mgl.lockArrays(0, 4);
+  mgl.unlockArrays();
+  const results = {
+    combine: { pixel: combinePixel, expected: [191, 0, 64, 255] },
+    textureMatrix: { pixel: textureMatrixPixel, expected: [0, 0, 255, 255] },
+    sphereMap: { pixel: spherePixel, expected: [51, 51, 204, 255] },
+    normalize: { pixel: normalizePixel, expected: [164, 164, 91, 255] },
+    arrayNormal: { pixel: normalPixel, expected: [51, 51, 51, 255] },
+    independentUv: { pixel: independentUvPixel, expected: [255, 0, 255, 255] },
+    fog: { pixel: fogPixel, expected: [128, 128, 128, 255] },
+    // MiniGL requests an opaque drawing buffer, so destination alpha remains 1.
+    blend: { pixel: blendPixel, expected: [64, 0, 0, 255] },
+    sourceColorBlend: { pixel: sourceColorBlendPixel, expected: [64, 64, 64, 255] },
+  };
+  const pass = Object.values(results).every(({ pixel, expected }) => closeTo(pixel, expected))
+    && gl.getError() === gl.NO_ERROR;
+  window.__miniglTest = { pass, results };
+</script>

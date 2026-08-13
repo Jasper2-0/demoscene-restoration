@@ -1,0 +1,12 @@
+{
+  "name": "demoscene-restoration",
+  "private": true,
+  "description": "Demoscene restoration monorepo — reverse-engineered browser reconstructions of classic productions. Dependencies here are authoring/verification toolchain only; every shipped site is dependency-free at runtime.",
+  "workspaces": [
+    "tools",
+    "productions/ptct/work/js"
+  ],
+  "scripts": {
+    "test:shared": "node --test shared/sunflower/test/"
+  }
+}

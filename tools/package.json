@@ -1,0 +1,6 @@
+{
+  "name": "demoscene-restoration-tools",
+  "private": true,
+  "description": "Build-only toolchain (esbuild for the Mashi size build). Not part of any runtime.",
+  "dependencies": { "esbuild": "^0.28.2" }
+}
