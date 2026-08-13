@@ -348,6 +348,35 @@ undetected are precisely those with slow black fades rather than the fast
 white ones — so the schedule, the 6.41 s audio alignment and the fade table
 all corroborate each other.
 
+## All-parts report card (`work/verify/allparts.mjs`)
+
+Renders every scheduled part at its midpoint and scores it against the
+capture. Building it immediately found that **11 of the 21 parts were not
+rendering at all** — invisible while iterating on three hand-picked frames.
+Cause: object paths come in the same three shapes as texture refs (84
+archive-relative, **49 a bare filename**, 18 absolute from a third artist's
+machine, `H:Lapsus/…`). Basename resolution fixes all of them; 136 of 151
+references resolve and the 15 that do not belong entirely to
+kieku/mela/sittis — the three scenes the engine never schedules.
+
+**Hair binding, recovered from the scene files:** `AddNullObject Hair_<name>`
+binds that null to `data/hairs/<name>.txt`. The five distinct `Hair_` names
+map 1:1 onto the five hair files:
+
+| scene | nulls | file |
+|---|---|---|
+| `hairball` | `Hair_furball` ×2, `Hair_furball2` | furball.txt, furball2.txt |
+| `krediili` | `Hair_furballkr1`, `Hair_furballkr2` | furballkr1.txt, furballkr2.txt |
+| `pehko` | `Hair_ruoksa` | ruoksa.txt |
+
+So `krediili`'s golden plume is **hair**, not geometry — its seven quads are
+just the credit-name sprites (`CredEetu1.jpg`, `CredJanne1.jpg`, …), which
+carry TRAN ≈ 1.0 with LUMI 1.
+
+Every part scoring 0.000 is now explained: `hairball`, `krediili` and `pehko`
+need the hair system; `empt` has **no `.lws` at all** (its content is drawn
+entirely by its custom vf2); `silli` is a frame-feedback part.
+
 ## Next steps
 
 1. Textures + materials: LWO `SURF`/`BLOK` → GL state per `RENDER.md` §8

@@ -545,11 +545,17 @@ const bgVao = gl.createVertexArray();
         //   TRAN > 0 (or a TTEX) -> mode 3, alpha        (+ depth mode 2)
         //   otherwise            -> mode 0, no blending  (depth mode 3)
         // Depth mode 2 is no-write + LEQUAL, mode 3 is write + LEQUAL.
+        // A FULLY transparent surface is a glow sprite, not an invisible one.
+        // RENDER.md §4.5's rule is "> 0.95 => blend mode 1 (additive)", and
+        // krediili's credit sprites carry TRAN ~= 1.0 with LUMI = 1: treating
+        // that as alpha = 1 - TRAN made them alpha ~= 0 and the whole part
+        // rendered black, where the capture shows a bright plume.
         blendMode: (s.additiveTransparency ?? 0) > 0.95 ? 1
+                 : (s.transparency ?? 0) > 0.95 ? 1
                  : (s.transparency ?? 0) > 0 ? 3 : 0,
         // LWO TRAN is transparency, so alpha is its complement. SIDE 3 is
         // double-sided: culling off and normals flipped on back faces.
-        alpha: 1 - (s.transparency ?? 0),
+        alpha: (s.transparency ?? 0) > 0.95 ? 1 : 1 - (s.transparency ?? 0),
         twoSided: (s.sides ?? 1) === 3,
         refl: s.reflection ?? 0,
         // RENDER.md §4.5: specular only when lit, specularity > 0 and the
