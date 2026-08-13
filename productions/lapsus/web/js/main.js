@@ -327,7 +327,14 @@ function meshFromLayer(layer, obj) {
     parts.push({ surfName, ib, count: list.length });
   }
   gl.bindVertexArray(null);
-  return { vao, parts, count: idx.length };
+  // Bounding-sphere centre (bbox midpoint) in object space — the sort key the
+  // engine uses, transformed to camera space per frame (RENDER.md §4 step 5).
+  let mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < P.length; i += 3) for (let k = 0; k < 3; k++) {
+    if (P[i+k] < mn[k]) mn[k] = P[i+k];
+    if (P[i+k] > mx[k]) mx[k] = P[i+k];
+  }
+  return { vao, parts, count: idx.length, centre: [0,1,2].map((k) => (mn[k] + mx[k]) / 2) };
 }
 
 gl.bindAttribLocation(prog, 0, 'aPos');
@@ -431,6 +438,13 @@ const bgVao = gl.createVertexArray();
         // RENDER.md §8: luminosity > 0.95 is drawn unlit via glColor4f
         unlit: (s.luminosity ?? 0) > 0.95,
         diffuse: s.diffuse ?? 1,
+        // Blend mode, per RENDER.md §4.5's surface rules:
+        //   ADTR > 0.95          -> mode 1, additive     (+ depth mode 2)
+        //   TRAN > 0 (or a TTEX) -> mode 3, alpha        (+ depth mode 2)
+        //   otherwise            -> mode 0, no blending  (depth mode 3)
+        // Depth mode 2 is no-write + LEQUAL, mode 3 is write + LEQUAL.
+        blendMode: (s.additiveTransparency ?? 0) > 0.95 ? 1
+                 : (s.transparency ?? 0) > 0 ? 3 : 0,
         // LWO TRAN is transparency, so alpha is its complement. SIDE 3 is
         // double-sided: culling off and normals flipped on back faces.
         alpha: 1 - (s.transparency ?? 0),
@@ -550,22 +564,37 @@ const bgVao = gl.createVertexArray();
 
   // ---- opaque first, then blended (RENDER.md 8 draw order)
   let textured = 0;
+  // Depth sort: key is the camera-space Z of each object's bounding-sphere
+  // centre, ASCENDING (nearest first). The opaque pass walks forward and the
+  // blended pass BACKWARD (far->near). It is per-OBJECT, not per-triangle, so
+  // the original's transparency ordering is imperfect — reproduce it rather
+  // than improve on it (RENDER.md §4 steps 5-8).
+  const objs = drawables.map((d) => {
+    const mv = M.mul(view, worldMatrix(d.item, T));
+    const c = d.mesh.centre;
+    return { d, mv, z: mv[2]*c[0] + mv[6]*c[1] + mv[10]*c[2] + mv[14] };
+  }).sort((a, b) => a.z - b.z);
+
   const passes = [];
-  for (const d of drawables) for (const part of d.mesh.parts) {
-    const mat = d.mats.get(part.surfName)
-      ?? { tex: null, color: [0.72,0.74,0.78], unlit: false, diffuse: 1, alpha: 1, twoSided: false, refl: 0, envTex: null };
-    passes.push({ d, part, mat });
+  for (const o of objs) for (const part of o.d.mesh.parts) {
+    const mat = o.d.mats.get(part.surfName)
+      ?? { tex: null, color: [0.72,0.74,0.78], unlit: false, diffuse: 1, alpha: 1,
+           twoSided: false, refl: 0, envTex: null, blendMode: 0 };
+    passes.push({ o, part, mat });
   }
   for (const blended of (DRAW_OBJECTS ? [false, true] : [])) {
-    for (const { d, part, mat } of passes) {
-      if ((mat.alpha < 1) !== blended) continue;
-      gl.uniformMatrix4fv(uMV, false, M.mul(view, worldMatrix(d.item, T)));
+    for (const { o, part, mat } of (blended ? [...passes].reverse() : passes)) {
+      const d = o.d;
+      if (((mat.blendMode ?? 0) !== 0) !== blended) continue;
+      gl.uniformMatrix4fv(uMV, false, o.mv);
       gl.bindVertexArray(d.mesh.vao);
       if (blended) {
         gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);   // LWO TRAN = mode 3
-        gl.depthMask(false);
-      } else { gl.disable(gl.BLEND); gl.depthMask(true); }
+        if (mat.blendMode === 1) gl.blendFunc(gl.ONE, gl.ONE);              // additive
+        else if (mat.blendMode === 2) gl.blendFunc(gl.DST_COLOR, gl.ZERO);  // multiplicative
+        else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);            // alpha
+        gl.depthMask(false);                                   // depth mode 2
+      } else { gl.disable(gl.BLEND); gl.depthMask(true); }     // depth mode 3
       if (mat.twoSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
       gl.uniform3f(uColor, mat.color[0], mat.color[1], mat.color[2]);
       gl.uniform1i(uHasTex, mat.tex ? 1 : 0);
