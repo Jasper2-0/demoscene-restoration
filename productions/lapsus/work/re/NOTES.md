@@ -215,6 +215,38 @@ is not drift either: ENGINE.md's independent check has phase 2 running
 two clocks agree to 0.12 % over 112 seconds. A rate error large enough to
 explain 0.6 s over a few seconds would have shown up there as many seconds.
 
+**Update — the silhouette probe is built** (`work/verify/timing.mjs`). It
+removes the background from both sides before comparing: ours exactly, by
+rendering twice with `?objects=0`; the reference by per-pixel *median* across
+frames spanning the part (median, so a bright object crossing a pixel cannot
+drag the estimate). It reports two statistics that fail differently —
+correlation and centroid distance — plus the peak-to-trough spread of each,
+because the argmin of a flat curve is noise wearing the costume of a
+measurement.
+
+It is far better conditioned than whole-frame luma: peak-to-trough 0.18–0.22
+in r, against 0.04 before. Results on `pene`:
+
+| nominal t | correlation says | centroid says | verdict |
+|---:|---|---|---|
+| 2.0 | +0.60s | +0.40s | both informative, **disagree** |
+| 4.0 | +0.40s | +0.40s | both informative, **agree — real** |
+| 6.0 | +0.00s | +0.80s | both informative, **disagree** |
+
+So **+0.40s at t=4 is confirmed** by two independent statistics, and the
+other two moments remain genuinely undecided rather than falsely confident.
+
+Ruled out as causes: **frame extraction** (the capture is 60 fps with dense
+keyframes, and `-ss` before vs after `-i` produce byte-identical frames, so
+fast seeking is not skewing the reference) and **frame quantisation**
+(1/60 s = 0.017 s, two orders of magnitude too small).
+
+Leading remaining hypothesis: `pene`'s object motion may be non-monotonic
+over the sweep window, so several render times match a given reference frame
+about equally well and the two statistics latch onto different ones. Testing
+that needs the object's own envelopes plotted over the part, not more
+correlation.
+
 Candidates, in the order worth testing:
 
 1. **The estimator is noisy for this content.** `pene` is a semi-transparent

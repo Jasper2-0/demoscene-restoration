@@ -27,6 +27,10 @@ const qs = new URLSearchParams(location.search);
 const SCENE = qs.get('scene') ?? 'hulluolli';
 const T = parseFloat(qs.get('t') ?? '4');
 const WMUL = parseFloat(qs.get('wmul') ?? '1');   // debug: scale cylindrical wrap
+// ?objects=0 draws the backdrop only. Used by verify/timing.mjs to obtain an
+// exact object mask by differencing, so timing can be judged on the moving
+// content instead of on a static background that dominates the frame.
+const DRAW_OBJECTS = qs.get('objects') !== '0';
 // near=0.01 only for Diskojea and Kaivoalieni (RENDER.md §8)
 const NEAR = /^(diskojea|kaivoalieni)$/i.test(SCENE) ? 0.01 : 1.0;
 const FAR = 100.0;
@@ -506,7 +510,7 @@ const bgVao = gl.createVertexArray();
       ?? { tex: null, color: [0.72,0.74,0.78], unlit: false, diffuse: 1, alpha: 1, twoSided: false, refl: 0, envTex: null };
     passes.push({ d, part, mat });
   }
-  for (const blended of [false, true]) {
+  for (const blended of (DRAW_OBJECTS ? [false, true] : [])) {
     for (const { d, part, mat } of passes) {
       if ((mat.alpha < 1) !== blended) continue;
       gl.uniformMatrix4fv(uMV, false, M.mul(view, worldMatrix(d.item, T)));
