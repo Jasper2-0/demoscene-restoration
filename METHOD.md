@@ -59,6 +59,12 @@ such a function. The rule that emerged:
 
 > If a decompiled function looks too simple for what it draws, disassemble it.
 
+That rule is now automated: `tools/ghidra/ExportDisasm.java` exports a paired
+disassembly listing (same function markers as the decomp export), and
+`tools/x87-audit.mjs` cross-references the two, flagging every function whose
+x87 instructions have no floating-point counterpart in the C. A DROPPED flag
+means un-ported until the asm has been read.
+
 `ndisasm -b 32` plus hand-tracking the x87 stack recovers the real expression.
 Numeric constants are read straight out of `.rdata`/`.data`
 (`struct.unpack_from('<f', image, addr - 0x400000)`), and MSVC's

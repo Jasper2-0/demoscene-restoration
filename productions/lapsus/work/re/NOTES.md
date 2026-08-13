@@ -52,10 +52,31 @@ part sequencing/sync. The assets themselves need no reconstruction, only
 parsers: LWO/IFF and LWS are publicly documented formats; JPG/TGA/MP3 are
 browser-native (TGA needs a tiny loader).
 
+## Ghidra pass (2026-08-13)
+
+Ghidra 12.1.2 headless (install: `~/tools/ghidra_12.1.2_PUBLIC`, JDK 21 at
+`~/tools/jdk-21*`): 2,062 functions → `re/decompiled.c` + paired
+`re/disasm.asm` (canonical scripts in `tools/ghidra/`).
+
+- `re/x87_audit.md`: **42 functions flagged** by `tools/x87-audit.mjs` — the
+  automated "decompiler dropped the float math" cross-check. Verified real on
+  `FUN_0043fcd0`: C shows `"%f %f %f %f"` calls with NO arguments; the asm
+  FLD/FSTPs four floats per call. Treat DROPPED entries as un-ported until
+  their asm is read. (Some flags are MSVC CRT float helpers — known noise.)
+- The engine calls itself **dm2000** (fake argv in `FUN_0040b050`, the
+  window/init class at 0x40b050). GLUT callbacks: display `0x40b820`,
+  reshape `0x40b870`, idle `0x40b8a0`. Fullscreen via
+  `glutGameModeString("%dx%d:%d@%d")` + `glutEnterGameMode`.
+- `GL_ARB_multitexture` resolved via `wglGetProcAddress` (glMultiTexCoord*).
+- **One C++ class per part**: each part function `operator_new`'s its object
+  (e.g. 0x100 bytes for Diskojea) and builds a std::string of its
+  `data/<Name>.lws` path. The part table / sequencing that instantiates them
+  in order is the next target.
+
 ## Next steps
 
-1. Ghidra headless over Lapsus.exe (already unpacked — no UPX step). Map the
-   main loop: GLUT callbacks, part table, music-time → part switching.
+1. Find the part table: who calls the per-part constructors, in what order,
+   and how music time (FSOUND) drives part switching + the mid-demo loader.
 2. LWS parser first (text; small), render one scene's camera + object motion
    against a stub renderer; LWO parser second.
 3. ~~Reference capture~~ DONE: youtube oP3lrBNVKBs pinned (219.1 s). Jasper:
