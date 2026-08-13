@@ -916,13 +916,13 @@ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 ## 9. What could not be answered from static analysis
 
-- **The `.lwo` mesh loader's UV/normal conventions** (whether V is flipped, how
-  LWO polygons are triangulated and split into surface groups, how the second UV
-  set at `group[+0x24]` is generated). The consumer is nailed down; the producer
-  lives in the huge scene loader `FUN_004156b0` @0x4156b0 and the LWO parser
-  around `FUN_00426a90`/`FUN_0042b8a0`, which were only sampled. Needs a
-  dedicated pass — and the safest way to settle it is to render one scene and
-  compare against the capture.
+- ~~**The `.lwo` mesh loader's UV conventions**~~ — **answered in §10**:
+  coordinates are generated at load by `FUN_0042b0c0` @0x42b0c0 from the `BLOK`
+  projection parameters, the second UV set at `group[+0x24]` is the third
+  textured channel's own projection, and V is flipped only for `PROJ 5`
+  (explicit `VMAP`). Still open here: the **normal** convention, and how LWO
+  polygons are triangulated and split into surface groups inside
+  `FUN_0041df70` @0x41df70.
 - **`FUN_004107f0`** (the scale factor used in the frustum-cull radius test) is
   x87-audit SUSPECT and was not read in asm. It only affects culling, so it
   cannot change the image — but do not transcribe Ghidra's C for it.
@@ -941,3 +941,285 @@ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 - The exact per-frame behaviour of the double-buffered feedback in Silli/Pehko
   depends on driver semantics of the 2000-era back buffer and cannot be
   determined from the binary; match it against the capture.
+
+---
+
+## 10. Texture coordinate generation
+
+Recovered from asm (`disasm.asm`), not from Ghidra's C: the dispatcher
+`FUN_0042b0c0` is a jump table Ghidra renders as a `switch`, and all four
+per-mode workers are pure x87 that the decompiler renders as float-free
+integer moves. `FUN_00427360` (the `BLOK` parser) is on the **x87-audit DROPPED
+list** — its `WRPW`/`WRPH` stores are invisible in the C.
+
+### 10.1 Where UVs are produced — **at load, baked into the vertex buffer**
+
+`FUN_0041df70` @0x41df70 is the LWO→renderable builder: it splits the object
+into per-surface groups, fills the stride-0x30 vertex array with positions
+(from `FUN_0041d6e0` @0x41d6e0 = `&PNTS[i*3]`, **raw object-space points**, no
+pivot and no scale) and indices, then at 0x41ed9a/0x41eda4 calls
+
+```
+FUN_00442c20(group);      // normals
+FUN_0042b0c0(surface, group);   // ← texgen
+```
+
+It runs **once per object**, either eagerly from the scene loader
+`FUN_004156b0` @0x416f87 or lazily on first use via `FUN_0041f1a0` @0x41f1ad
+(`if (obj[+0x84] == 0) build()`). There is **no per-frame texgen** and **no
+`GL_TEXTURE` matrix anywhere** (`glMatrixMode(0x1702)` appears zero times in
+`.text`). Sphere-map is the only runtime-computed coordinate, and GL does it.
+
+`FUN_0042b0c0` @0x42b0c0 loops the surface's **7 texture channels**
+(`EBP = surface + 0xb0`, step 0x54, `ESI = 0..6`):
+
+```
+if (chan[+0xb0] < 0)            continue;             // 0x42b0d5 — not bound
+mode = chan[+0x64] - 1;                               // 0x42b0d9/0x42b0dc
+if ((unsigned)mode > 5)         continue;             // 0x42b0dd
+jump  [0x42b128 + mode*4](surface, chanIndex, group, chan[+0xb0]);
+```
+
+Jump table at **0x42b128** (read from the image, `.rdata`):
+
+| `PROJ` | LightWave name | worker | implemented? |
+|---:|---|---|---|
+| 0 | Planar | `FUN_0042b140` @0x42b140 | yes |
+| 1 | Cylindrical | `FUN_0042b500` @0x42b500 | **yes** |
+| 2 | Spherical | `FUN_0042b2b0` @0x42b2b0 | yes |
+| 3 | Cubic | → 0x42b117 | **no — silently skipped** |
+| 4 | Front | → 0x42b117 | **no — silently skipped** |
+| 5 | UV | `FUN_0042b720` @0x42b720 | yes (reads the `VMAP`) |
+
+> So the answer to "does dm2000 implement cylindrical at all" is **yes, and
+> faithfully in shape** — but with a **negated U** and a different phase origin
+> from the textbook formula. That single sign is the whole bug (§10.5).
+
+### 10.2 The `BLOK` record — `FUN_00427360` @0x427360, `FUN_00427900` @0x427900
+
+Surface record is 0x2d4 bytes (`operator new` at 0x4267fe). The 7 channels are
+an array at `surface + 0x64`, **stride 0x54**, constructed by `FUN_0042ab80`
+@0x42ab80 (array-ctor helper `0x431d7f(base=surf+0x64, size=0x54, n=7, …)` at
+0x42ad60). Per-channel layout and defaults:
+
+| off (from surf) | rel | field | chunk | ctor default |
+|---|---|---|---|---|
+| +0x64 | +0x00 | `PROJ + 1` | `PROJ` (u16, `INC` at 0x4275fb) | 0 → **overwritten to 1** |
+| +0x68 | +0x04 | `AXIS` | `AXIS` (u16) | 0 (X) |
+| +0x6c | +0x08 | `SIZE` vec3 | `TMAP/SIZE` (0x427993) | (1,1,1) |
+| +0x78 | +0x14 | `CNTR` vec3 | `TMAP/CNTR` (0x427a4a) | (0,0,0) |
+| +0x84 | +0x20 | `ROTA` vec3 | `TMAP/ROTA` (0x4279ef) | (0,0,0) |
+| +0x90 | +0x2c | `WRPW` f32 | `WRPW` (0x4276c8) | 1.0 |
+| +0x94 | +0x30 | `WRPH` f32 | `WRPH` (0x42767f) | 1.0 |
+| +0x98 | +0x34 | image filename (`std::string`) | `IMAG` → `CLIP` (0x42753c) | "" |
+| +0xa8 | +0x44 | `PIXB & 1` (u8) | `PIXB` (0x4275aa) | 1 |
+| +0xac | +0x48 | `VMAP` handle | `VMAP` (0x427625) | 0 |
+| +0xb0 | +0x4c | **UV slot** 0/1/2 | — (written by §4.5) | **−1** |
+| +0xb4 | +0x50 | `Texture*` | — | 0 |
+
+Channel index comes from `CHAN` (0x427483):
+**`COLR`=0, `LUMI`=1, `DIFF`=2, `SPEC`=3, `REFL`=5, `TRAN`=6** (4 and 7 unused).
+
+> **Corrects §4.5**: the eight name slots at +0x98/+0xec/+0x140/… are *not*
+> LWOB's CTEX/DTEX/STEX/RTEX/TTEX/LTEX/BTEX. The surface parser
+> `FUN_00426a90` compares only LWO2 tags (`COLR DIFF LUMI SPEC REFL TRAN GLOS
+> CLRF ADTR SIDE SMAN RIMG BLOK`) — there is no LWOB path at all. So mask bit 1
+> = COLR, 2 = LUMI, 4 = DIFF, 8 = SPEC, 0x20 = REFL, 0x40 = TRAN, and bit 0x80
+> is the separate `RIMG` slot at +0x2b0. The material table in §4.5 is still
+> right, but "mask 3" means **COLR + LUMI** (colour × glow, hence `GL_ADD`) and
+> "mask 5" means **COLR + DIFF**.
+
+Just before parsing a `SURF`'s subchunks the loader **presets all 7 channels to
+`PROJ = 0` (planar)** — 0x426bc9: `EAX = surf+0x64; ECX = 7; do { *EAX = 1;
+EAX += 0x54; } while (--ECX)`. A `BLOK` with no `PROJ` chunk is therefore
+planar, not "skip".
+
+**Not parsed, therefore ignored:** `WRAP` (so wrapping is always the GL default
+the texture loader sets — REPEAT, §5.4), `CSYS` (object space is the only
+behaviour; a `CSYS 1` world-space projection is silently treated as object
+space), `OREF`, `NEGA`, `OPAC`, `ENAB`, `TMAP/OREF`, `TMAP/FALL`.
+`ROTA` **is parsed but never read** — a `.text`-wide grep for float reads of
+`+0x84/0x88/0x8c` on a surface record finds none, and none of the four texgen
+workers touches it. Projection rotation is unimplemented.
+
+### 10.3 The formulas
+
+Common preamble in all three procedural workers (0x42b1c6, 0x42b336, 0x42b57e):
+
+```
+d = P_object − CNTR            // P is the raw PNTS position
+axis = chan[AXIS]              // 0 = X, 1 = Y, 2 = Z; anything else ⇒ u = v = 0
+```
+
+Constants, read from `.rdata`: `0x45a30c = 0.0f`, `0x45a330 = 0.5f`,
+`0x45a624 = 0.75f`, `0x45ad24 = 1/π`, `0x45ad28 = 0.25f`, `0x45ad2c = 1/(2π)`,
+`0x45ad30 = π/2`.
+
+The engine has no `atan2`; it builds one out of `FPATAN` plus an `FCOMP` of the
+*denominator* against 0, adding `+π/2` when the denominator is > 0 and `−π/2`
+otherwise (0x42b63e etc.). Written as real arithmetic, with
+`A(n, d) = atan2(n, d) + π/2` (the ±2π branch jump is harmless: it is scaled by
+`WRPW/(2π)` and then multiplied by `WRPW`, so for integer `WRPW` it lands on an
+exact texture repeat):
+
+**`PROJ = 0` — planar (`FUN_0042b140`). `WRPW`/`WRPH` are NOT applied.**
+
+```
+axis 0 (X):  u = 0.5 + d.z / SIZE.z      v = 0.5 − d.y / SIZE.y
+axis 1 (Y):  u = 0.5 + d.x / SIZE.x      v = 0.5 − d.z / SIZE.z
+axis 2 (Z):  u = 0.5 + d.x / SIZE.x      v = 0.5 − d.y / SIZE.y
+```
+
+**`PROJ = 1` — cylindrical (`FUN_0042b500`). Only `WRPW` is applied.**
+
+```
+axis 0 (X):  u = −WRPW · ( A(d.z, d.y)/(2π) + 0.75 )   v = 0.5 − d.x / SIZE.x
+axis 1 (Y):  u = −WRPW · ( A(d.x, d.z)/(2π) + 0.75 )   v = 0.5 − d.y / SIZE.y
+axis 2 (Z):  u = +WRPW · ( A(d.x, d.y)/(2π) + 0.25 )   v = 0.5 − d.z / SIZE.z
+```
+
+Note the axis-2 row genuinely differs — `FADD 0.25` (0x45ad28) and **no**
+`FCHS` at 0x42b5d4-0x42b60f, against `FADD 0.75` (0x45a624) + `FCHS` on the
+other two. Also note axis 0 tests `TEST AH,0x01` (0x42b683, C0 only) where the
+other two test `AH,0x41` (C0|C3), i.e. `d.y == 0` picks the opposite branch.
+These are literal transcriptions, not tidied.
+
+Because `A(n,d) = atan2(n,d) + π/2`, the axis-1 row simplifies to the form a
+port should implement:
+
+```
+u = −WRPW · ( atan2(d.x, d.z) / (2π) + 1 )
+  ≡ −WRPW · atan2(d.x, d.z) / (2π)          (mod WRPW, i.e. mod 1 texture)
+v = 0.5 − d.y / SIZE.y
+```
+
+**`PROJ = 2` — spherical (`FUN_0042b2b0`). Both `WRPW` and `WRPH` applied.**
+
+```
+axis 0 (X):  u = −WRPW·( A(d.z,d.y)/(2π) + 0.75 )
+             v =  WRPH·( 0.5 − atan( d.x / hypot(d.z, d.y) ) / π )
+axis 1 (Y):  u = −WRPW·( A(d.x,d.z)/(2π) + 0.75 )
+             v =  WRPH·( 0.5 − atan( d.y / hypot(d.x, d.z) ) / π )
+axis 2 (Z):  u = +WRPW·( A(d.x,d.y)/(2π) + 0.25 )
+             v =  WRPH·( 0.5 − atan( d.z / hypot(d.x, d.y) ) / π )
+```
+
+`SIZE` is unused in spherical (it never appears in `FUN_0042b2b0`).
+
+**`PROJ = 3` (cubic) and `PROJ = 4` (front): nothing is written.** The vertex
+keeps whatever the buffer was zero-filled with. No warning is printed.
+
+**`PROJ = 5` — UV (`FUN_0042b720`)**: looks the `VMAP` handle at `chan[+0xac]`
+up by name, finds the matching per-point UV pair and writes
+
+```
+u = uv.u        v = 1.0 − uv.v          // 0x45a310 = 1.0f, FSUB at 0x42b841
+```
+
+i.e. **V is flipped for explicit UV maps** (and only for those — the procedural
+modes already produce a top-down V). Points with no entry in the map get
+`(0,0)` from the static fallback at `0x4a9988`.
+
+### 10.4 Where the coordinates land — and the second UV set
+
+The 4th argument to each worker is `chan[+0xb0]`, the **UV slot**, written by
+the `SURF`→Material builder `FUN_0042b8a0` (0x42bbed, 0x42c17d, 0x42c4ca,
+0x42c60d …) for exactly those channels that get a texture unit:
+
+| slot | destination | consumer |
+|---:|---|---|
+| 0 | `vertex[+0x20]` (uv0) | `GL_TEXTURE0` (§4.3) |
+| 1 | `vertex[+0x28]` (uv1) | `GL_TEXTURE1` (§4.3) |
+| 2 (or any ≥2 / <0) | `group[+0x24][i]`, the stride-8 side array | pass 1 (§4.3) |
+
+Store sites: 0x42b262/0x42b26e (planar), 0x42b6d2/0x42b6da (cyl),
+0x42b4af/0x42b4bb (sph), 0x42b85b/0x42b863 (UV); side-array sites
+0x42b284, 0x42b6f0, 0x42b4d1, 0x42b87a.
+
+> **This answers §9's first open item.** `uv1` is not derived from `uv0` and is
+> not a lightmap channel: it is the **second textured channel's own `BLOK`
+> projection**, with its own `PROJ`/`AXIS`/`CNTR`/`SIZE`/`WRPW`. For mask 3 that
+> is the `LUMI` block, for mask 5 the `DIFF` block; for mask 7 `DIFF` → uv1 and
+> `LUMI` → the pass-1 side array. Nothing generates reflection coordinates on
+> the CPU — the `RIMG` slot (mask 0x80) sets `GL_SPHERE_MAP` texgen on the
+> material (§4.5) and GL computes it per-vertex from the eye-space normal.
+
+### 10.5 Worked check — `naamiotaus.lwo` in `hulluolli.lws`
+
+Data (sole `BLOK`, `COLR` channel): `PROJ 1`, `AXIS 1`, `CNTR (0, 5, −100)`,
+`SIZE (125, 100, 15.74)`, `WRPW 5`, `WRPH 1`, `ROTA 0`, `CSYS 0`,
+`WRAP Repeat/Repeat`, image `textures/naamiotaus1.jpg` (512×512).
+16 points, x = ±62.5, y ∈ {−45, 55}, z ∈ [3.923, 19.664].
+
+Apply §10.3 axis-1 cylindrical. `d.z = z + 100 ∈ [103.92, 119.66]`, always > 0,
+so the branch is the simple one.
+
+| object x | z | `atan2(d.x,d.z)` | u (engine) | u mod 1 | u (textbook LW) |
+|---:|---:|---:|---:|---:|---:|
+| +62.5 | 3.923 | +30.996° | −5.4309 | 0.5691 | 0.9309 |
+| +25.0 | 17.401 | +12.024° | −5.1670 | 0.8330 | 0.6670 |
+| 0 | 19.664 | 0° | −5.0000 | 0.0000 | 0.5000 |
+| −25.0 | 17.401 | −12.024° | −4.8330 | 0.1670 | 0.3330 |
+| −62.5 | 3.923 | −30.996° | −4.5691 | 0.4309 | 0.0691 |
+
+- The backdrop subtends **61.99°** about `CNTR`, so the full 125-unit width
+  carries `5 × 61.99/360 = ` **0.861 texture repeats** — the *same* number under
+  both formulas. Confirms the NOTES.md finding that this is not a scale error.
+- **U runs the other way.** `du/dx < 0` for the engine, `> 0` for the textbook
+  formula. And the engine's phase origin is `u ≡ 0` at object x = 0 (the `−5`
+  is an exact integer number of repeats and vanishes under REPEAT), where the
+  textbook formula puts `u = 0.5`. Net: **a horizontal mirror plus a half-
+  texture shift** — a shape change, which is exactly why sweeping `wmul`
+  plateaued at ~0.70 for every value.
+- Camera at part-local t = 4.8 s (`hulluolli.lws`, camera parented to the Null,
+  evaluated with `work/js/lws.mjs`): world position (0.279, −5.721, −29.042),
+  world heading ≈ 0.01°, `fovX = 34.71°`. Ray-casting the frustum edges against
+  the backdrop gives visible object-x **−32.1 … +37.9**, i.e. **56.0 % of the
+  backdrop width** and **0.471 texture repeats** — consistent with the ~49 %
+  in NOTES.md (the exact figure depends on the sub-frame time).
+- `naamiotaus1.jpg` has its two column highlights at **u = 0.121 and u = 0.873**
+  (column-mean peaks over rows 0–300) and the statue niche at u ≈ 0.5.
+
+  | | u visible across the frame | columns | niche |
+  |---|---|---|---|
+  | engine (§10.3) | 0.216 → 1/0 → 0.745 (decreasing) | **both**, at NDC x −0.589 and +0.442 | out of frame |
+  | textbook LW | 0.285 → 0.755 (increasing) | neither | at NDC x −0.085 |
+
+  Measured on the reference capture (`verify/frames/hulluolli_t4.8_ref.png`,
+  column means over rows 150–300): bright column peaks at NDC x **−0.62** and
+  **+0.458**. The recovered formula predicts −0.589 / +0.442 — within 5 px and
+  3 px of 640. Correlating a predicted background profile against the capture
+  over the two clean background bands (px 40–190 and 425–570, rows 150–300):
+  **r = 0.971** for the recovered formula, **r = −0.443** for the textbook one,
+  and sweeping an extra U offset on top of the recovered formula finds its
+  optimum at exactly one whole repeat, i.e. **no offset improves it**.
+
+So the mismatch is fully explained: the engine's cylindrical U is the negative
+of LightWave's, phased so that `u = 0` sits on the projection axis' `+Z`
+direction rather than at the texture's centre. Both courtyard columns belong in
+frame; the current port shows the niche instead.
+
+### 10.6 Does anything come from outside the LWO?
+
+**No.** The inputs are exactly: the raw `PNTS` position, and `CNTR`, `SIZE`,
+`AXIS`, `WRPW`, `WRPH`, `PROJ` from the channel's own `BLOK`. There is no
+bounding box (the `BBOX` chunk is parsed for culling only), no layer pivot
+(`FUN_0041d6e0` returns `&PNTS[i*3]` unmodified; `naamiotaus`'s `LAYR` pivot is
+0 anyway), no scene-level override, and **no dependence on the item's LWS
+position/rotation/scale** — `naamiotaus` is scaled 0.5 in the scene and that
+does not touch its UVs.
+
+### 10.7 Checklist deltas for §8
+
+- [ ] uv0/uv1/side-array are **baked at load** by `FUN_0042b0c0`; a port
+      computes them in its LWO loader, never in a shader.
+- [ ] Cylindrical U is **negated**: `u = −WRPW · atan2(d.x, d.z) / (2π)` for
+      `AXIS 1`. Do not use LightWave's `+0.5 + atan2(…)/(2π)` form.
+- [ ] `WRPW` applies to cylindrical and spherical U only; `WRPH` to spherical V
+      only. Planar ignores both.
+- [ ] `PROJ 3` (cubic) and `PROJ 4` (front) produce **(0,0)** — reproduce the
+      omission rather than implementing them.
+- [ ] `PROJ 5` (UV map) flips V (`v = 1 − v_map`); the procedural modes do not.
+- [ ] `WRAP`, `CSYS` and `ROTA` are ignored by the engine — do not honour them.
+- [ ] §4.5's channel-slot names are LWO2 `COLR/LUMI/DIFF/SPEC/–/REFL/TRAN`, not
+      LWOB's `CTEX/DTEX/…`.

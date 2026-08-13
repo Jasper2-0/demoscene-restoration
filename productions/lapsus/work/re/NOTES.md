@@ -126,7 +126,29 @@ carry no TXUV map, only a projection + axis + size + centre. Surfaces with
 textures are pre-rendered views of the object with the lighting already baked
 in.
 
-### Background mapping is NOT solved — measured, not guessed
+### Background mapping — SOLVED 2026-08-13, see `RENDER.md` §10
+
+The texgen was read out of the asm (`FUN_0042b0c0` @0x42b0c0 dispatches a jump
+table at 0x42b128 to four x87 workers). dm2000 **does** implement cylindrical,
+but its U is the **negative** of LightWave's and phased on the projection
+axis' +Z rather than the texture centre:
+
+```
+PROJ 1, AXIS 1:  u = −WRPW · atan2(x − CNTR.x, z − CNTR.z) / (2π)
+                 v = 0.5 − (y − CNTR.y) / SIZE.y
+```
+
+Mirror + half-texture shift — which is precisely a shape change no wrap
+multiplier can undo. Verified against the capture: predicted column positions
+land within 5 px of the reference's, background-profile correlation **0.971**
+(the textbook formula scores **−0.443**), and no extra U offset improves it.
+Full per-mode formulas, the `BLOK` field layout and the uv1 answer are in
+`RENDER.md` §10. The measurements below stand as the record of *how* it was
+cornered — note in particular that the "top 110 px" strip used there is **not**
+pure background in this frame (the jester's hat fills it), which is why that
+correlation ceiling sat at 0.75.
+
+### Background mapping is NOT solved — measured, not guessed (superseded)
 
 Jasper flagged the backdrop tiling. Quantified by cross-correlating the
 horizontal intensity profile of the top 110 px (pure background) of our frame

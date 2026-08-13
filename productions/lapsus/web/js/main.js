@@ -142,44 +142,54 @@ const uColor = gl.getUniformLocation(prog, 'uColor');
 const uHasTex = gl.getUniformLocation(prog, 'uHasTex');
 const uUnlit = gl.getUniformLocation(prog, 'uUnlit');
 
-// Texture coordinates are NOT in the files for most objects: only 3 of the 50
-// carry TXUV maps, and the blocks instead name a PROJECTION (planar,
-// cylindrical) plus an AXIS, SIZE and CENTER. So the coordinates are computed
-// here the way LightWave defines them. This is the standard interpretation,
-// not something read out of dm2000 — the engine bakes its own coordinates at
-// load time and that code is only sampled (RENDER.md "still unknown"), so
-// treat the mapping as a hypothesis to be settled against the capture.
+// Texture coordinates, read out of dm2000 itself — NOT from LightWave's
+// documentation, which disagrees (METHOD.md, "the binary is the source of
+// truth"). Full derivation and the per-mode asm in re/RENDER.md §10.
+//
+// The engine bakes UVs into the vertex buffer at load (FUN_0042b0c0
+// @0x42b0c0, dispatching the jump table at 0x42b128 to four pure-x87
+// workers); there is no per-frame texgen and glMatrixMode(GL_TEXTURE) never
+// appears. Coordinates come from raw PNTS in OBJECT space — no layer pivot,
+// no LWS scale, nothing from the scene.
+//
+// Where it departs from the published format, and why fitting could never
+// find it: the engine's cylindrical U is the NEGATIVE of LightWave's, and is
+// phased on the projection axis rather than on the texture centre. That is a
+// mirror plus a half-texture shift — a change of SHAPE, not of scale, which
+// is why sweeping the wrap multiplier plateaued at r≈0.71 for every value.
+// WRAP, CSYS, ROTA, OREF, NEGA and OPAC are parsed but never read.
+const A = (n, d) => Math.atan2(n, d) + Math.PI / 2;      // @0x42b500 et al
+
 function projectUV(x, y, z, blk) {
   const [cx, cy, cz] = blk.center ?? [0, 0, 0];
   const [sx, sy, sz] = blk.size ?? [1, 1, 1];
   const ax = blk.axis ?? 2;
   const dx = x - cx, dy = y - cy, dz = z - cz;
-  // Image V runs DOWNWARD from the first row while world Y runs up, and rows
-  // are not flipped at upload (RENDER.md §8), so every vertical mapping is
-  // 0.5 − d/size, not 0.5 + d/size. Getting this backwards samples the black
-  // surround of a front-projected texture instead of the subject, which reads
-  // as "the model is untextured" rather than as an inverted axis.
-  if (blk.projection === 1) {                    // cylindrical around `axis`
-    const w = (blk.wrapW ?? 1) * WMUL;
-    // KNOWN NOT TO MATCH THE CAPTURE. This is LightWave's documented
-    // cylindrical projection, implemented faithfully: pivot on CNTR, wrap by
-    // WRPW. It is kept in this honest-but-wrong state deliberately.
-    //
-    // An earlier version pivoted on the object origin instead, which made the
-    // backdrop *look* closer (both columns in frame) — but that was fitted to
-    // a single frame, reached only correlation 0.71, and was derived from
-    // nothing. A guess that looks right is worse than a principled
-    // implementation that is visibly wrong, because the first one gets built
-    // on. The real formula must come from dm2000's own texgen; see
-    // re/NOTES.md "Background mapping is NOT solved".
-    if (ax === 1) return [ (Math.atan2(dx, dz) / (2 * Math.PI)) * w + 0.5, 0.5 - dy / (sy || 1) ];
-    if (ax === 0) return [ (Math.atan2(dy, dz) / (2 * Math.PI)) * w + 0.5, 0.5 - dx / (sx || 1) ];
-    return [ (Math.atan2(dx, dy) / (2 * Math.PI)) * w + 0.5, 0.5 - dz / (sz || 1) ];
+  const w = (blk.wrapW ?? 1) * WMUL;
+  const h = blk.wrapH ?? 1;
+  const TAU = 2 * Math.PI;
+
+  switch (blk.projection) {
+    case 1:                                             // cylindrical @0x42b500
+      // NB the axis-Z row really does use +0.25 and no negation.
+      if (ax === 0) return [ -w * (A(dz, dy) / TAU + 0.75), 0.5 - dx / (sx || 1) ];
+      if (ax === 1) return [ -w * (A(dx, dz) / TAU + 0.75), 0.5 - dy / (sy || 1) ];
+      return [ w * (A(dx, dy) / TAU + 0.25), 0.5 - dz / (sz || 1) ];
+    case 2: {                                           // spherical @0x42b2b0
+      const vOf = (a, b, c) => h * (0.5 - Math.atan(a / Math.hypot(b, c)) / Math.PI);
+      if (ax === 0) return [ -w * (A(dz, dy) / TAU + 0.75), vOf(dx, dy, dz) ];
+      if (ax === 1) return [ -w * (A(dx, dz) / TAU + 0.75), vOf(dy, dx, dz) ];
+      return [ w * (A(dx, dy) / TAU + 0.25), vOf(dz, dx, dy) ];
+    }
+    case 3: case 4:                                     // engine writes nothing
+      return [0, 0];
+    default:                                            // planar @0x42b140
+      // A BLOK with no PROJ falls here too: all 7 channels are preset to
+      // planar at 0x426bc9. WRPW/WRPH are not used by this mode.
+      if (ax === 0) return [ 0.5 + dz / (sz || 1), 0.5 - dy / (sy || 1) ];
+      if (ax === 1) return [ 0.5 + dx / (sx || 1), 0.5 - dz / (sz || 1) ];
+      return [ 0.5 + dx / (sx || 1), 0.5 - dy / (sy || 1) ];
   }
-  // planar (0): the two axes other than `axis` become s,t
-  if (ax === 1) return [ dx / (sx || 1) + 0.5, 0.5 - dz / (sz || 1) ];
-  if (ax === 0) return [ dz / (sz || 1) + 0.5, 0.5 - dy / (sy || 1) ];
-  return [ dx / (sx || 1) + 0.5, 0.5 - dy / (sy || 1) ];
 }
 
 // Build pos+normal+uv from an LWO layer, split into one index group per
