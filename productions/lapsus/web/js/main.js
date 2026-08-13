@@ -160,9 +160,16 @@ function projectUV(x, y, z, blk) {
   // as "the model is untextured" rather than as an inverted axis.
   if (blk.projection === 1) {                    // cylindrical around `axis`
     const w = blk.wrapW ?? 1;
-    if (ax === 1) return [ (Math.atan2(dx, dz) / (2 * Math.PI)) * w + 0.5, 0.5 - dy / (sy || 1) ];
-    if (ax === 0) return [ (Math.atan2(dy, dz) / (2 * Math.PI)) * w + 0.5, 0.5 - dx / (sx || 1) ];
-    return [ (Math.atan2(dx, dy) / (2 * Math.PI)) * w + 0.5, 0.5 - dz / (sz || 1) ];
+    // The ANGLE pivots on the object origin, not on CNTR; CNTR only offsets
+    // the height. naamiotaus's CNTR sits at z=-100, far behind geometry that
+    // lives at z=4..20, so pivoting there compresses the backdrop into a 62°
+    // slice and only ~0.4 of the texture reaches the frame — one column
+    // instead of two. About the origin the same geometry spans 162°, which
+    // puts a full texture width in view. Empirical, matched against the
+    // capture; the engine's own texgen is unread (RENDER.md "still unknown").
+    if (ax === 1) return [ (Math.atan2(x, z) / (2 * Math.PI)) * w + 0.5, 0.5 - dy / (sy || 1) ];
+    if (ax === 0) return [ (Math.atan2(y, z) / (2 * Math.PI)) * w + 0.5, 0.5 - dx / (sx || 1) ];
+    return [ (Math.atan2(x, y) / (2 * Math.PI)) * w + 0.5, 0.5 - dz / (sz || 1) ];
   }
   // planar (0): the two axes other than `axis` become s,t
   if (ax === 1) return [ dx / (sx || 1) + 0.5, 0.5 - dz / (sz || 1) ];
