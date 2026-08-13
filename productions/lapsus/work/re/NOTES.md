@@ -195,8 +195,48 @@ should be replaced by whatever the disassembly says.
 
 `?wmul=` on the renderer scales the cylindrical wrap for sweeps like this one.
 
-Still open on this frame: ours sits a fraction smaller and further left than
-the reference, and the reference is slightly warmer/higher contrast. Candidates
+### Open: the reference leads our render, but not by a constant
+
+Jasper spotted that the object's rotation in `pene` is slightly ahead in the
+capture. Confirmed by sweeping our render time against a fixed reference
+frame and correlating whole-frame luma:
+
+| nominal local t | best-matching render t | offset | corr at peak |
+|---:|---:|---:|---:|
+| 2.0 | 2.6 | **+0.60** | 0.962 |
+| 4.0 | 4.4 | **+0.40** | 0.953 |
+| 6.0 | 6.0 | **+0.00** | 0.964 |
+
+(at t=4 the peak is pronounced: 0.907 at +0.0 rising to 0.953 at +0.4.)
+
+So there IS a discrepancy, but it is **not a constant clock offset** — and it
+is not drift either: ENGINE.md's independent check has phase 2 running
+112.14 s in the capture against the binary's hardcoded 112.0 s exit, i.e. the
+two clocks agree to 0.12 % over 112 seconds. A rate error large enough to
+explain 0.6 s over a few seconds would have shown up there as many seconds.
+
+Candidates, in the order worth testing:
+
+1. **The estimator is noisy for this content.** `pene` is a semi-transparent
+   object over a static backdrop that dominates the frame, so whole-frame
+   luma correlation is mostly measuring the (time-invariant) backdrop and
+   only weakly the rotation. A sharper probe — silhouette centroid or edge
+   position, measured on the object region only, with the backdrop masked
+   out — would give a far better-conditioned peak.
+2. **Frame quantisation in the capture.** The demo free-runs (idle callback
+   re-renders continuously) while the capture is a fixed-rate video, so any
+   single reference frame is the demo's state at an arbitrary sub-frame
+   instant.
+3. **A genuine per-part time origin difference**, e.g. a part whose local
+   clock does not start exactly at its scheduled boundary.
+
+Do not "fix" this by adding a fudge to the frame harness: an offset that
+varies with t cannot be a constant, and fitting one would hide whichever of
+the above is real.
+
+Still open on this frame: the object is slightly lighter than the reference
+with softer detail (the reflection/material path), and the reference is
+slightly warmer/higher contrast. Candidates
 are a sub-frame time offset (the demo is free-running, so the capture's frame
 is not exactly at t=4.8), and the fact that no lighting, fog or fader is
 implemented yet. Worth settling with a small time sweep before assuming a
