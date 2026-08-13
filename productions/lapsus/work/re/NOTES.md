@@ -440,6 +440,37 @@ strand direction rather than zero; or the strand should not be simulated from
 rest at all at part entry. Settle it against `FUN_0042d220` rather than by
 tuning dt until it looks bushy.
 
+### Tauno particles — specified, not yet implemented
+
+`data/particles/tauno/tauno.txt` is read and understood; only the renderer
+side is missing. Note it **does** have comment syntax (`;`), unlike the hair
+format which silently drops unknown tokens — so its several commented-out
+`LifeTime` lines are genuinely inert, and the live value is 1.6772206.
+
+Shipped parameters: `FPS 10`, `MaxParticles 10`, `EmitInterval 0.1`,
+`InitialSize 1.6`, `InitialPosition 0,0,0 ± 0.55/0.30/0.55`,
+`InitialVelocity 0,1,0 ± 0.16/0.56/0.16`, `InitialZRotation 0 ± 1.0`,
+`VelocityMultiplier 0.0`, `Friction 0.5`, `ZRotVelocity ∈ [−1, 1]`,
+`Grow −1.0`, `AlphaFadeSpeed 0.5`.
+
+Update rule (RENDER.md §11): `age += dt; zRot += dt·zRotVel; pos += dt·vel;
+vel *= (1 − dt·Friction); size *= (1 + dt·Grow)`; dies on `size ≤ 0.1`,
+`alpha < 0` (`alpha -= dt·AlphaFadeSpeed`) or `age > LifeTime`. **No
+gravity.** Frame is `min(floor(age·FPS), 39)` — **clamped, not looped** — so
+with LifeTime 1.677 only frames 0–16 of the 40 JPEGs are ever displayed.
+Draw: `GL_QUADS` billboards, additive, depth test on with `depthMask(FALSE)`.
+
+Only `Part_Pehko` uses it, cloning **one system per hair node**: ruoksa's
+8 strands × 10 nodes = 80 systems, ≤ 800 sprites. The generic
+`Particle_<name>` LWS path exists but no shipped scene uses it.
+
+Two cautions recorded by the RE pass: the tint computes to only ~1.5 %
+additive contribution per sprite (unambiguous in the bytes but worth a
+capture check), and `prevPosition` is only written in the "finished" branch
+so emitter velocity is nonsense — harmless solely because
+`VelocityMultiplier` is 0, and it should be ported as zero rather than
+"fixed".
+
 ### The two remaining structural gaps
 
 **1. Frame feedback needs a real frame loop.** Silli (depth-only clear, 20 %
