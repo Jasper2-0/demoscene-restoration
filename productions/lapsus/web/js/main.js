@@ -113,20 +113,51 @@ uniform mat4 uMV, uProj;
 out vec3 vN, vP; out vec2 vUV;
 void main(){ vec4 p = uMV * vec4(aPos,1.0); vP = p.xyz;
   vN = mat3(uMV) * aNormal; vUV = aUV; gl_Position = uProj * p; }`;
+// Fixed-function-equivalent lighting, per RENDER.md §8: per-light diffuse
+// only (no per-light ambient), light-model ambient from the scene, and the
+// LWO surface's own diffuse coefficient. No hardcoded fill light — pene has
+// AmbientIntensity 0, so anything facing away from its single distant light
+// is genuinely black, and an invented ambient floor would wash it out.
 const FS = `#version 300 es
 precision highp float;
 in vec3 vN, vP; in vec2 vUV; out vec4 o;
-uniform vec3 uColor;
+uniform vec3 uColor, uAmbient;
 uniform sampler2D uTex;
-uniform bool uHasTex;
-uniform bool uUnlit;      // LWO luminosity > 0.95 draws unlit (RENDER.md §8)
+uniform bool uHasTex, uUnlit, uTwoSided;
+uniform float uDiffuse, uAlpha;
+#define MAXL 8
+uniform int uNumLights;
+uniform vec3 uLightDir[MAXL];        // eye space, pointing TOWARD the light
+uniform vec3 uLightColor[MAXL];
+uniform sampler2D uEnv;              // RIMG reflection image
+uniform bool uHasEnv;
+uniform float uRefl;
 void main(){
   vec3 base = uColor * (uHasTex ? texture(uTex, vUV).rgb : vec3(1.0));
-  if (uUnlit) { o = vec4(base, 1.0); return; }
   vec3 n = normalize(vN);                       // GL_NORMALIZE equivalent
-  if (!gl_FrontFacing) n = -n;
-  float d = max(dot(n, normalize(vec3(0.3,0.6,1.0))), 0.0);
-  o = vec4(base * (0.18 + 0.82*d), 1.0);
+  if (uTwoSided && !gl_FrontFacing) n = -n;
+  vec3 col;
+  if (uUnlit) {
+    col = base;
+  } else {
+    vec3 lit = uAmbient;
+    for (int i = 0; i < MAXL; i++) {
+      if (i >= uNumLights) break;
+      lit += uLightColor[i] * (uDiffuse * max(dot(n, uLightDir[i]), 0.0));
+    }
+    col = base * lit;
+  }
+  // GL_SPHERE_MAP on the eye-space reflection vector, added on top: the
+  // engine puts the RIMG reflection on texture unit 1 with env mode GL_ADD
+  // (RENDER.md 8), which is why these surfaces read as glowing/additive
+  // rather than as a plain modulated texture.
+  if (uHasEnv) {
+    vec3 u = normalize(vP);
+    vec3 r = u - 2.0 * n * dot(n, u);
+    float m = 2.0 * sqrt(r.x*r.x + r.y*r.y + (r.z + 1.0)*(r.z + 1.0));
+    col += texture(uEnv, vec2(r.x/m + 0.5, r.y/m + 0.5)).rgb * uRefl;
+  }
+  o = vec4(col, uAlpha);
 }`;
 const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
@@ -141,6 +172,16 @@ const uProj = gl.getUniformLocation(prog, 'uProj');
 const uColor = gl.getUniformLocation(prog, 'uColor');
 const uHasTex = gl.getUniformLocation(prog, 'uHasTex');
 const uUnlit = gl.getUniformLocation(prog, 'uUnlit');
+const uTwoSided = gl.getUniformLocation(prog, 'uTwoSided');
+const uDiffuse = gl.getUniformLocation(prog, 'uDiffuse');
+const uAlpha = gl.getUniformLocation(prog, 'uAlpha');
+const uAmbient = gl.getUniformLocation(prog, 'uAmbient');
+const uNumLights = gl.getUniformLocation(prog, 'uNumLights');
+const uLightDir = gl.getUniformLocation(prog, 'uLightDir');
+const uLightColor = gl.getUniformLocation(prog, 'uLightColor');
+const uEnv = gl.getUniformLocation(prog, 'uEnv');
+const uHasEnv = gl.getUniformLocation(prog, 'uHasEnv');
+const uRefl = gl.getUniformLocation(prog, 'uRefl');
 
 // Texture coordinates, read out of dm2000 itself — NOT from LightWave's
 // documentation, which disagrees (METHOD.md, "the binary is the source of
@@ -333,6 +374,17 @@ const bgVao = gl.createVertexArray();
         tex, color: s.color ?? [1, 1, 1],
         // RENDER.md §8: luminosity > 0.95 is drawn unlit via glColor4f
         unlit: (s.luminosity ?? 0) > 0.95,
+        diffuse: s.diffuse ?? 1,
+        // LWO TRAN is transparency, so alpha is its complement. SIDE 3 is
+        // double-sided: culling off and normals flipped on back faces.
+        alpha: 1 - (s.transparency ?? 0),
+        twoSided: (s.sides ?? 1) === 3,
+        refl: s.reflection ?? 0,
+        envTex: await (async () => {
+          const c = s.reflectionImage ? lwo.clips.find((c) => c.index === s.reflectionImage) : null;
+          if (!c?.file) return null;
+          try { return await loadTexture(c.file); } catch { return null; }
+        })(),
       });
     }
     for (const layer of lwo.layers) {
@@ -387,21 +439,68 @@ const bgVao = gl.createVertexArray();
 
   gl.uniformMatrix4fv(uProj, false, proj);
   gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
-  gl.activeTexture(gl.TEXTURE0);
+  gl.uniform1i(uEnv, 1);
+
+  // ---- lights. LightType 0 is a DISTANT light: direction only, taken from
+  // the item's world +Z and negated to point toward the light (RENDER.md 8).
+  // Light-model ambient = scene ambient colour x intensity; pene sets
+  // AmbientIntensity 0, so there is no ambient floor at all.
+  const lightDirs = [], lightCols = [];
+  for (const L of scene.lights.slice(0, 8)) {
+    const w = worldMatrix(L, T);
+    const dW = [-w[8], -w[9], -w[10]];                  // -(world +Z)
+    const d = [                                          // into eye space
+      view[0]*dW[0] + view[4]*dW[1] + view[8]*dW[2],
+      view[1]*dW[0] + view[5]*dW[1] + view[9]*dW[2],
+      view[2]*dW[0] + view[6]*dW[1] + view[10]*dW[2]];
+    const len = Math.hypot(...d) || 1;
+    lightDirs.push(d[0]/len, d[1]/len, d[2]/len);
+    const c = L.color ?? [1, 1, 1], I = L.intensity ?? 1;
+    lightCols.push(c[0]*I, c[1]*I, c[2]*I);
+  }
+  gl.uniform1i(uNumLights, scene.lights.slice(0, 8).length);
+  if (lightDirs.length) {
+    gl.uniform3fv(uLightDir, new Float32Array(lightDirs));
+    gl.uniform3fv(uLightColor, new Float32Array(lightCols));
+  }
+  const ambI = scene.ambientIntensity ?? 0, ambC = scene.ambientColor ?? [1, 1, 1];
+  gl.uniform3f(uAmbient, ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
+
+  // ---- opaque first, then blended (RENDER.md 8 draw order)
   let textured = 0;
-  for (const d of drawables) {
-    gl.uniformMatrix4fv(uMV, false, M.mul(view, worldMatrix(d.item, T)));
-    gl.bindVertexArray(d.mesh.vao);
-    for (const part of d.mesh.parts) {
-      const mat = d.mats.get(part.surfName) ?? { tex: null, color: [0.72, 0.74, 0.78], unlit: false };
+  const passes = [];
+  for (const d of drawables) for (const part of d.mesh.parts) {
+    const mat = d.mats.get(part.surfName)
+      ?? { tex: null, color: [0.72,0.74,0.78], unlit: false, diffuse: 1, alpha: 1, twoSided: false, refl: 0, envTex: null };
+    passes.push({ d, part, mat });
+  }
+  for (const blended of [false, true]) {
+    for (const { d, part, mat } of passes) {
+      if ((mat.alpha < 1) !== blended) continue;
+      gl.uniformMatrix4fv(uMV, false, M.mul(view, worldMatrix(d.item, T)));
+      gl.bindVertexArray(d.mesh.vao);
+      if (blended) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);   // LWO TRAN = mode 3
+        gl.depthMask(false);
+      } else { gl.disable(gl.BLEND); gl.depthMask(true); }
+      if (mat.twoSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
       gl.uniform3f(uColor, mat.color[0], mat.color[1], mat.color[2]);
       gl.uniform1i(uHasTex, mat.tex ? 1 : 0);
       gl.uniform1i(uUnlit, mat.unlit ? 1 : 0);
+      gl.uniform1i(uTwoSided, mat.twoSided ? 1 : 0);
+      gl.uniform1f(uDiffuse, mat.diffuse ?? 1);
+      gl.uniform1f(uAlpha, mat.alpha ?? 1);
+      gl.uniform1i(uHasEnv, mat.envTex ? 1 : 0);
+      gl.uniform1f(uRefl, mat.refl ?? 0);
+      gl.activeTexture(gl.TEXTURE0);
       if (mat.tex) { gl.bindTexture(gl.TEXTURE_2D, mat.tex); textured++; }
+      if (mat.envTex) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.envTex); }
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.ib);
       gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
     }
   }
+  gl.disable(gl.BLEND); gl.depthMask(true);
   gl.finish();
 
   window.__lapsusInfo = {
