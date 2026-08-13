@@ -195,7 +195,42 @@ should be replaced by whatever the disassembly says.
 
 `?wmul=` on the renderer scales the cylindrical wrap for sweeps like this one.
 
-### Open: the reference leads our render, but not by a constant
+### RESOLVED — it was never a timing offset (2026-08-13)
+
+The apparent lead was an **interpolation bug**, not a clock difference. See
+`work/js/lws.mjs`: endpoint tangents were halved by substituting the key
+itself for the missing neighbour, turning a straight ramp into an
+ease-in/ease-out S-curve. Running slow early and catching up late presents as
+an offset that *varies with time*, which is what made it so convincing.
+
+`pene`'s heading is a single two-key span, 0 → 6.283185 over 12 s with
+tension/continuity/bias all zero — a constant 30 °/s, derivable from the file
+in one line. With the full chord at both endpoints the Hermite basis
+degenerates to exactly linear and the heading is 0/60/120/180/240° at
+t=0/2/4/6/8.
+
+Verified three ways: the silhouette probe now reports **+0.00 s at all three**
+sample times (was +0.60/+0.40/+0.00), with both statistics agreeing at t=4
+and t=6; and the whole-frame peak moved onto the nominal time (t=4.0 went
+0.906 → 0.9545 while t=4.4 went 0.948 → 0.9078).
+
+**Frame correlations after the fix:**
+
+| frame | before | after | MAD |
+|---|---:|---:|---:|
+| `hulluolli` t=4.8 | 0.998 | **0.998** | 2.4/255 |
+| `pene` t=4 | 0.906 | **0.954** | 7.7/255 |
+| `kuubiotekniikka` t=6 | 0.754 | **0.941** | 7.0/255 |
+
+kuubiotekniikka gaining 0.19 shows the bug was never pene-specific — that
+scene animates 32 parented cubes, every one of them on a wrong curve. Any
+two-key envelope in any of the 23 scenes was affected.
+
+Remaining on `pene`: mean level now *overshoots* (41.7 vs 36.9), consistent
+with the material notes below — specular is specified in RENDER.md §4.5 and
+is still not implemented.
+
+### Superseded: "the reference leads our render, but not by a constant"
 
 Jasper spotted that the object's rotation in `pene` is slightly ahead in the
 capture. Confirmed by sweeping our render time against a fixed reference
