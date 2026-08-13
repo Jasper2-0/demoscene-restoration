@@ -398,6 +398,54 @@ const BG_FS = `#version 300 es
 precision highp float;
 in vec2 vUV; out vec4 o; uniform sampler2D uTex;
 void main(){ o = vec4(texture(uTex, vUV).rgb, 1.0); }`;
+// Faders (ENGINE.md §6). Six shared objects, but only three are ever used:
+// black FadeIn/FadeOut in mode 3 (alpha over a black quad), a white FadeIn in
+// mode 1 (additive flash), and a RandomFadeOut for Part_Empt's flicker. Drawn
+// as one fullscreen quad in ortho after everything else.
+//   mode 3: alpha = v (FadeIn) / 1-v (FadeOut), colour black
+//   mode 1: rgb scaled by 1-v (FadeIn) / v (FadeOut), additive
+const FADE_VS = `#version 300 es
+const vec2 P[4] = vec2[4](vec2(-1.,-1.), vec2(1.,-1.), vec2(-1.,1.), vec2(1.,1.));
+void main(){ gl_Position = vec4(P[gl_VertexID], 0., 1.); }`;
+const FADE_FS = `#version 300 es
+precision highp float; out vec4 o;
+uniform vec4 uFade;                  // rgb, alpha
+void main(){ o = uFade; }`;
+const fadeProg = gl.createProgram();
+gl.attachShader(fadeProg, sh(gl.VERTEX_SHADER, FADE_VS));
+gl.attachShader(fadeProg, sh(gl.FRAGMENT_SHADER, FADE_FS));
+gl.linkProgram(fadeProg);
+const fadeVao = gl.createVertexArray();
+
+/**
+ * Draw one fader. `kind` is 'in' | 'out', `mode` 1 (additive white) or
+ * 3 (alpha over black), `v` the 0..1 ramp position.
+ * Early-outs match the engine: FadeIn stops at v >= 1, FadeOut at v <= 0.
+ */
+function drawFade(kind, mode, v, rgb = [0, 0, 0]) {
+  v = Math.min(1, Math.max(0, v));
+  if (kind === 'in' && v >= 1) return;
+  if (kind === 'out' && v <= 0) return;
+  gl.useProgram(fadeProg);
+  gl.bindVertexArray(fadeVao);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+  gl.enable(gl.BLEND);
+  if (mode === 1) {
+    gl.blendFunc(gl.ONE, gl.ONE);
+    const k = kind === 'in' ? 1 - v : v;
+    gl.uniform4f(gl.getUniformLocation(fadeProg, 'uFade'), rgb[0]*k, rgb[1]*k, rgb[2]*k, 1);
+  } else {
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // mode 3 writes the ramp into material TRANSPARENCY; GL alpha = 1 - that
+    const transparency = kind === 'in' ? v : 1 - v;
+    gl.uniform4f(gl.getUniformLocation(fadeProg, 'uFade'), rgb[0], rgb[1], rgb[2], 1 - transparency);
+  }
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
+  gl.useProgram(prog);
+}
+window.__lapsusFade = drawFade;
+
 const bgProg = gl.createProgram();
 gl.attachShader(bgProg, sh(gl.VERTEX_SHADER, BG_VS));
 gl.attachShader(bgProg, sh(gl.FRAGMENT_SHADER, BG_FS));
@@ -614,6 +662,18 @@ const bgVao = gl.createVertexArray();
     }
   }
   gl.disable(gl.BLEND); gl.depthMask(true);
+
+  // Scheduled fade for this part, from ?fadein=/?fadeout= (kind:dur:mode[:rgb]).
+  // The sequencer computes the ramp as (t - start)/dur for a fade-in and
+  // (t - (start + dur - fadeOutDur))/fadeOutDur for a fade-out (ENGINE.md §4);
+  // the harness passes the already-resolved ramp so this renderer stays a
+  // single-frame tool.
+  const fadeIn = qs.get('fadein'), fadeOut = qs.get('fadeout');
+  if (fadeIn) { const [v, mode, r, g, b] = fadeIn.split(',').map(Number);
+    drawFade('in', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
+  if (fadeOut) { const [v, mode, r, g, b] = fadeOut.split(',').map(Number);
+    drawFade('out', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
+
   gl.finish();
 
   window.__lapsusInfo = {
