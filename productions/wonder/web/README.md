@@ -24,7 +24,7 @@ is no build step or runtime dependency. Browser autoplay policy requires the
   compiled effect lanes, active render-layer details, and direct/transitive
   asset links for each element.
 - Shared modules are vendored under `js/shared/`; edit the canonical copies in
-  `shared/sunflower/js/` and run `node tools/sync-sunflower-runtime.mjs`.
+  `shared/sunflower/js/` and run `node tools/sync-shared-runtime.mjs`.
 
 ## Restoration method and provenance
 

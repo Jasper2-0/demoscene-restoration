@@ -36,7 +36,7 @@ is no build step or runtime dependency. Browser autoplay policy requires the
 - `?t=250&debug` exercises the recovered late `0x40f570` cylinder while
   `?t=270&debug` covers the uncaptured soundtrack tail.
 - Shared modules are vendored under `js/shared/`; edit the canonical copies in
-  `shared/sunflower/js/` and run `node tools/sync-sunflower-runtime.mjs`.
+  `shared/sunflower/js/` and run `node tools/sync-shared-runtime.mjs`.
 
 ## Restoration method and provenance
 

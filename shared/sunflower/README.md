@@ -1,7 +1,7 @@
 # Shared Sunflower browser runtime
 
 Canonical browser-side modules shared by the Wonder and Energia restorations.
-The two deployable sites remain self-contained: `tools/sync-sunflower-runtime.mjs`
+The two deployable sites remain self-contained: `tools/sync-shared-runtime.mjs`
 copies the files listed in its manifest into each site's `js/shared/` directory,
 and `--check` verifies that those generated copies have not drifted.
 
@@ -14,7 +14,7 @@ Verification from the repository root:
 ```sh
 node --test shared/sunflower/test/runtime.test.mjs
 node tools/check-sunflower-assets.mjs
-node tools/sync-sunflower-runtime.mjs --check
+node tools/sync-shared-runtime.mjs --check
 node shared/sunflower/test/sites-smoke.mjs
 ```
 

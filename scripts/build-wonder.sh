@@ -52,9 +52,9 @@ echo "  $(grep '^Wonder:' <<< "$ASSETS")"
 # a stale js/shared/ would deploy code that no test in shared/sunflower/ ran
 # against.
 echo "checking vendored js/shared against shared/sunflower/js ..."
-DRIFT=$(node tools/sync-sunflower-runtime.mjs --check 2>&1 | grep '^\(drifted\|missing\): productions/wonder/web/' || true)
+DRIFT=$(node tools/sync-shared-runtime.mjs --check 2>&1 | grep '^\(drifted\|missing\): productions/wonder/web/' || true)
 [ -z "$DRIFT" ] || {
-  echo "error: vendored shared runtime is stale — run: node tools/sync-sunflower-runtime.mjs" >&2
+  echo "error: vendored shared runtime is stale — run: node tools/sync-shared-runtime.mjs" >&2
   echo "$DRIFT" >&2
   exit 1
 }
