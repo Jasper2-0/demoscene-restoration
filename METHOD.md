@@ -118,6 +118,25 @@ The failure is subtle because the missing step is not "ignore a warning" but
 have not identified. So the question to ask before porting a behaviour is
 *which VA computes this?* — and only then, *is it trustworthy?*
 
+**Verification does not spread.** Checking part of a function earns you that
+part and nothing else. The Lapsus envelope evaluator was read out of the
+disassembly and the key layout confirmed — 24-byte stride, times in absolute
+seconds, how the span is searched — and the evaluator was then treated as
+"verified" wholesale. The *tangent formula* had never been looked at, and it
+was wrong: endpoint tangents were halved by substituting the key itself for
+the missing neighbour, turning a straight ramp into an ease-in/ease-out
+S-curve. It cost a long detour, because a curve that is right at both ends
+and wrong in the middle presents as a *timing* error that varies with time,
+which is a convincing disguise.
+
+The data said so plainly. The scene file contained two keys — `0` to
+`6.283185` over 12 seconds, tension/continuity/bias all zero — from which a
+constant 30°/s follows directly. Nobody read them; a textbook interpolator
+was written from memory instead. Before writing any interpolation, decoder or
+evaluator, **read the actual values it will be given**: a handful of real
+inputs constrain the answer far more sharply than the format's general case,
+and they are free to look at.
+
 `ndisasm -b 32` plus hand-tracking the x87 stack recovers the real expression.
 Numeric constants are read straight out of `.rdata`/`.data`
 (`struct.unpack_from('<f', image, addr - 0x400000)`), and MSVC's

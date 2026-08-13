@@ -181,14 +181,19 @@ export function parseLWS(text) {
 
 // TCB (Kochanek-Bartels) envelope evaluation — the only span type Lapsus uses.
 //
-// Edge behaviour is CLAMP, not LightWave's nominal "Reset", and `t` is
-// absolute seconds. Both facts come from the engine's own evaluator
-// FUN_0041ab80, read out of disasm.asm because Ghidra dropped its float math
-// (x87-audit SUSPECT): 24-byte key stride, the span search compares against
-// key[i].t at offset 0, and the 4-point stencil clamps its indices at both
-// ends. No modulo and no time scaling exist in that function — see
-// re/LWS_INVENTORY.md. The `Behaviors 1 1` in the files is authoring
-// metadata the engine never reads.
+// VERIFIED from the engine (FUN_0041ab80, read out of disasm.asm because
+// Ghidra dropped its float math): the key stride is 24 bytes, `t` is in
+// ABSOLUTE SECONDS, the span search compares against key[i].t at offset 0,
+// and there is no modulo or time scaling anywhere in the function. Edge
+// behaviour is clamp, not LightWave's nominal "Reset"; the `Behaviors 1 1`
+// in the files is authoring metadata the engine never reads.
+//
+// NOT verified from the engine: the TANGENT formula below. It is the
+// standard Kochanek-Bartels construction, and the engine's asm does contain
+// the (1-t)(1+-c)(1+-b) terms, but the endpoint rule here was settled
+// EMPIRICALLY against the capture, not read. Do not let the confirmations
+// above vouch for it — that conflation is exactly what let the endpoint bug
+// survive (see METHOD.md, "verification does not spread").
 export function evalEnvelope(env, t) {
   const K = env.keys;
   if (!K.length) return 0;
@@ -199,14 +204,28 @@ export function evalEnvelope(env, t) {
   const k0 = K[s], k1 = K[s + 1];
   const dt = k1.t - k0.t;
   const u = (t - k0.t) / dt;
-  const prev = K[s - 1] ?? k0, nxt = K[s + 2] ?? k1;
+  const prev = K[s - 1], nxt = K[s + 2];
   const tan = (k, a, b, sign) => {
     const f = (1 - k.ten) * (1 + sign * k.con) * (1 + sign * k.bia) / 2;
     const g = (1 - k.ten) * (1 - sign * k.con) * (1 - sign * k.bia) / 2;
     return f * a + g * b;
   };
-  const d0 = tan(k0, k0.v - prev.v, k1.v - k0.v, 1);
-  const d1 = tan(k1, k1.v - k0.v, nxt.v - k1.v, -1);
+  // ENDPOINT TANGENTS USE THE FULL CHORD, NOT A HALVED ONE. An interior key
+  // averages the chords on either side; at the first/last key there is only
+  // one chord, and it is used whole. Substituting the key itself for the
+  // missing neighbour (making that chord zero) halves the end tangent and
+  // turns what should be a straight ramp into an ease-in/ease-out S-curve.
+  //
+  // That bug is why pene appeared to have a *timing* offset: its heading is a
+  // single 2-key span, 0 -> 2*PI over 12 s, which the engine plays as a
+  // constant 30 deg/s. The S-curve ran slow early and caught up late, so
+  // matching the capture needed +0.60 s at local t=2, +0.40 s at t=4 and
+  // +0.00 s at t=6 — an "offset" that varied with t because it was never an
+  // offset. With the full chord at both ends the Hermite basis degenerates to
+  // exactly linear, which is what the capture shows.
+  const chord = k1.v - k0.v;
+  const d0 = prev ? tan(k0, k0.v - prev.v, chord, 1) : chord;
+  const d1 = nxt ? tan(k1, chord, nxt.v - k1.v, -1) : chord;
   const u2 = u * u, u3 = u2 * u;
   return (2 * u3 - 3 * u2 + 1) * k0.v + (u3 - 2 * u2 + u) * d0
        + (-2 * u3 + 3 * u2) * k1.v + (u3 - u2) * d1;
