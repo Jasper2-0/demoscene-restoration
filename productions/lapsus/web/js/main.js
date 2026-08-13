@@ -642,6 +642,17 @@ const bgVao = gl.createVertexArray();
     }
   }
 
+  let textured = 0, hairLines = 0, particleCount = 0, camIndex = 0, zoomAt = 0, fovX = 0;
+
+  // ONE FRAME of the demo, at time `T`. Feedback parts call this repeatedly
+  // without clearing so the buffer accumulates, which is what the original
+  // gets for free from the swap chain (RENDER.md §12): Silli clears depth
+  // only and lays a 20% black quad, Pehko clears nothing and uses 5%, Empt
+  // clears exactly once in the whole process, and Viherio's strobe gates the
+  // CLEAR rather than the draw. No FBO is needed — the default framebuffer
+  // persists across draw calls within a page load.
+  const renderAt = async (T, clearColour) => {
+
   // ---- per-part camera / fog overrides (RENDER.md §7).
   // Part_HigherBiing cuts between THREE cameras and rewrites the scene fog
   // range per shot; everything else uses camera 0 unaltered. Without this the
@@ -667,7 +678,7 @@ const bgVao = gl.createVertexArray();
     camOverwriteZ = 2 * Math.pow(Math.max(0, 1 - phase / P), 3);
   }
 
-  let camIndex = Number(qs.get('cam') ?? -1);
+  camIndex = Number(qs.get('cam') ?? -1);
   if (camIndex < 0) {
     camIndex = 0;
     if (/^higherbiing$/i.test(SCENE)) {
@@ -680,9 +691,9 @@ const bgVao = gl.createVertexArray();
   const cam = scene.cameras[Math.min(camIndex, scene.cameras.length - 1)];
   const zoom = cam?.motion?.length >= 9 ? null : cam?.zoom ?? 3.2;
   // ZoomFactor may be a static header value or an envelope; prefer the envelope
-  const zoomAt = cam?.zoomEnvelope ? evalEnvelope(cam.zoomEnvelope, T) : (cam?.zoom ?? 3.2);
+  zoomAt = cam?.zoomEnvelope ? evalEnvelope(cam.zoomEnvelope, T) : (cam?.zoom ?? 3.2);
 
-  const fovX = 2 * Math.atan(1 / zoomAt);
+  fovX = 2 * Math.atan(1 / zoomAt);
   const right = Math.tan(fovX / 2) * NEAR;
   const top = Math.tan(0.375 * fovX) * NEAR;   // fovY = 0.75*fovX AS AN ANGLE
   const proj = M.frustum(-right, right, -top, top, NEAR, FAR);
@@ -711,7 +722,9 @@ const bgVao = gl.createVertexArray();
   // ping-pong FBO and a real frame loop.
   const FEEDBACK = { silli: 0.20, pehko: 0.05, empt: 0.10 };
   const fbAlpha = FEEDBACK[SCENE] ?? null;
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  // Silli clears DEPTH only; Pehko and Empt clear nothing once running.
+  if (clearColour) gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  else gl.clear(gl.DEPTH_BUFFER_BIT);
 
   // ---- backdrop image, before the 3D and with depth disabled
   let bgTex = null;
@@ -780,7 +793,7 @@ const bgVao = gl.createVertexArray();
   }
 
   // ---- opaque first, then blended (RENDER.md 8 draw order)
-  let textured = 0;
+  textured = 0;
   // Depth sort: key is the camera-space Z of each object's bounding-sphere
   // centre, ASCENDING (nearest first). The opaque pass walks forward and the
   // blended pass BACKWARD (far->near). It is per-OBJECT, not per-triangle, so
@@ -848,7 +861,6 @@ const bgVao = gl.createVertexArray();
   // ---- hair. `AddNullObject Hair_<name>` binds that null to
   // data/hairs/<name>.txt; every strand shares ONE root, the null's world
   // origin, so the animated nulls drive the hair purely by parenting.
-  let hairLines = 0;
   const hairNodes = [];        // emitter positions for the particle systems
   for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
     const name = nullObj.name.replace(/^Hair_/, '');
@@ -890,7 +902,6 @@ const bgVao = gl.createVertexArray();
   // ---- particles. Part_Pehko clones one system per hair node; the emitter
   // positions are therefore the simulated hair nodes, which is why this runs
   // after the hair above.
-  let particleCount = 0;
   if (hairNodes.length) {
     let ptxt = null;
     try { ptxt = await (await fetch(DATA + 'particles/tauno/tauno.txt')).text(); } catch {}
@@ -946,6 +957,36 @@ const bgVao = gl.createVertexArray();
       gl.disable(gl.BLEND); gl.depthMask(true); gl.enable(gl.CULL_FACE);
       gl.useProgram(prog);
     }
+  }
+
+  };   // end renderAt
+
+  // Feedback parts replay a short window of frames so the trail exists; the
+  // window only needs to cover the decay (0.8^n for Silli reaches ~1% in ~20
+  // frames), not the whole part. Everything else renders exactly one frame.
+  const FB_WINDOW = { silli: 0.5, pehko: 0.5, empt: 0.5 };
+  // Viherio is NOT continuous feedback: its strobe suppresses the clear only
+  // inside 14 specific windows (table at 0x463c2c, every onset an exact
+  // multiple of 0.110794005s on a 64-unit cycle of 7.090816327s). Treating it
+  // as always-accumulating cost it 0.488 -> 0.155, so it renders normally
+  // until the table is implemented properly.
+  const VIHERIO_ONSETS = [0, 0.886352062, 1.218734026, 1.551116109, 1.994292140,
+    2.659056187, 2.991438150, 3.323820114, 3.766996145, 4.431760311, 4.764142036,
+    5.096524239, 5.539700031, 6.426052094];
+  const VIHERIO_CYCLE = 7.090816326530613;
+  let win = FB_WINDOW[SCENE];
+  if (/^viherio$/i.test(SCENE)) {
+    const phase = T % VIHERIO_CYCLE;
+    win = VIHERIO_ONSETS.some((e) => phase >= e && phase < e + 0.1) ? 0.12 : undefined;
+  }
+  if (win) {
+    const dt = 1 / 60, n = Math.max(1, Math.round(win / dt));
+    for (let i = n; i >= 0; i--) {
+      const t = Math.max(0, T - i * dt);
+      await renderAt(t, i === n);          // clear only on the first of the window
+    }
+  } else {
+    await renderAt(T, true);
   }
 
   // Scheduled fade for this part, from ?fadein=/?fadeout= (kind:dur:mode[:rgb]).
