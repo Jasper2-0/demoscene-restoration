@@ -19,6 +19,7 @@
 //   frontFace(CW), cullFace(BACK)
 import { parseLWS, evalEnvelope } from '../../work/js/lws.mjs';
 import { parseLWO } from '../../work/js/lwo.mjs';
+import { decodeTGA } from '../../work/js/tga.mjs';
 
 const ROOT = new URL('../../', import.meta.url).href;
 const DATA = ROOT + 'work/unpacked/lapsus_dat/data/';
@@ -27,6 +28,7 @@ const qs = new URLSearchParams(location.search);
 const SCENE = qs.get('scene') ?? 'hulluolli';
 const T = parseFloat(qs.get('t') ?? '4');
 const WMUL = parseFloat(qs.get('wmul') ?? '1');   // debug: scale cylindrical wrap
+const NOPASS1 = qs.get('nopass1') === '1';       // debug: skip the mask-7 additive pass
 // ?objects=0 draws the backdrop only. Used by verify/timing.mjs to obtain an
 // exact object mask by differencing, so timing can be judged on the moving
 // content instead of on a static background that dominates the frame.
@@ -400,18 +402,33 @@ const texSize = new Map();   // GL texture -> [w, h], for the backdrop fit
 async function loadTexture(file) {
   if (texCache.has(file)) return texCache.get(file);
   const url = ROOT + TEXDIR + file.replace(/\\/g, '/').split('/').pop();
-  const img = new Image();
-  await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('image ' + file)); img.src = url; });
   const tex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);          // do NOT flip rows
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+  let w, h;
+  if (/\.tga$/i.test(url)) {
+    // Browsers cannot decode TGA, so these silently failed to load and their
+    // surfaces rendered untextured. That is why the mask-7 objects were far
+    // too bright: their DIFF texture (which MODULATES the surface down) and
+    // their LUMI texture were both missing.
+    const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    const t = decodeTGA(buf);
+    w = t.width; h = t.height;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, t.data);
+  } else {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('image ' + file)); img.src = url; });
+    w = img.width; h = img.height;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);        // do NOT flip rows
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+  }
   gl.generateMipmap(gl.TEXTURE_2D);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
-  texSize.set(tex, [img.width, img.height]);
+  texSize.set(tex, [w, h]);
   texCache.set(file, tex);
   return tex;
 }
@@ -775,7 +792,7 @@ const bgVao = gl.createVertexArray();
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.ib);
       gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
       // mask 7: second, additive pass carrying only the LUMI texture
-      if (mat.texPass1) {
+      if (mat.texPass1 && !NOPASS1) {
         gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.depthMask(false);
         gl.uniform1i(uPass1, 1);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.texPass1);
