@@ -612,9 +612,18 @@ glDrawElements(GL_LINES, (end-begin)/2, GL_UNSIGNED_SHORT, indices);
 
 `DAT_004a900c` gates this block. There is exactly one read of it
 (`FUN_004151e0` @0x4155e6) and two writes, both in `Part_Pehko::vf2`
-(`forced_0x407800`, sets 1 before its own render and 0 after) — Pehko draws the
-hair instances itself, everyone else lets `Scene::render` do it. So the block is
+(`forced_0x407800` @0x407806 and @0x407969/0x407977). So the block is
 **live** in the shipped build, not dead debug code.
+
+> **Corrected in §11.1.** An earlier reading of this file said "Pehko draws the
+> hair instances itself". It does not: `forced_0x407800` contains no call to
+> `FUN_00424150` at all, and 0x41567b is the binary's only caller. Pehko
+> *suppresses* the hair entirely and instead drives one `ParticleSystem` per
+> hair node (§11.2.2).
+
+The full hair pipeline — the `data/hairs/*.txt` format, the strand/node record
+layout, the per-frame simulation, and how the vertex and index arrays are
+produced — is **§11.1**.
 
 ---
 
@@ -907,10 +916,31 @@ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
       mode 1 = additive with the colour scaled. FadeIn/FadeOut ramp directions
       per §6. `RandomFade*` flicker with `rand()/32767 <= v`.
 
-**Hair**
+**Hair** (full spec: §11.1)
 
 - [ ] `LINES`, 16-bit indices, stride-32 vertices (pos, normal), line width 3,
       exactly one light (the scene's first) enabled.
+- [ ] All strands of one `HairMesh` share a root: the object's world origin.
+      `node[0]` is never integrated.
+- [ ] Per frame, per node `i ≥ 1`:
+      `pos = P + normalize((pos + dt·gravity − P) + T·(dt·stiffness))·segLen`,
+      then `T = pos − P` (**un-normalised**), `P = pos`.
+- [ ] Normals are per-vertex "light minus vertex, perpendicular to tangent",
+      recomputed every frame from the scene's first light.
+- [ ] Additive (`GL_ONE, GL_ONE`), depth writes **on**, culling **off**,
+      no texture, ambient stays white.
+
+**Particles** (full spec: §11.2)
+
+- [ ] `GL_QUADS` billboards in world space (modelview = view only), oriented by
+      `A = (sin θ, cos θ, 0) × camZ`, `B = A × camZ`.
+- [ ] The 40 JPEGs are a **flipbook** in a 256×256 8×8 atlas;
+      `frame = min(floor(age·FPS), 39)`, **clamped**, half-texel inset UVs.
+- [ ] Simulation is explicit Euler with `Friction` and `Grow` only — no gravity.
+- [ ] Additive (`GL_ONE, GL_ONE`), depth test on with `glDepthMask(FALSE)`,
+      unlit, `glColor4f(rgb·alpha, 1)`.
+- [ ] In Pehko: 80 emitters, one per hair node, positioned from the (invisible)
+      hair simulation every frame.
 
 ---
 
@@ -926,11 +956,11 @@ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 - **`FUN_004107f0`** (the scale factor used in the frustum-cull radius test) is
   x87-audit SUSPECT and was not read in asm. It only affects culling, so it
   cannot change the image — but do not transcribe Ghidra's C for it.
-- **The hair (`data/hairs/*.txt`) and tauno particle (`particles/tauno/tauno.txt`)
-  file formats** — the draw side is now fully known (§4.6, `FUN_0040c620`
-  @0x40c620 parses `ColorTexture`/`AlphaTexture` keys and builds a
-  depth-mode-2 / additive-or-alpha material), but the geometry generators were
-  not traced.
+- ~~**The hair (`data/hairs/*.txt`) and tauno particle
+  (`particles/tauno/tauno.txt`) file formats**~~ — **answered in §11**: both key
+  tables, the strand/node and particle record layouts, both simulation update
+  rules, the flipbook→atlas build, and the GL state are all recovered. What
+  remains open there is listed in §11.4.
 - **`Picture` mode argument** (0 for loading screens, 3 for part pictures) — the
   tiling/atlas logic behind it was not chased.
 - **`Part_Empt` (`forced_0x4057b0`, in `targeted1.c`), `Part_Viherio`
@@ -1223,6 +1253,600 @@ does not touch its UVs.
 - [ ] `WRAP`, `CSYS` and `ROTA` are ignored by the engine — do not honour them.
 - [ ] §4.5's channel-slot names are LWO2 `COLR/LUMI/DIFF/SPEC/–/REFL/TRAN`, not
       LWOB's `CTEX/DTEX/…`.
+
+---
+
+## 11. Hair and particles
+
+Both systems are driven by plain-ASCII config files, both are simulated on the
+CPU every frame, and both are instantiated off **named nulls** in the `.lws`
+(plus one hardcoded path). Nothing is precomputed and nothing is baked into the
+archive: `hairball.lws` / `pehko.lws` legitimately contain no mesh objects
+because all of their geometry is generated at load and re-integrated per frame.
+
+### 11.0 The shared config parser
+
+`HairMesh` and `ParticleSystem` both parse with the same idiom (0x4234f6 and
+0x40cb01 respectively): open an `ifstream`, then loop `stream >> token` until
+EOF, comparing `token` against each key with `std::string::compare`
+(`FUN_0040afe0`), and on a match read the value(s) with `>>` into a member.
+
+Consequences a port must reproduce:
+
+- Tokens are **whitespace-delimited**, so line structure is irrelevant.
+- Comparison is **exact and case-sensitive** over the whole token.
+- **There is no comment syntax.** An unrecognised token is silently dropped and
+  the loop continues. `tauno.txt`'s `;`-comments survive only because every
+  token in them fails to match a key — which is also why
+  `;LifeTime 2.79…` is genuinely inert (`";LifeTime" != "LifeTime"`), while
+  `EmitInterval 0.1 ;0.03125` reads `0.1` and then discards `";0.03125"`.
+- A key may appear more than once; last one wins.
+
+### 11.1 Hair — the `data/hairs/*.txt` format
+
+Class `LW::HairMesh` (RTTI `.?AVHairMesh@@` @0x465f78, vtable 0x45acf8,
+`operator new(0x10c)`), constructed by `FUN_00423480` @0x423480. The per-strand
+class is `LW::Hair` (RTTI `.?AVHair@@` @0x466358, vtable 0x45ad3c,
+`operator new(0x38)`, ctor `FUN_0042d0e0` @0x42d0e0).
+
+| key | string VA | reads | goes to |
+|---|---|---|---|
+| `RootStiffness` | 0x466008 | 1 float | stiffness at node 0 |
+| `TipStiffness` | 0x465ff8 | 1 float | stiffness at node N−1 |
+| `HairCount` | 0x465fec | 1 **int** | number of strands |
+| `NodesPerHair` | 0x465fdc | 1 **int** | nodes per strand (N) |
+| `HairLength` | 0x465fd0 | 1 float | total strand length (L) |
+| `Gravity` | 0x465fc8 | 3 floats | per-strand gravity, copied to strand+0x24 |
+| `Additive` | 0x465fbc | 1 **int** | material blend mode |
+| `DiffuseColor` | 0x465fac | 3 floats **0..255** | material +0x1c..0x24 |
+| `SpecularColor` | 0x465f9c | 3 floats **0..255** | material +0x28..0x30 |
+| `SpecularExponent` | 0x465f88 | 1 float | material +0x34 (GL shininess) |
+
+Dispatch order in the asm is `RootStiffness, TipStiffness, HairCount,
+NodesPerHair, HairLength, Gravity, Additive, DiffuseColor, SpecularColor,
+SpecularExponent` (0x4235f6 → 0x42382e); order in the file does not matter.
+There are **no defaults worth relying on** — every uninitialised local is zeroed
+at 0x4234ff, so an omitted key means 0.
+
+The five shipped files (`furball`, `furball2`, `furballkr1`, `furballkr2`,
+`ruoksa`) all use `NodesPerHair 10`, `Additive 1`, `SpecularExponent 16`.
+
+**Material** (built at 0x42385e–0x423907, `new(0x6c)` + defaults `FUN_0040bef0`):
+
+```
+material.diffuse   = DiffuseColor            // +0x1c..0x24, 0..255
+material.specular  = SpecularColor           // +0x28..0x30, 0..255
+material.shininess = SpecularExponent        // +0x34
+material.lit       = 1                       // +0x68
+material.specularOn= 1                       // +0x69
+material.blend     = (Additive != 0) ? 1 : 0 // +0x58
+material.noCull    = 1                       // +0x6b
+```
+
+Everything else keeps `FUN_0040bef0`'s defaults, which matters: **ambient stays
+255,255,255** (the hair file has no ambient key), emission 0, transparency 0,
+texture count 0 (⇒ `glDisable(GL_TEXTURE_2D)`), depth mode 3 (test on, write on,
+`GL_LEQUAL`), fog enabled. Via §4.4 that lands on
+`glMaterialfv(GL_FRONT_AND_BACK, …)` with all components ÷255 and alpha 1.
+
+**Instantiation** (LWS loader, 0x41730c–0x417460): every null whose name
+*contains* `Hair_` (0x465abc) yields one `HairMesh` (`new(0x10c)` at 0x4173a1,
+ctor call at 0x417422) loaded from `"data/hairs/"` (0x465ab0, concat at
+0x4173dd) `+ name.substr(5)` (`FUN_00409cd0` at 0x41739c) `+ ".txt"` (0x465ac4,
+concat at 0x417403); `FUN_0040f600` parents it to the null (so the null's LWS
+animation channels drive the hair root), and it is appended to the scene's hair
+vector at `scene[+0x64/+0x68/+0x6c]`.
+
+Shipped: `hairball.lws` → `Hair_furball` ×2 and `Hair_furball2`;
+`krediili.lws` → `Hair_furballkr2`, `Hair_furballkr1`; `pehko.lws` →
+`Hair_ruoksa`. **The parenting is the whole hierarchy story** — there is no
+per-strand anchor. Every strand of a `HairMesh` grows from the *same* point,
+the object's world-space origin (see the sim below), which is what makes these
+"furballs".
+
+**Strand layout** (0x38 bytes):
+
+| off | field |
+|---|---|
+| +0x00 | vtable |
+| +0x04 | owner `HairMesh*` |
+| +0x08..0x10 | root direction, unit length |
+| +0x14..0x20 | `vector<Node>` (data +0x18, end +0x1c, cap +0x20) |
+| +0x24..0x2c | gravity (copy of the file's `Gravity`) |
+| +0x30 | first vertex index in the mesh's vertex array |
+| +0x34 | first element index in the mesh's index array |
+
+**Node layout** (0x14 = 20 bytes):
+
+| off | field |
+|---|---|
+| +0x00..0x08 | position |
+| +0x0c | segment length = `HairLength / NodesPerHair` |
+| +0x10 | stiffness |
+
+**Strand initialisation** (0x42393f–0x423ba1), per strand:
+
+```
+r1 = rand()*K − 0.5;  r2 = rand()*K − 0.5;  r3 = rand()*K − 0.5
+      // K = _DAT_0045a308 = 1/32767 (0x45a308); 0.5 = _DAT_0045a330 (0x45a330)
+inv  = 1 / sqrt(r3*r3 + r2*r2 + r1*r1)        // real FSQRT at 0x4239e7
+dir  = (r3*inv, r2*inv, r1*inv)               // stored at strand+0x08/0x0c/0x10
+
+nodes.resize(NodesPerHair)                    // zero-filled, FUN_00424260
+node[0].len   = L / N
+node[0].pos   = (0,0,0)
+node[0].stiff = RootStiffness
+for i = 1 .. N-1:
+    node[i].len   = L / N
+    node[i].pos   = node[i-1].pos + node[i].len * dir
+    node[i].stiff = RootStiffness + (TipStiffness − RootStiffness) * i / (N−1)
+```
+
+> The direction is uniform in a **cube** then normalised, so it is *not*
+> uniform on the sphere — there is a mild bias toward the cube's corners.
+> Reproduce it if you want bit-comparable output.
+
+**Buffer build** — `FUN_00423f00` @0x423f00, called once at the end of the ctor:
+
+- walks the strands assigning `strand[+0x30] = Σ nodes so far` and
+  `strand[+0x34] = Σ (2·nodes − 2) so far`;
+- resizes the vertex array (`vector<float>` at hair+0xe4..0xf0) to
+  `totalNodes * 8` floats — i.e. **32 bytes per vertex**, position at +0x00 and
+  normal at +0x10, the 4th float of each half unused;
+- resizes the index array (`vector<uint16>` at hair+0xf4..0x100) to
+  `Σ 2·(nodes−1)`;
+- fills the indices: for each strand, for `j = 0 .. nodes−2`, emit
+  `{base+j, base+j+1}` (0x423ff0–0x424036) — a GL_LINES polyline per strand;
+- sets hair+0x104 = 1.
+
+**Per-frame update** — `Scene::update` `FUN_004150b0` @0x4150b0, at
+0x4151ae–0x4151d4:
+
+```
+for each hair in scene[+0x68..0x6c]:
+    hair[+0x108] = *scene[+0x48]        // the scene's FIRST light (0x4151be)
+    HairMesh::update(hair, arg, dt)     // FUN_00424100 @0x424100
+```
+
+`FUN_00424100` re-derives the hair's world matrix if `hair+0xbc == 0`
+(`FUN_0040f9f0`) and calls `FUN_0042d220(strand, &hair[+0x5c], arg, dt)` for
+each strand. **`arg` is passed but never read** — the simulation only sees the
+world matrix and `dt`.
+
+**The simulation** — `FUN_0042d220` @0x42d220. Ghidra's C for this is coherent;
+every helper it calls was re-read in asm (`FUN_0042d7d0` add, `FUN_0042d800`
+scale, `FUN_0042d830` dot, `FUN_0042d850` normalize-with-table-sqrt,
+`FUN_00410350` normalize-with-FSQRT, `FUN_004102d0`/`FUN_00410320` subtract,
+`FUN_0040fd00` point×matrix). The matrix convention is §1's 4×3: rows 0–2 are
+the basis, row 3 the translation.
+
+```
+M     = hair world matrix (hair+0x5c, 12 floats)
+Rdir  = M3x3 · strand.dir                       // 0x42d276–0x42d33c
+P     = M · node[0].pos                         // = M's translation, 0x42d34c
+Lp    = light world matrix translation          // FUN_0042d780(hair+0x108) → light+0x5c[9..11]
+                                                // then FUN_0040fd00((0,0,0)) at 0x42d3a0
+
+V[base].pos    = P
+n̂              = normalize(Rdir)                // table sqrt, 0x42d3fd
+V[base].normal = normalize( (Lp − P) − n̂ · dot(n̂, Lp − P) )     // 0x42d40a–0x42d4e0
+
+T = Rdir
+for i = 1 .. N−1:
+    D  = (node[i].pos + dt * strand.gravity) − P      // 0x42d5a4–0x42d608
+    D += T * (dt * node[i].stiff)                     // 0x42d60c–0x42d636
+    D  = normalize(D) * node[i].len                   // 0x42d63f (FSQRT), 0x42d64c
+    D += P                                            // 0x42d65a
+    node[i].pos      = D                              // 0x42d665
+    S                = D − P                          // 0x42d686
+    V[base+i].pos    = D
+    Ŝ                = normalize(S)                   // 0x42d6e2, table sqrt
+    V[base+i].normal = normalize( (Lp − D) − Ŝ · dot(Ŝ, Lp − D) )   // 0x42d6f0–0x42d738
+    P = D
+    T = S
+```
+
+Notes that matter for a port:
+
+- **Node positions live in world space** and are integrated in place; only
+  `node[0]` stays at the local origin, so the root vertex is exactly the
+  object's world position and every strand of a mesh shares it.
+- `Gravity` is **not an acceleration** — there is no velocity state. It is a
+  world-units-per-second *displacement* applied before the length constraint,
+  so the visible effect is a bend proportional to `dt`.
+- The constraint is a hard "keep the segment at `node[i].len`" projection, one
+  Jacobi-style pass per frame, root→tip.
+- `T` for `i = 1` is `Rdir` (unit for an unscaled object) but for `i ≥ 2` it is
+  the **un-normalised** previous segment, whose length is `HairLength/N`. For
+  the shipped files that is 0.9, 1.0 or 1.05, so the inconsistency is small —
+  but it is real, and `dt·stiffness·|T|` is the actual bending term.
+- The normal is a *shading* normal, not a geometric one: the component of
+  (light − vertex) perpendicular to the strand tangent. This is what makes
+  fixed-function `GL_LINES` lighting look like hair. Recompute it per vertex per
+  frame; it depends on the light position.
+- The whole thing is `dt`-dependent explicit integration. Same `dt` ⇒ same
+  image; different `dt` ⇒ visibly different hair.
+
+**Draw** — `FUN_00424150` @0x424150, verified byte-for-byte:
+
+```
+hair[+0x108]->vf2(0)                       // 0x42415e — apply the scene's FIRST light as GL_LIGHT0
+FUN_0040c060(hair[+0xd0] /*material*/, 0)  // 0x424169 — pass 0
+glLineWidth(3.0f)                          // 0x424173, imm 0x40400000
+glVertexPointer(3, GL_FLOAT, 0x20, V)      // 0x424189
+glNormalPointer(   GL_FLOAT, 0x20, V+0x10) // 0x4241a0
+glEnableClientState(GL_VERTEX_ARRAY)       // 0x8074
+glEnableClientState(GL_NORMAL_ARRAY)       // 0x8075
+glDrawElements(GL_LINES, (end−begin)>>1, GL_UNSIGNED_SHORT, I)   // 0x4241dd
+glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_NORMAL_ARRAY)
+```
+
+Modelview at that moment is **view-only** (`FUN_0040fff0(camera, identity)` at
+0x41566c), so the world-space vertices are correct as-is. Resulting GL state for
+every shipped hair file (`Additive 1`): lighting on with **exactly one** light,
+`glBlendFunc(GL_ONE, GL_ONE)`, depth test on with depth **writes on** and
+`GL_LEQUAL`, `GL_TEXTURE_2D` off, culling **disabled**, fog per scene.
+
+> **Correction to §4.6.** `Part_Pehko` does *not* draw the hair instances
+> itself. `forced_0x407800` sets `DAT_004a900c = 1` at 0x407806 and clears it at
+> 0x407969/0x407977, and contains **no call to `FUN_00424150`** — the only
+> caller in the binary is `Scene::render` at 0x41567b. In Pehko the hair is
+> therefore invisible; the strands exist purely as an animated point cloud that
+> carries 80 particle emitters (§11.2). The rest of §4.6 stands.
+
+### 11.2 Particles — `data/particles/tauno/tauno.txt` and the 40 JPEGs
+
+Class `LW::ParticleSystem` (RTTI `.?AVParticleSystem@@` @0x464370, vtable
+0x45a5dc = `{ dtor 0x40cda0, render 0x40d5b0 }`, `operator new(0x180)`),
+constructed by `FUN_0040c620` @0x40c620. Copy ctor `FUN_0040cdc0` @0x40cdc0.
+The particle itself is a flat 0x40-byte struct, ctor `FUN_0040e590` @0x40e590.
+
+| key | string VA | reads | field |
+|---|---|---|---|
+| `ColorTexture` | 0x464460 | 1 token | `printf` pattern for the frames |
+| `AlphaTexture` | 0x464450 | 1 token | `printf` pattern for the alpha frames |
+| `FPS` | 0x46444c | 1 float | +0xe4 |
+| `MaxParticles` | 0x46443c | 1 **int** | +0xe8 (pool size) |
+| `EmitInterval` | 0x46442c | 1 float | +0xfc (seconds) |
+| `InitialSize` | 0x464420 | 2 floats | +0x120 value, +0x124 noise |
+| `InitialPosition` | 0x464410 | 6 floats | +0x128/12c/130 value, +0x134/138/13c noise |
+| `InitialVelocity` | 0x464400 | 6 floats | +0x140/144/148 value, +0x14c/150/154 noise |
+| `InitialZRotation` | 0x4643ec | 2 floats | +0x158 value, +0x15c noise |
+| `VelocityMultiplier` | 0x4643d8 | 1 float | +0x164 (**default 1.0**) |
+| `MinZRotVelocity` | 0x4643c8 | 1 float | +0x168 |
+| `MaxZRotVelocity` | 0x4643b8 | 1 float | +0x16c |
+| `Grow` | 0x4643b0 | 1 float | +0x170 |
+| `Friction` | 0x4643a4 | 1 float | +0x174 |
+| `LifeTime` | 0x464398 | 1 float | +0x178 (**default −1.0** = "until it shrinks away") |
+| `AlphaFadeSpeed` | 0x464388 | 1 float | +0x17c |
+
+Defaults are written at 0x40c6d1–0x40c73f: everything 0 except
+`VelocityMultiplier = 1.0` (0x3f800000) and `LifeTime = −1.0` (0xbf800000), plus
+`emitting (+0x104) = 1`.
+
+After parsing (0x40cb69–0x40cbe5): push `MaxParticles` **null** slots into the
+pool (`vector<Particle*>` at +0xec/+0xf0/+0xf4/+0xf8 — a fixed-size free-list,
+never resized afterwards), call `FUN_0040df00` to build the flipbook atlas, then
+build the material:
+
+```
+material = new(0x6c) + defaults        // FUN_0040bef0
+material.textureCount (+0x3c) = 1      // FUN_0040c020
+material.texture0     (+0x40) = atlasTexture (+0xd4)
+material.depthMode    (+0x64) = 2      // depth test ON, glDepthMask(FALSE), GL_LEQUAL
+material.blend        (+0x58) = AlphaTexture.empty() ? 1 : 3    // 1 = ONE/ONE additive
+```
+
+`tauno.txt` has no `AlphaTexture`, so **blend mode 1 = additive**. Unlit (the
+`lit` default is 0), culling **enabled** with `glFrontFace(GL_CW)` (the `noCull`
+default is 0), fog per scene.
+
+#### 11.2.1 The 40 JPEGs are a **flipbook**, packed into one atlas at load
+
+`FUN_0040df00` @0x40df00 (loop body `FUN_0040e317` @0x40e317, atlas build at
+0x40e32e):
+
+```
+i = 0
+loop:
+    sprintf(name, ColorTexturePattern, i)        // 0x40df72, FUN_00431679 = sprintf
+    img = new Image(name)                        // 0x40df9d + FUN_0043d020
+    if (img.w != img.h)            throw "Image … is not square."      (0x464484)
+    if (i > 0 && size != frame0)   throw "Image … has different size." (0x464494)
+    frames.push_back(img);  (same again for AlphaTexture if present)
+    i++
+```
+
+The loop terminates on the **first load failure** — the C++ exception is caught
+at `Catch@0040e301`, which jumps to the atlas builder if at least one frame was
+loaded. **The frame count is therefore not in the config file at all**: it is
+whatever contiguous run of files exists on disk. `epes000.jpg … epes039.jpg`
+⇒ **40 frames of 32×32**.
+
+Atlas build (0x40e34d–0x40e529):
+
+```
+system[+0xe0] = frames.size()                    // 40
+system[+0xdc] = frames[0].width                  // 32  (== height, enforced)
+S = 1;  while (S*S < w*h*count) S += S           // 0x40e3ba–0x40e3d1 → S = 256 for tauno
+atlas = new Image(S, S)                          // RGBA, zero-filled, FUN_0043cfd0
+x = y = 0
+for f in frames:
+    if (x > S − f.w) { x = 0; y += f.h }         // 0x40e460–0x40e470
+    blit(atlas, x, y, f, 0, 0, f.w, f.h)         // FUN_0043d770
+    x += f.w
+texture = new Texture(atlas, alphaAtlas, /*filterMode*/ 1)   // FUN_0040ec70, 0x40e518
+system[+0xd4] = texture
+```
+
+So: **one 256×256 RGBA atlas, 8×8 tiles of 32×32, the first 40 slots used**,
+uploaded with §5.4's filter mode 1 (LINEAR mag, LINEAR_MIPMAP_NEAREST min, CPU
+box mip chain, `GL_REPEAT`). A port that keeps 40 separate textures instead must
+still reproduce the half-texel inset in §11.2.4 or the mipmap bleed will differ.
+
+#### 11.2.2 Instantiation — one system per hair node
+
+Two paths exist:
+
+1. **Generic, LWS-driven** (0x417020–0x4171a0): a null named `Particle_<name>`
+   (0x465ae0) creates a `ParticleSystem` from `"data/particles/"` (0x465ad0)
+   `+ name + "/"` (0x465acc) `+ name + ".txt"` (0x465ac4) — concatenated at
+   0x41709e/0x4170c4/0x4170e5/0x417108, ctor call at 0x417125 —
+   parents it to the null, and appends it to
+   `scene[+0x54..0x5c]` — ticked by `Scene::update` (`FUN_0040d440` at 0x41519f)
+   and drawn by `Scene::render` step 9. **No shipped `.lws` contains a
+   `Particle_` null**, so this path is dead in the released data.
+2. **`Part_Pehko`, hardcoded** — the only particles in the demo.
+   `Part_Pehko::create` `FUN_00407490` builds a prototype at 0x4075b5 from the
+   literal path `"data/particles/tauno/tauno.txt"` (0x463ad4) into `part+0x0c`,
+   then at 0x4075da–0x4076a3:
+
+   ```
+   for hair in scene[+0x68..0x6c]:
+       for strand in hair[+0xd8..0xdc]:
+           for node in strand[+0x18..0x1c]:            // (end−begin)/0x14 nodes
+               part.systems.push_back(new ParticleSystem(prototype))   // FUN_0040cdc0
+   ```
+
+   `pehko.lws` has one `Hair_ruoksa` (`HairCount 8`, `NodesPerHair 10`) ⇒
+   **80 systems**, each with a pool of 10 ⇒ **≤ 800 sprites**.
+   The copy ctor shares the `Texture*`/`Material*` by pointer and sets
+   `+0xd0 = 1` ("not the owner", checked by the dtor at 0x40d2a1); it copies
+   every tunable but **default-constructs the `LW::Object` base**, so each clone
+   starts at the origin with an identity transform.
+
+Per frame, `Part_Pehko::vf2` `forced_0x407800`:
+
+```
+DAT_004a900c = 1                                // 0x407806 — suppress Scene::render's hair pass
+part[+0x20]->vf1(0.95f)                         // 0x40781b — the black overlay (§12)
+Scene::update(localTime, dt)                    // 0x40782b — this runs the HairMesh sim
+Scene::render(getCamera(0))                     // 0x40783e
+for hair, for strand i, for node j:
+    ps = part.systems[nodeCount*i + j]          // 0x4078eb–0x4078f7
+    ps.position (+0x4c..0x54) = node.pos        // 0x407901–0x40790f — the WORLD-space node
+    ps.matrixValid (+0xbc)    = 0               // 0x407919 — force a rebuild
+    ParticleSystem::update(ps, dt)              // 0x407920 → FUN_0040d440
+    ps->vf1(getCamera(0))                       // 0x40793c → forced_0x40d5b0
+DAT_004a900c = 0
+```
+
+#### 11.2.3 Simulation — CPU, per frame, nothing precomputed
+
+`ParticleSystem::update` `FUN_0040d440` @0x40d440:
+
+```
+if (emitTimer(+0x100) > 0 && dt > 0)
+    systemVelocity(+0x108..0x110) = (position(+0x4c..0x54) − prevPosition(+0x114..0x11c)) / dt
+emitTimer += dt
+if (emitting(+0x104) && emitTimer >= EmitInterval && emit())
+    emitTimer = 0                               // NOT reset if the pool was full
+alive = 0
+for slot in pool:
+    if (slot) { if (!Particle::update(slot, dt)) { delete slot; slot = 0; } else alive++ }
+if (!emitting && alive < 1) { prevPosition = position; return false }
+return true
+```
+
+> **Bug worth reproducing as a no-op:** `prevPosition` is written *only* in the
+> "system finished" branch (0x40d579–0x40d58f). While a system is emitting it
+> stays at its constructed value (0,0,0), so `systemVelocity` is
+> `currentWorldPos / dt` — a huge nonsense vector. It is harmless here purely
+> because `tauno.txt` sets `VelocityMultiplier 0.0`. A port should implement
+> `systemVelocity = 0` and note why.
+
+`ParticleSystem::emit` `FUN_0040db50` @0x40db50. All randomness is the CRT
+`rand()` (§11.3); write `U01 = rand()*K` and `S11 = rand()*K*2 − 1`, `K = 1/32767`:
+
+```
+slot = first NULL entry in the pool                    // 0x40db6b–0x40db8a
+if (none) return false                                  // → the emit timer is NOT reset; retried next frame
+
+size    = S11 * InitialSizeNoise + InitialSize                       // 0x40dba8–0x40dbc6
+zRotVel = U01 * (MaxZRotVelocity − MinZRotVelocity) + MinZRotVelocity // 0x40dbd3–0x40dbed
+p = new Particle(0x40)          // sizeX = sizeY = size; zRotVel; alpha = 1; rgb = 1,1,1
+p.age += U01 * 0.3f                                     // 0x40dc33, _DAT_0045a608 = 0.3f
+p.r    = (U01 * 0.007 + 0.027) * 0.5                    // doubles @0x45a600 / @0x45a5f8, ×0.5 @0x45a330
+p.g    = (U01 * 0.005 + 0.020) * 0.5                    // doubles @0x45a5f0 / @0x45a5e8
+p.b    = (U01 * 0.005 + 0.020) * 0.5
+p.pos  = InitialPosition + S11 * InitialPositionNoise   // 3 independent draws, 0x40dcf5–0x40dd4b
+p.pos += systemWorldMatrix · (0,0,0)                    // FUN_0040e830 — TRANSLATION ONLY
+p.vel  = InitialVelocity + S11 * InitialVelocityNoise   // 3 independent draws
+p.vel += VelocityMultiplier * systemVelocity
+p.zRot = S11 * InitialZRotationNoise + InitialZRotation
+```
+
+> Only the emitter's **world translation** enters the spawn: its rotation and
+> scale are ignored, so the spawn box and the initial velocity are always in
+> world axes. For Pehko that is exactly right, because the emitter transform is
+> nothing but `position = hairNode.worldPos`.
+
+> The random tint is genuinely that dark: `r ∈ [0.0135, 0.0170]`,
+> `g, b ∈ [0.0100, 0.0125]`. Under additive blending each sprite contributes
+> ≈1.5 % of its texel. Statically that is unambiguous (the doubles are right
+> there in `.rdata`), but it is the one number in this section worth
+> sanity-checking against a capture before trusting it.
+
+Particle layout (0x40 bytes, `FUN_0040e590` @0x40e590):
+
+| off | field | init |
+|---|---|---|
+| +0x00 | `ParticleSystem*` | owner |
+| +0x04 / +0x08 | sizeX / sizeY | both = `size` |
+| +0x0c | age (seconds) | `U01 * 0.3` |
+| +0x10 | zRotVelocity (rad/s) | from Min/MaxZRotVelocity |
+| +0x14..0x1c | position (world) | see above |
+| +0x20..0x28 | velocity (world) | see above |
+| +0x2c | zRotation (rad) | see above |
+| +0x30 | alpha | 1.0 |
+| +0x34..0x3c | r, g, b | 1.0 in the ctor, overwritten by `emit` |
+
+`Particle::update` `FUN_0040e6f0` @0x40e6f0, returns "still alive":
+
+```
+age  += dt
+zRot += dt * zRotVelocity
+pos  += dt * velocity                       // uses the PRE-friction velocity
+velocity -= (dt * Friction) * velocity      // i.e. v *= (1 − dt*Friction)
+g = 1 + dt * Grow;   sizeX *= g;   sizeY *= g
+if (sizeX <= 0.1f || sizeY <= 0.1f) { sizeX = sizeY = 0; return false }   // _DAT_0045a390 = 0.1 @0x45a390
+alpha -= dt * AlphaFadeSpeed
+if (alpha < 0)  { alpha = 0; return false }
+if (LifeTime > 0 && age > LifeTime) return false
+return true
+```
+
+**There is no gravity and no external force** — only `Friction` and `Grow`.
+Explicit Euler, so it is `dt`-dependent.
+
+For `tauno.txt` the numbers work out as: `Grow −1.0` shrinks size by
+`(1 − dt)` per step (≈ e^−t), reaching the 0.1 floor at t ≈ ln 16 ≈ 2.77 s;
+`AlphaFadeSpeed 0.5` reaches alpha 0 at 2.0 s; `LifeTime 1.6772206` is the
+binding limit. Minus the up-to-0.3 s random age head start, a sprite is visible
+for **1.38–1.68 s**, during which the flipbook (§11.2.4) only ever reaches frame
+`floor(1.677 × 10) = 16` — **frames 17–39 of the 40 shipped JPEGs are never
+displayed**. (`tauno.txt`'s commented-out `LifeTime 5.0` would have used them.)
+
+#### 11.2.4 Draw — camera-facing billboards, `GL_QUADS`
+
+`ParticleSystem::render` `forced_0x40d5b0` @0x40d5b0. The bulk analysis never
+created a function here (it is reached only through the vtable), so it is absent
+from `decompiled.c`/`disasm.asm`; it was forced with `DecompileAt.java` into
+`re/targeted4.c`. That decompilation is **unusable** — the x87 register
+scheduling defeats Ghidra completely — so everything below was read from the
+instruction bytes.
+
+```
+if (no live particle) return                                // 0x40d5cd–0x40d5db
+FUN_0040c060(material, 0)                                   // 0x40d5ea — ONCE, outside the loop
+FUN_0040fff0(camera, DAT_004a9920)                          // 0x40d5fd — identity model matrix
+                                                            //   (0x4a9920, built at 0x43f7c0)
+                                                            //   ⇒ modelview = view only, world space
+glBegin(GL_QUADS)                                           // 0x40d604
+
+C  = camera world matrix row 2 (camera+0x74..0x7c)          // 0x40d61b — camera local Z in world space
+W  = system[+0xdc]        // tile size, 32
+TW = texture[+0x28]       // atlas width, 256
+TH = texture[+0x2c]       // atlas height, 256
+cols = TW / W;  rows = TH / W                               // 0x40d654, 0x40d682
+duTile = W/TW;  dvTile = W/TH                               // 0x40d665, 0x40d68f
+duSpan = (W−1)/TW;  dvSpan = (W−1)/TH                       // 0x40d6b3, 0x40d6be
+u0Bias = 0.5/TW;  v0Bias = 0.5/TH                           // 0x40d6cc, 0x40d6dd
+
+for each live particle p:
+    R = (sin p.zRot, cos p.zRot, 0)
+    A = R × C                                               // 0x40d6f3–0x40d73f
+    B = A × C                                               // 0x40d741–0x40d78f
+    U = normalize(A) * (p.sizeX * 0.5)                      // 0x40d7b7–0x40d857
+    V = normalize(B) * (p.sizeY * 0.5)                      // 0x40d7f3–0x40d87a
+
+    f   = min( (int)(p.age * FPS), frameCount − 1 )         // 0x40d9b3–0x40d9cc, __ftol truncation, CLAMPED
+    col = f % cols                                          // 0x40d9d0
+    row = f / rows                                          // 0x40d9e3  — see note
+    u0 = col*duTile + u0Bias;   u1 = u0 + duSpan
+    v0 = row*dvTile + v0Bias;   v1 = v0 + dvSpan
+
+    if (material.blend == 1)                                // 0x40da0d
+        glColor4f(p.r*p.alpha, p.g*p.alpha, p.b*p.alpha, 1.0)
+    else
+        glColor4f(1, 1, 1, p.alpha)
+
+    glTexCoord2f(u0,v0); glVertex3f(p.pos − U − V)
+    glTexCoord2f(u1,v0); glVertex3f(p.pos + U − V)
+    glTexCoord2f(u1,v1); glVertex3f(p.pos + U + V)
+    glTexCoord2f(u0,v1); glVertex3f(p.pos − U + V)
+glEnd()                                                     // 0x40db30
+```
+
+- `A ⟂ C` and `B ⟂ A, C`, so `{U, V}` spans the plane perpendicular to the
+  camera's Z axis: a **screen-facing billboard with roll `zRotation`**, sized
+  `sizeX × sizeY` in world units.
+- The frame index is **clamped, not wrapped** — the flipbook plays once and
+  freezes on the last frame.
+- `row = f / rows` should read `f / cols`; it is only correct because the atlas
+  is square and the tiles are square, which forces `rows == cols`. Harmless, but
+  a port that packs the atlas differently must use `f / cols`.
+- The UV span is `(W−1)/texSize` from a `+0.5/texSize` origin: a **half-texel
+  inset on all four sides**, deliberate atlas-bleed avoidance.
+- *(inference)* `U × V ∝ −C`, so with `glFrontFace(GL_CW)` and culling enabled
+  (the material's `noCull` default is 0) the quads are front-facing toward the
+  viewer. A port that disables culling here will look the same.
+- The material is applied once per **system**, i.e. 80× per frame in Pehko with
+  identical state. A port can hoist it out entirely.
+
+### 11.3 Things neither system gets from the shipped data
+
+1. **The PRNG.** Both systems use the MSVC CRT `rand()` at 0x4306a2:
+   `seed = seed*0x343FD + 0x269EC3; return (seed >> 16) & 0x7FFF`, `RAND_MAX
+   = 32767`. `srand` is **never called** anywhere in `.text` (verified by
+   scanning every `E8` rel32 target), and `_initptd` @0x433610 sets the seed to
+   **1** (`mov dword [eax+0x14], 1` at 0x43361b). The whole demo is therefore
+   deterministic from seed 1 — but hair directions are drawn at *load* time and
+   particle spawns at *run* time, so bit-exact reproduction requires matching
+   the entire global call order, not just the per-system logic. For a port,
+   matching the *distributions* is the practical target.
+2. **The fast square-root table** at `DAT_00468f54` (0x468f54, 65536 × `uint32`
+   = 256 KiB). It is **all zeros in the image** and is filled at startup by
+   `FUN_0040a4a0` @0x40a4a0:
+   ```
+   for (i = 1; i < 0x8000; i++) {
+       table[0x8000 + i] = bits(sqrt(bitsAsFloat((i | 0x3f8000) << 8))) & 0x7fffff;
+       table[i]          = bits(sqrt(bitsAsFloat((i | 0x400000) << 8))) & 0x7fffff;
+   }
+   table[0] = 0x1f800000;
+   ```
+   and consumed by `FUN_0040a520` @0x40a520:
+   `bits = table[(x >> 8) & 0xFFFF] ^ (((x − 0x3f800000) >> 1) + 0x3f800000) & 0x7f800000`.
+   It is an **approximation** (~1e-3 relative). It is used by
+   `FUN_0042d850` — i.e. the hair tangent normalisation and the two hair normal
+   normalisations — while `FUN_00410350` (the segment-direction normalise) uses
+   a real `FSQRT`. Using exact `sqrt` everywhere in a port is safe; the
+   difference is far below a pixel.
+3. **The particle frame count** is discovered by probing the filesystem, not
+   declared in `tauno.txt`. A web port cannot probe; hardcode 40 (or ship a
+   manifest) and reproduce the "stop at the first missing index" rule if the
+   asset set is ever regenerated.
+4. **The identity model matrix** `DAT_004a9920` (0x4a9920) lives in BSS and is
+   filled by a static initialiser at 0x43f7c0 — do not read it out of the image.
+5. **Scalar constants** used above, all in `.rdata`:
+   `0x45a308 = 1/32767f`, `0x45a330 = 0.5f`, `0x45a310 = 1.0f`,
+   `0x45a30c = 0.0f`, `0x45a390 = 0.1f` (minimum particle size),
+   `0x45a608 = 0.3f` (particle age jitter), `0x45a5d4 = 1/255f`, and the four
+   **doubles** for the particle tint: `0x45a5e8 = 0.02`, `0x45a5f0 = 0.005`,
+   `0x45a5f8 = 0.027`, `0x45a600 = 0.007`.
+
+### 11.4 Could not be determined statically
+
+- Whether the particle tint really is ~1.5 % brightness on screen, or whether
+  the 2000-era driver's additive path with `GL_MODULATE` and a JPEG atlas made
+  it read brighter than the arithmetic suggests. The bytes are unambiguous; the
+  *appearance* needs a capture.
+- The `arg` passed to `HairMesh::update` (`FUN_00424100` param 1, forwarded to
+  `FUN_0042d220` param 2) is dead in both functions; what it was meant to be
+  cannot be recovered.
+- Whether the hair's `+0xbc` matrix-valid flag ever short-circuits in practice
+  (§3 says it never does anywhere else, so almost certainly not, but the hair
+  path was not re-verified independently).
 
 ---
 

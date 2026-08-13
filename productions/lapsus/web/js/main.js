@@ -20,6 +20,7 @@
 import { parseLWS, evalEnvelope } from '../../work/js/lws.mjs';
 import { parseLWO } from '../../work/js/lwo.mjs';
 import { decodeTGA } from '../../work/js/tga.mjs';
+import { parseHair, buildStrands, simulate, toLines } from '../../work/js/hair.mjs';
 
 const ROOT = new URL('../../', import.meta.url).href;
 const DATA = ROOT + 'work/unpacked/lapsus_dat/data/';
@@ -500,6 +501,22 @@ function drawFade(kind, mode, v, rgb = [0, 0, 0]) {
 }
 window.__lapsusFade = drawFade;
 
+// Hair (RENDER.md §11): GL_LINES, additive, culling off, depth writes ON.
+// Shading normals are recomputed per frame from the first light and are
+// shading-only; drawn here with the file's DiffuseColor under the additive
+// blend, which is what carries the look.
+const HAIR_VS = `#version 300 es
+in vec3 aPos; uniform mat4 uMV, uProj;
+void main(){ gl_Position = uProj * uMV * vec4(aPos,1.0); }`;
+const HAIR_FS = `#version 300 es
+precision highp float; out vec4 o; uniform vec3 uHairColor;
+void main(){ o = vec4(uHairColor, 1.0); }`;
+const hairProg = gl.createProgram();
+gl.attachShader(hairProg, sh(gl.VERTEX_SHADER, HAIR_VS));
+gl.attachShader(hairProg, sh(gl.FRAGMENT_SHADER, HAIR_FS));
+gl.bindAttribLocation(hairProg, 0, 'aPos');
+gl.linkProgram(hairProg);
+
 const bgProg = gl.createProgram();
 gl.attachShader(bgProg, sh(gl.VERTEX_SHADER, BG_VS));
 gl.attachShader(bgProg, sh(gl.FRAGMENT_SHADER, BG_FS));
@@ -804,6 +821,45 @@ const bgVao = gl.createVertexArray();
   }
   gl.disable(gl.BLEND); gl.depthMask(true);
 
+  // ---- hair. `AddNullObject Hair_<name>` binds that null to
+  // data/hairs/<name>.txt; every strand shares ONE root, the null's world
+  // origin, so the animated nulls drive the hair purely by parenting.
+  let hairLines = 0;
+  for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
+    const name = nullObj.name.replace(/^Hair_/, '');
+    let txt;
+    try { txt = await (await fetch(DATA + 'hairs/' + name + '.txt')).text(); } catch { continue; }
+    if (!txt || /^\s*$/.test(txt) || /not found/i.test(txt)) continue;
+    const h = parseHair(txt);
+    if (!h.hairCount || !h.nodesPerHair) continue;
+    const w = worldMatrix(nullObj, T);
+    const root = [w[12], w[13], w[14]];
+    const strands = simulate(buildStrands(h), root, h.gravity, T);
+    const verts = toLines(strands, root);
+    hairLines += verts.length / 6;
+
+    gl.useProgram(hairProg);
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const vb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.uniformMatrix4fv(gl.getUniformLocation(hairProg, 'uMV'), false, view);
+    gl.uniformMatrix4fv(gl.getUniformLocation(hairProg, 'uProj'), false, proj);
+    gl.uniform3f(gl.getUniformLocation(hairProg, 'uHairColor'),
+      h.diffuseColor[0] / 255, h.diffuseColor[1] / 255, h.diffuseColor[2] / 255);
+    gl.disable(gl.CULL_FACE);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    gl.depthMask(true);
+    // NB the engine sets glLineWidth(3); WebGL2 implementations generally
+    // clamp line width to 1, so the hair renders thinner than the original.
+    gl.lineWidth(3);
+    gl.drawArrays(gl.LINES, 0, verts.length / 3);
+    gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
+    gl.useProgram(prog);
+  }
+
   // Scheduled fade for this part, from ?fadein=/?fadeout= (kind:dur:mode[:rgb]).
   // The sequencer computes the ramp as (t - start)/dur for a fade-in and
   // (t - (start + dur - fadeOutDur))/fadeOutDur for a fade-out (ENGINE.md §4);
@@ -820,7 +876,7 @@ const bgVao = gl.createVertexArray();
   window.__lapsusInfo = {
     scene: SCENE, t: T, camera: camIndex, objects: drawables.length,
     triangles: drawables.reduce((a, d) => a + d.mesh.count / 3, 0),
-    texturedGroups: textured,
+    texturedGroups: textured, hairLines,
     zoom: zoomAt, fovXdeg: fovX * 180 / Math.PI, near: NEAR,
     glError: gl.getError(),
   };

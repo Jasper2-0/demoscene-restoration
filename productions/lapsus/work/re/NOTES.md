@@ -400,6 +400,29 @@ entirely by its custom vf2); `silli` is a frame-feedback part.
 | 0.000 | empt, krediili, pehko, hairball | hair system / no scene |
 | −0.114 | silli | frame feedback |
 
+### Hair: parsed and bound, integration NOT right
+
+`work/js/hair.mjs` implements RENDER.md §11. Verified: all five
+`data/hairs/*.txt` parse with **zero unknown tokens**; the
+`AddNullObject Hair_<name>` binding resolves; strand construction uses MSVC
+`rand()` from the CRT's initial seed of 1 (the engine never calls `srand`, so
+the shape is deterministic); and the draw path renders 10,000 line segments
+for krediili additively with culling off.
+
+**But the integration collapses.** Stepping
+`pos_i = P + normalize((pos_i + dt·g − P) + T·(dt·stiff_i))·segLen_i` at
+1/60 s from rest to t=8 s drives every strand to the same equilibrium —
+straight down — so 500 strands render as ONE vertical line where the capture
+shows a spread plume. Gravity (−4.81 as a displacement rate) dominates over
+~480 steps.
+
+Candidates: the step rate is wrong (the original free-ran, and this
+integrator is explicitly dt-dependent, so the equilibrium depends on the
+frame rate it ran at); the initial tangent `T` per strand should be the
+strand direction rather than zero; or the strand should not be simulated from
+rest at all at part entry. Settle it against `FUN_0042d220` rather than by
+tuning dt until it looks bushy.
+
 ### The two remaining structural gaps
 
 **1. Frame feedback needs a real frame loop.** Silli (depth-only clear, 20 %
