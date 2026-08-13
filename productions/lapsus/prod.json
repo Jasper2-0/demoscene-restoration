@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "slug": "lapsus",
+  "title": "Lapsus",
+  "group": "Mature Furk",
+  "kind": "restoration",
+  "platform": "Windows",
+  "releaseDate": "2000-08-05",
+  "party": {
+    "name": null,
+    "compo": null,
+    "ranking": null
+  },
+  "ids": {
+    "demozoo": 24439,
+    "pouet": 130
+  },
+  "links": {
+    "demozoo": "https://demozoo.org/productions/24439/",
+    "pouet": "https://www.pouet.net/prod.php?which=130",
+    "youtube": "https://www.youtube.com/watch?v=oP3lrBNVKBs"
+  },
+  "credits": [
+    {
+      "name": "Radix",
+      "role": "Music"
+    },
+    {
+      "name": "Petri",
+      "role": "Code"
+    },
+    {
+      "name": "Mikko",
+      "role": "Code"
+    },
+    {
+      "name": "Timo",
+      "role": "Graphics"
+    },
+    {
+      "name": "Juha",
+      "role": "Graphics"
+    },
+    {
+      "name": "Eetu",
+      "role": "Graphics"
+    },
+    {
+      "name": "Janne",
+      "role": "Graphics"
+    }
+  ],
+  "originals": [
+    {
+      "path": "originals/maturefurk/lapsus_by_maturefurk.zip",
+      "urls": [
+        "https://files.scene.org/get/parties/2000/assembly00/demo/lapsus_by_maturefurk.zip"
+      ],
+      "sha256": "9184ccba497ddb388981c270773c560de8b27397336597bedbb2e58029353ee4",
+      "bytes": 9743012
+    },
+    {
+      "path": "originals/mature-furk/lapsus_b.zip",
+      "urls": [
+        "https://files.scene.org/get/parties/2000/assembly00/demo/lapsus_b.zip"
+      ],
+      "sha256": "baa56d2299c336546c036dbb158a727549aec205725281ce154f497a464289c2",
+      "bytes": 2260,
+      "note": "second scene.org variant — diff against the main zip during RE"
+    }
+  ],
+  "captures": [],
+  "status": {
+    "web": "none",
+    "pagesRepo": null
+  }
+}

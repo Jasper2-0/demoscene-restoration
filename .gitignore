@@ -39,6 +39,10 @@ productions/lost-vegas/work/audio/*.wav
 # The licensed RinneRadio track ships inside the original archive; until the
 # energia site is published it stays out of the public repo.
 productions/energia/web/assets/energia.mp3
+# Lapsus assets are a straight unzip of the pinned original (unpack.mjs +
+# MANIFEST.sha256 are committed); nothing ships publicly yet, so the
+# copyrighted payload stays out until there is a publication decision.
+productions/lapsus/work/unpacked/
 # Reference captures are recorded, not distributed (see docs/…TODO §0).
 # Rehydrate with `node tools/fetch/capture.mjs <slug>`.
 productions/*/work/reference/
