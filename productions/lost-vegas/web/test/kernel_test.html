@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lost vegas — kernel smoke test</title>
+<style>
+  body { background: #111; color: #ccc; font: 13px/1.5 ui-monospace, monospace; margin: 16px; }
+  canvas { border: 1px solid #333; image-rendering: pixelated; }
+  .pass { color: #6f6; } .fail { color: #f66; } .info { color: #89f; }
+  #log { margin-top: 12px; white-space: pre; }
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="480"></canvas>
+<div id="log">running…</div>
+
+<script type="module">
+import {
+  MiniD3D7, D3DMatrix, D3DCOLOR_ARGB,
+  FVF_XYZ_DIFFUSE_TEX2, FVF_XYZRHW_DIFFUSE_TEX2,
+  D3DPT_TRIANGLELIST, D3DPT_TRIANGLEFAN,
+  D3DTS_WORLD, D3DTS_VIEW, D3DTS_PROJECTION,
+  D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_CULLMODE, D3DRS_ALPHABLENDENABLE,
+  D3DRS_SRCBLEND, D3DRS_DESTBLEND,
+  D3DZB_TRUE, D3DCULL_NONE, D3DCULL_CCW, D3DCULL_CW,
+  D3DBLEND_SRCALPHA, D3DBLEND_INVSRCALPHA,
+  D3DTSS_COLOROP, D3DTSS_COLORARG1, D3DTSS_COLORARG2,
+  D3DTSS_ALPHAOP, D3DTSS_ALPHAARG1, D3DTSS_ALPHAARG2,
+  D3DTOP_DISABLE, D3DTOP_SELECTARG1, D3DTOP_SELECTARG2, D3DTOP_MODULATE,
+  D3DTA_TEXTURE, D3DTA_DIFFUSE,
+  D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER,
+} from '../js/minid3d7.js';
+
+import {
+  Kernel, createGeoSphere, createMesh, createParticles, createCamera,
+  geoIndex, glyphIndex, DEFAULT_GLYPH_RECTS, DEG2RAD, ASPECT_4_3, CAM_ZNEAR,
+} from '../js/kernel.js';
+
+// Independent cross-check for the text layout (the font agent's module).
+let layoutText = null, parseGlyphRects = null;
+try {
+  const dr = await import('../../work/js/dr.mjs');
+  layoutText = dr.layoutText; parseGlyphRects = dr.parseGlyphRects;
+} catch (e) { /* served from web/ alone — the cross-check is skipped */ }
+
+const results = [];
+const near = (a, b, tol = 4) => Math.abs(a - b) <= tol;
+function check(name, ok, detail) {
+  results.push({ name, pass: !!ok, detail: detail === undefined ? '' : String(detail) });
+}
+function info(name, detail) { results.push({ name, pass: true, info: true, detail: String(detail) }); }
+function checkRGB(name, px, r, g, b, tol = 4) {
+  check(name, near(px[0], r, tol) && near(px[1], g, tol) && near(px[2], b, tol),
+        `got ${px[0]},${px[1]},${px[2]} want ${r},${g},${b}`);
+}
+
+const canvas = document.getElementById('c');
+const d3d = new MiniD3D7(canvas, { preserveDrawingBuffer: true });
+d3d.applyDefaultState();
+d3d.SetViewport(0, 0, 640, 480);
+const gl = d3d.gl;
+const K = new Kernel(d3d);
+check('Kernel constructs on the real shim', !!K.d3d);
+
+const BLACK = D3DCOLOR_ARGB(255, 0, 0, 0);
+const WHITE = D3DCOLOR_ARGB(255, 255, 255, 255);
+const RED = D3DCOLOR_ARGB(255, 255, 0, 0);
+const BG = D3DCOLOR_ARGB(255, 0, 0, 32);
+// the intro's design palette (hard-coded literals in the scene code)
+const DESIGN_YELLOW = 0xFFD7B45A;
+const SKY_BLUE = 0xFF7DAFC8;
+
+const clearAll = (c = BG) => d3d.Clear(D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, c, 1.0);
+function untextured() {
+  d3d.SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
+  d3d.SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+  d3d.SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+  d3d.SetTexture(0, null); d3d.SetTexture(1, null);
+}
+function modulateTex() {
+  d3d.SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+  d3d.SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+  d3d.SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+  d3d.SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+}
+/** bounding box of every pixel that differs from the clear colour */
+function inkBox(bgR, bgG, bgB, tol = 12) {
+  const px = new Uint8Array(640 * 480 * 4);
+  gl.readPixels(0, 0, 640, 480, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, n = 0;
+  for (let gy = 0; gy < 480; gy++) for (let gx = 0; gx < 640; gx++) {
+    const o = (gy * 640 + gx) * 4;
+    if (Math.abs(px[o] - bgR) <= tol && Math.abs(px[o + 1] - bgG) <= tol
+        && Math.abs(px[o + 2] - bgB) <= tol) continue;
+    const dy = 479 - gy;                      // to D3D coords (y from the top)
+    if (gx < x0) x0 = gx; if (gx > x1) x1 = gx;
+    if (dy < y0) y0 = dy; if (dy > y1) y1 = dy;
+    n++;
+  }
+  return { x0, y0, x1, y1, n, w: x1 - x0 + 1, h: y1 - y0 + 1,
+           cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+}
+
+// =========================================================================
+// PHASE 1 — the geodesic sphere (FUN_004031b0): topology, radius, uv.
+// =========================================================================
+const SUBDIV = 14, RADIUS = 100.0;
+const t0 = performance.now();
+const sphere = createGeoSphere(SUBDIV, RADIUS, 1.0, 0);
+const genMs = performance.now() - t0;
+
+check('geosphere vertex count = subdiv^2*20/2 + 2',
+      sphere.nVerts === SUBDIV * SUBDIV * 20 / 2 + 2, `${sphere.nVerts} (want 1962)`);
+check('geosphere face count = subdiv^2*20',
+      sphere.nFaces === SUBDIV * SUBDIV * 20, `${sphere.nFaces} (want 3920)`);
+info('geosphere generation time', genMs.toFixed(1) + ' ms');
+
+{
+  let minR = 1e30, maxR = -1e30;
+  for (let i = 0; i < sphere.nVerts; i++) {
+    const b = i * 8;
+    const r = Math.hypot(sphere.verts[b], sphere.verts[b + 1], sphere.verts[b + 2]);
+    if (r < minR) minR = r; if (r > maxR) maxR = r;
+  }
+  check('every vertex sits on the sphere of the requested radius',
+        Math.abs(minR - RADIUS) < 1e-3 && Math.abs(maxR - RADIUS) < 1e-3,
+        `r in [${minR.toFixed(6)}, ${maxR.toFixed(6)}], want ${RADIUS}`);
+  info('unit-radius check (radius normalised)',
+       `min ${(minR / RADIUS).toFixed(9)}  max ${(maxR / RADIUS).toFixed(9)}`);
+
+  const used = new Set(); const edges = new Set();
+  let bad = 0, degen = 0, outward = 0;
+  for (let f = 0; f < sphere.nFaces; f++) {
+    const t = [sphere.indices[f * 3], sphere.indices[f * 3 + 1], sphere.indices[f * 3 + 2]];
+    for (const v of t) { used.add(v); if (v >= sphere.nVerts) bad++; }
+    if (t[0] === t[1] || t[1] === t[2] || t[0] === t[2]) degen++;
+    for (let k = 0; k < 3; k++) {
+      const a = t[k], b = t[(k + 1) % 3];
+      edges.add(a < b ? a * 100000 + b : b * 100000 + a);
+    }
+    const V = sphere.verts, a = t[0] * 8, b = t[1] * 8, c = t[2] * 8;
+    const e1x = V[b] - V[a], e1y = V[b + 1] - V[a + 1], e1z = V[b + 2] - V[a + 2];
+    const e2x = V[c] - V[a], e2y = V[c + 1] - V[a + 1], e2z = V[c + 2] - V[a + 2];
+    const nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+    const cx = (V[a] + V[b] + V[c]) / 3, cy = (V[a + 1] + V[b + 1] + V[c + 1]) / 3,
+          cz = (V[a + 2] + V[b + 2] + V[c + 2]) / 3;
+    if (nx * cx + ny * cy + nz * cz > 0) outward++;
+  }
+  check('all indices in range', bad === 0, `${bad} out of range`);
+  check('no degenerate triangles', degen === 0, `${degen}`);
+  check('every vertex is referenced by a face',
+        used.size === sphere.nVerts, `${used.size}/${sphere.nVerts}`);
+  const euler = sphere.nVerts - edges.size + sphere.nFaces;
+  check('closed manifold: V - E + F = 2', euler === 2,
+        `V=${sphere.nVerts} E=${edges.size} F=${sphere.nFaces} → ${euler}`);
+  check('winding is consistent (all faces outward, i.e. CW on screen = D3D front)',
+        outward === sphere.nFaces, `${outward}/${sphere.nFaces}`);
+
+  let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9, whites = 0;
+  for (let i = 0; i < sphere.nVerts; i++) {
+    const b = i * 8;
+    u0 = Math.min(u0, sphere.verts[b + 4]); u1 = Math.max(u1, sphere.verts[b + 4]);
+    v0 = Math.min(v0, sphere.verts[b + 5]); v1 = Math.max(v1, sphere.verts[b + 5]);
+    if (sphere.vertsU32[b + 3] === 0xffffffff) whites++;
+  }
+  check('every vertex diffuse is 0xffffffff', whites === sphere.nVerts, `${whites}`);
+  info('geosphere uv range (u = x/r, v = atan2(z,y)/pi)',
+       `u [${u0.toFixed(4)}, ${u1.toFixed(4)}]  v [${v0.toFixed(4)}, ${v1.toFixed(4)}]`);
+  // the poles are the first and last of the 12 icosahedron corners
+  check('vertex 0 is the +Z pole', sphere.verts[2] === RADIUS && sphere.verts[0] === 0);
+  check('vertex 11 is the -Z pole', sphere.verts[11 * 8 + 2] === -RADIUS);
+  check('geoIndex(n,0,0,0) is the +Z pole', geoIndex(SUBDIV, 0, 0, 0) === 0);
+  check('geoIndex(n,19,0,0) is the -Z pole', geoIndex(SUBDIV, 19, 0, 0) === 11);
+}
+
+// low-subdivision sanity (the closed form must hold everywhere)
+for (const n of [1, 2, 3, 7]) {
+  const s = createGeoSphere(n, 1.0, 1.0, 0);
+  let ok = s.nVerts === n * n * 10 + 2 && s.nFaces === n * n * 20;
+  for (let i = 0; i < s.nVerts && ok; i++) {
+    const b = i * 8;
+    ok = Math.abs(Math.hypot(s.verts[b], s.verts[b + 1], s.verts[b + 2]) - 1) < 1e-5;
+  }
+  check(`geosphere subdiv=${n}: counts + unit radius`, ok, `${s.nVerts}v / ${s.nFaces}f`);
+}
+{
+  const s = createGeoSphere(4, 1.0, 1.0, 1);   // the uv-seam splitting variant
+  check('splitSeams duplicates seam vertices and keeps the face count',
+        s.nFaces === 4 * 4 * 20 && s.nVerts > 4 * 4 * 10 + 2,
+        `${s.nVerts}v (unsplit 162) / ${s.nFaces}f`);
+}
+
+// =========================================================================
+// PHASE 2 — the sphere on screen, through the real shim.
+// =========================================================================
+const envPx = new Uint32Array(64 * 64);
+for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+  const c = (((x >> 3) ^ (y >> 3)) & 1);
+  envPx[y * 64 + x] = c ? D3DCOLOR_ARGB(255, 255, 210, 90)
+                        : D3DCOLOR_ARGB(255, 40, 70, 130);
+}
+const envTex = K.createTexture(envPx, 64, 64, 0);
+check('Kernel.createTexture (FUN_00403bd6) returns a shim handle', !!envTex.tex);
+
+const cam = createCamera(0, 0, -300, 0, 0, 0);
+cam.fov = 90;
+check('createCamera defaults: fov 135, zfar 1000',
+      createCamera(0, 0, 0, 0, 0, 0).fov === 135 && createCamera(0, 0, 0, 0, 0, 0).zfar === 1000);
+
+d3d.BeginScene();
+clearAll();
+K.setCamera(cam);                       // FUN_00402760: PROJ + VIEW (+ roll)
+{
+  const proj = d3d.GetTransform(D3DTS_PROJECTION).m;
+  const cot = Math.cos(90 * DEG2RAD * 0.5) / Math.sin(90 * DEG2RAD * 0.5);
+  check('setCamera projection is the original\'s FUN_00401eb0 form',
+        near(proj[0], cot, 1e-4) && near(proj[5], cot * ASPECT_4_3, 1e-4)
+        && proj[11] === 1 && near(proj[10], 1000 / (1000 - CAM_ZNEAR), 1e-5),
+        `_11=${proj[0].toFixed(4)} _22=${proj[5].toFixed(4)} _33=${proj[10].toFixed(5)} _34=${proj[11]}`);
+}
+d3d.SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+d3d.SetRenderState(D3DRS_ZWRITEENABLE, 1);
+d3d.SetRenderState(D3DRS_ALPHABLENDENABLE, 0);
+d3d.SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);   // solid object: cull back faces
+modulateTex();
+d3d.SetTexture(0, envTex);
+sphere.px = 0; sphere.py = 0; sphere.pz = 0;
+sphere.flags = 1; sphere.rx = 0.3; sphere.ry = 0.9; sphere.rz = 0.0;
+K.meshEnvMapUV(sphere, cam, 1.0, 1);               // FUN_004022a0 mode 1
+K.drawMesh(sphere);                                // FUN_00402180
+d3d.EndScene();
+
+check('sphere draw: gl.getError() == 0', gl.getError() === 0, '0x' + gl.getError().toString(16));
+{
+  const centre = d3d.readPixel(320, 240);
+  check('sphere covers the screen centre (D3DCULL_CCW keeps the front faces)',
+        centre[0] + centre[1] + centre[2] > 60, `rgb ${centre.slice(0, 3)}`);
+  const box = inkBox(0, 0, 32);
+  // radius 100 at distance 300, cot(45)=1 → silhouette half-width
+  // 320 * 100/sqrt(300^2-100^2) = 113.1 px, and the same in y thanks to the 4:3 term
+  check('sphere silhouette is round and the right size',
+        near(box.w, 227, 6) && near(box.h, 227, 6), `${box.w}x${box.h} px, want ~227x227`);
+  check('sphere is centred', near(box.cx, 320, 3) && near(box.cy, 240, 3),
+        `(${box.cx}, ${box.cy})`);
+  info('sphere covered pixels', box.n);
+  // the world matrix really was written by drawMesh
+  const w = d3d.GetTransform(D3DTS_WORLD).m;
+  check('drawMesh wrote the WORLD transform', w[15] === 1 && (w[0] !== 1 || w[5] !== 1));
+}
+// back-face culling actually bites: flip the cull sense and the sphere's
+// silhouette must survive but its shading must change (we see the inside)
+{
+  d3d.BeginScene(); clearAll();
+  d3d.SetRenderState(D3DRS_CULLMODE, D3DCULL_CW);
+  K.drawMesh(sphere);
+  d3d.EndScene();
+  const box = inkBox(0, 0, 32);
+  check('D3DCULL_CW shows the back hemisphere (same silhouette, different depth)',
+        near(box.w, 227, 8) && near(box.h, 227, 8), `${box.w}x${box.h}`);
+}
+
+// =========================================================================
+// PHASE 3 — billboard particles (FUN_00402990 / FUN_00402a60).
+// =========================================================================
+const parts = createParticles(8);
+check('createParticles index list per quad is [v,v+1,v+2, v+2,v+3,v]',
+      parts.indices[0] === 0 && parts.indices[1] === 1 && parts.indices[2] === 2
+      && parts.indices[3] === 2 && parts.indices[4] === 3 && parts.indices[5] === 0
+      && parts.indices[6] === 4);
+check('createParticles allocates 4 verts * 32 bytes per quad',
+      parts.verts.length === 8 * 32 && parts.vertBytes.length === 8 * 128);
+
+// One particle at the world origin, camera dead-on: the quad must be an
+// axis-aligned SQUARE centred on the screen centre.
+parts.count = 1;
+parts.pos[0] = 0; parts.pos[1] = 0; parts.pos[2] = 0;
+parts.size[0] = 60; parts.color[0] = WHITE;
+d3d.BeginScene(); clearAll(BLACK);
+K.setCamera(cam);
+d3d.SetRenderState(D3DRS_ZENABLE, 0);
+d3d.SetRenderState(D3DRS_ALPHABLENDENABLE, 0);
+d3d.SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+untextured();
+K.drawParticles(parts, cam);
+d3d.EndScene();
+{
+  const box = inkBox(0, 0, 0);
+  // half-size 30 at view depth 300 → NDC 0.1 in x and 0.1333 in y → 64x64 px
+  check('billboard is a 64x64 px square', near(box.w, 64, 2) && near(box.h, 64, 2),
+        `${box.w}x${box.h}`);
+  check('billboard is centred at (320,240)', near(box.cx, 320, 1.5) && near(box.cy, 240, 1.5),
+        `(${box.cx}, ${box.cy})`);
+  check('drawParticles restored the VIEW transform',
+        d3d.GetTransform(D3DTS_VIEW).m.every((v, i) => Math.abs(v - cam.m[i]) < 1e-6));
+  check('particles: gl.getError() == 0', gl.getError() === 0);
+}
+// Off-axis camera AND an off-axis particle: still square (that IS the
+// camera-facing property) but no longer at the screen centre.
+{
+  const cam2 = createCamera(220, 160, -300, 0, 0, 0);
+  cam2.fov = 90;
+  parts.pos[0] = 130; parts.pos[1] = -90; parts.pos[2] = 40;
+  d3d.BeginScene(); clearAll(BLACK);
+  K.setCamera(cam2);
+  d3d.SetRenderState(D3DRS_ZENABLE, 0);
+  d3d.SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+  untextured();
+  K.drawParticles(parts, cam2);
+  d3d.EndScene();
+  const box = inkBox(0, 0, 0);
+  check('billboard stays axis-aligned + square from an off-axis camera',
+        box.n > 100 && Math.abs(box.w - box.h) <= 2, `${box.w}x${box.h} at (${box.cx},${box.cy})`);
+  check('off-axis billboard is NOT at the screen centre (camera really moved)',
+        Math.hypot(box.cx - 320, box.cy - 240) > 20,
+        `(${box.cx.toFixed(0)}, ${box.cy.toFixed(0)})`);
+}
+// Three particles side by side at equal depth → three equal squares.
+{
+  parts.count = 3;
+  for (let i = 0; i < 3; i++) {
+    parts.pos[i * 3] = (i - 1) * 120; parts.pos[i * 3 + 1] = 0; parts.pos[i * 3 + 2] = 0;
+    parts.size[i] = 40; parts.color[i] = WHITE;
+  }
+  d3d.BeginScene(); clearAll(BLACK);
+  K.setCamera(cam);
+  d3d.SetRenderState(D3DRS_ZENABLE, 0);
+  d3d.SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+  untextured();
+  K.drawParticles(parts, cam);
+  d3d.EndScene();
+  // scan row y=240 for three runs of white
+  const runs = [];
+  let inRun = false, s = 0;
+  for (let x = 0; x < 640; x++) {
+    const lit = d3d.readPixel(x, 240)[0] > 128;
+    if (lit && !inRun) { inRun = true; s = x; }
+    else if (!lit && inRun) { inRun = false; runs.push([s, x - 1]); }
+  }
+  check('three billboards render as three separate quads', runs.length === 3,
+        JSON.stringify(runs));
+  if (runs.length === 3) {
+    const widths = runs.map(([a, b]) => b - a + 1);
+    check('all three are the same width (equal depth)',
+          Math.max(...widths) - Math.min(...widths) <= 1, widths.join(','));
+    check('centre billboard is centred', near((runs[1][0] + runs[1][1]) / 2, 320, 1.5));
+  }
+}
+
+// =========================================================================
+// PHASE 4 — screen-space quads (FUN_004049f5 / FUN_00404a3f).
+// =========================================================================
+d3d.BeginScene(); clearAll(BG);
+d3d.SetRenderState(D3DRS_ZENABLE, 0);
+d3d.SetRenderState(D3DRS_ALPHABLENDENABLE, 0);
+d3d.SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);   // the fan order must survive this
+untextured();
+K.drawRect2D(100, 50, 200, 100, RED);
+d3d.EndScene();
+checkRGB('drawRect2D centre (150,75) is red', d3d.readPixel(150, 75), 255, 0, 0);
+checkRGB('drawRect2D inside top-left (101,51)', d3d.readPixel(101, 51), 255, 0, 0);
+checkRGB('drawRect2D inside bottom-right (198,98)', d3d.readPixel(198, 98), 255, 0, 0);
+checkRGB('drawRect2D outside left (96,75) is background', d3d.readPixel(96, 75), 0, 0, 32);
+checkRGB('drawRect2D outside right (204,75) is background', d3d.readPixel(204, 75), 0, 0, 32);
+checkRGB('drawRect2D above (150,45) is background', d3d.readPixel(150, 45), 0, 0, 32);
+checkRGB('drawRect2D below (150,105) is background', d3d.readPixel(150, 105), 0, 0, 32);
+{
+  const box = inkBox(0, 0, 32);
+  check('drawRect2D bbox is exactly the named pixels',
+        box.x0 === 100 && box.y0 === 50 && box.x1 === 199 && box.y1 === 99,
+        `x ${box.x0}..${box.x1}, y ${box.y0}..${box.y1}`);
+}
+// the design-bar palette, drawn the way the scene code does it (verbatim verts)
+d3d.BeginScene(); clearAll(BG);
+d3d.SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+untextured();
+K.drawQuad2D(
+  [534, 303, 0.01, 100, DESIGN_YELLOW, 0, 0, 0, 0],
+  [620, 303, 0.01, 100, DESIGN_YELLOW, 1, 0, 1, 0],
+  [620, 331, 0.01, 100, DESIGN_YELLOW, 1, 1, 1, 1],
+  [534, 331, 0.01, 100, DESIGN_YELLOW, 0, 1, 0, 1]);
+K.drawTri2D(
+  [20, 400, 0.01, 100, SKY_BLUE, 0, 0, 0, 0],
+  [120, 400, 0.01, 100, SKY_BLUE, 1, 0, 1, 0],
+  [120, 460, 0.01, 100, SKY_BLUE, 1, 1, 1, 1]);
+d3d.EndScene();
+checkRGB('design-yellow bar 0xFFD7B45A lands at (570,315)', d3d.readPixel(570, 315), 0xD7, 0xB4, 0x5A);
+checkRGB('sky-blue triangle 0xFF7DAFC8 lands at (110,450)', d3d.readPixel(110, 450), 0x7D, 0xAF, 0xC8);
+checkRGB('outside the triangle (30,450) is background', d3d.readPixel(30, 450), 0, 0, 32);
+check('2D overlays: gl.getError() == 0', gl.getError() === 0);
+
+// =========================================================================
+// PHASE 5 — the text engine (FUN_00404c30 / dd0 / e70 / f10).
+// =========================================================================
+// font: 256x256 atlas + rect table produced by the DR agent; falls back to a
+// synthetic block font if the baked assets are not reachable.
+let fontTex = null, fontMetrics = null;
+try {
+  const res = await fetch('../../work/baked/dr/font_metrics.json');
+  if (res.ok) fontMetrics = await res.json();
+  const img = new Image();
+  await new Promise((ok, no) => {
+    img.onload = ok; img.onerror = no; img.src = '../../work/baked/dr/font.png';
+  });
+  fontTex = d3d.createTextureFromImage(img, 0);
+} catch (e) { /* fall through */ }
+if (!fontTex) {
+  // stand-in atlas: opaque white everywhere, so glyph quads still show up
+  const px = new Uint32Array(256 * 256).fill(D3DCOLOR_ARGB(255, 255, 255, 255));
+  fontTex = d3d.createTexture(px, 256, 256, 0);
+}
+check('font atlas available', !!fontTex.tex,
+      fontMetrics ? 'baked font.png + font_metrics.json' : 'synthetic stand-in');
+K.setFont(fontTex, fontMetrics || undefined);
+check('setFont keeps 38 real glyph rects + the out-of-range tail',
+      K.glyphRects.length >= 43 && K.glyphRects[0][2] === 26,
+      `${K.glyphRects.length} entries, rect[0]=${K.glyphRects[0]}`);
+
+check('glyphIndex maps a-z, 0-9, # and +',
+      glyphIndex('a') === 0 && glyphIndex('z') === 25 && glyphIndex('0') === 26
+      && glyphIndex('9') === 35 && glyphIndex('#') === 36 && glyphIndex('+') === 37);
+check("glyphIndex('*') over-reads to 42 (the intro's zero-width spacer)",
+      glyphIndex('*') === 42);
+{
+  // glyphMetrics returns a shared scratch unless you pass `out` — use `out`
+  // here so several glyphs can be compared at once.
+  const g = K.glyphMetrics('*', 256, {});
+  check("'*' is a zero-size glyph", g.w === 0 && g.h === 0, `${g.w}x${g.h}`);
+  const sp = K.glyphMetrics(' ', 256, {});
+  check('space advance at scale 256 is 16 px', near(sp.w, 16, 1e-4) && sp.h === 0, `${sp.w}`);
+  const a = K.glyphMetrics('a', 256, {});
+  check('glyph "a" is 26x20 atlas px → 26.1x20.1 screen px at scale 256',
+        near(a.w, 26 * 256 / 255, 1e-3) && near(a.h, 20 * 256 / 255, 1e-3),
+        `${a.w.toFixed(3)}x${a.h.toFixed(3)}`);
+  check('glyph "a" kern is -4 units = -4 px at scale 256', near(a.kern, -4, 1e-4), a.kern);
+  check('glyph "k" kern is +2 units', near(K.glyphMetrics('k', 256, {}).kern, 2, 1e-4));
+  check('glyph "b" has no kern', K.glyphMetrics('b', 256, {}).kern === 0);
+  check('glyph "a" u0/v0 use the 1/255 scale',
+        near(a.u0, 0, 1e-9) && near(a.u1, 26 / 255, 1e-9) && near(a.v1, 20 / 255, 1e-9),
+        `u0=${a.u0} u1=${a.u1} v0=${a.v0} v1=${a.v1}`);
+}
+// cross-check the layout against dr.mjs (the font agent's independent port)
+if (layoutText) {
+  // dr.mjs wants {x0,y0,x1,y1} objects; the kernel keeps the raw 4-tuples.
+  const drRects = DEFAULT_GLYPH_RECTS.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1 }));
+  let worst = 0, worstName = '', bad = 0;
+  for (const [str, scale] of [['lost vegas', 256], ['threestate', 256],
+                              ['hard facts # we are better', 140],
+                              ['threestate**in***lost***vegas**', 192],
+                              ['parnassiaveld ###', 64], ['distance', 256]]) {
+    const ref = layoutText(str, { rects: drRects, scale, x: 0, y: 0 });
+    const mine = K.measureText(str, scale);
+    const d = Math.abs(mine - ref.width);
+    if (!Number.isFinite(d)) bad++;
+    else if (d > worst) { worst = d; worstName = `${str}@${scale}`; }
+  }
+  check('measureText matches dr.mjs layoutText width for every intro string',
+        bad === 0 && worst < 1e-9,
+        `max delta ${worst.toExponential(2)} (${worstName}), non-finite ${bad}`);
+  // per-glyph position/uv agreement
+  const ref = layoutText('lost vegas',
+    { rects: drRects, scale: 256, x: 320, y: 190, centre: true });
+  let pen = 320 - K.measureText('lost vegas', 256) * 0.5;
+  const gap = 256 * (1 / 256) * 4;
+  let maxDX = 0, maxDY = 0, missing = 0, k = 0;
+  for (const ch of 'lost vegas') {
+    const g = K.glyphMetrics(ch, 256, {});
+    if (ch !== ' ') {
+      const r = ref.glyphs[k++];
+      if (!r) { missing++; }
+      else {
+        maxDX = Math.max(maxDX, Math.abs(r.x - pen), Math.abs(r.w - g.w),
+                         Math.abs(r.u0 - g.u0), Math.abs(r.u1 - g.u1));
+        maxDY = Math.max(maxDY, Math.abs(r.y - (190 + g.kern)), Math.abs(r.h - g.h),
+                         Math.abs(r.v0 - g.v0), Math.abs(r.v1 - g.v1));
+      }
+    }
+    pen += g.w + gap;
+  }
+  check('centred glyph positions/sizes/uv match dr.mjs exactly',
+        k === 9 && missing === 0 && maxDX < 1e-9 && maxDY < 1e-9,
+        `${k} glyphs, dx ${maxDX.toExponential(2)} dy ${maxDY.toExponential(2)}`);
+} else {
+  info('dr.mjs cross-check', 'skipped (module not reachable from this document root)');
+}
+// centring / right alignment semantics
+{
+  const s = 'lost vegas', sc = 256;
+  const w = K.measureText(s, sc);
+  info('measureText("lost vegas", 256)', w.toFixed(3) + ' px');
+  const gap = sc / 64;
+  // 10 chars: 9 glyph widths (one is a space) + 10 gaps
+  let hand = 0;
+  for (const ch of s) hand += K.glyphMetrics(ch, sc).w + gap;
+  check('measureText = sum(glyph width + gap), trailing gap included',
+        near(w, hand, 1e-6), `${w} vs ${hand}`);
+}
+
+// (a) GEOMETRY: draw the glyph quads untextured so their extents are exact.
+d3d.BeginScene(); clearAll(BLACK);
+d3d.SetRenderState(D3DRS_ZENABLE, 0);
+untextured();
+const nq = K.drawText('lost vegas', 320, 190, 256, DESIGN_YELLOW);   // FUN_00404dd0
+d3d.EndScene();
+check('drawText emits one quad per character', nq === 'lost vegas'.length, nq);
+let solidInk = 0;
+{
+  const box = inkBox(0, 0, 0);
+  solidInk = box.n;
+  const w = K.measureText('lost vegas', 256);
+  const gap = 256 / 64;
+  const gLast = K.glyphMetrics('s', 256, {});
+  check('centred text: first quad starts exactly at x - width*0.5',
+        Math.abs(box.x0 - (320 - w / 2)) < 1.5,
+        `ink x0 = ${box.x0}, want ${(320 - w / 2).toFixed(2)}`);
+  check('centred text: last quad ends exactly at x + width*0.5 - gap',
+        Math.abs(box.x1 + 1 - (320 + w / 2 - gap)) < 1.5,
+        `ink x1+1 = ${box.x1 + 1}, want ${(320 + w / 2 - gap).toFixed(2)}`);
+  check('centred text ink is centred on x = 320',
+        Math.abs(box.cx - 320) < 4, `ink centre x = ${box.cx.toFixed(1)}`);
+  // y span: from min(kern) to max(kern + h) around the baseline y = 190
+  let top = 1e9, bot = -1e9;
+  for (const ch of 'lost vegas') {
+    if (ch === ' ') continue;
+    const g = K.glyphMetrics(ch, 256, {});
+    top = Math.min(top, 190 + g.kern); bot = Math.max(bot, 190 + g.kern + g.h);
+  }
+  check('centred text quad y span matches kern + glyph height',
+        Math.abs(box.y0 - top) < 1.5 && Math.abs(box.y1 + 1 - bot) < 1.5,
+        `ink y ${box.y0}..${box.y1 + 1}, want ${top.toFixed(2)}..${bot.toFixed(2)}`);
+  check('text renders visible pixels', box.n > 500, `${box.n} px lit`);
+  check('text: gl.getError() == 0', gl.getError() === 0);
+}
+// (b) TEXTURED: the same run through the real atlas must be SPARSE (glyph
+//     shapes), not the solid quads of (a). This is what proves the uv lookup.
+d3d.BeginScene(); clearAll(BLACK);
+d3d.SetRenderState(D3DRS_ZENABLE, 0);
+modulateTex();                    // the FUN_004041df baseline the text engine assumes
+K.drawText('lost vegas', 320, 190, 256, DESIGN_YELLOW);
+d3d.EndScene();
+{
+  const box = inkBox(0, 0, 0);
+  const ratio = box.n / solidInk;
+  check('textured text is sparse inside its quads (real glyph shapes)',
+        ratio > 0.15 && ratio < 0.75, `${box.n}/${solidInk} = ${ratio.toFixed(3)} coverage`);
+  checkRGB('textured glyph ink keeps the vertex diffuse colour',
+           mostCommonInk(), 0xD7, 0xB4, 0x5A, 6);
+}
+function mostCommonInk() {
+  const px = new Uint8Array(640 * 480 * 4);
+  gl.readPixels(0, 0, 640, 480, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  const counts = new Map();
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i] + px[i + 1] + px[i + 2] < 60) continue;
+    const k = (px[i] << 16) | (px[i + 1] << 8) | px[i + 2];
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  let best = 0, bn = -1;
+  for (const [k, n] of counts) if (n > bn) { bn = n; best = k; }
+  return [best >> 16 & 255, best >> 8 & 255, best & 255];
+}
+d3d.BeginScene(); clearAll(BLACK);
+untextured();
+K.drawTextRight('amsterdam', 540, 300, 64, WHITE);                   // FUN_00404e70
+d3d.EndScene();
+{
+  const box = inkBox(0, 0, 0);
+  const w = K.measureText('amsterdam', 64);
+  const gap = 64 / 64;
+  check('right-aligned text: last quad ends at x - gap',
+        Math.abs(box.x1 + 1 - (540 - gap)) < 1.5,
+        `ink x1+1 = ${box.x1 + 1}, want ${(540 - gap).toFixed(2)}`);
+  check('right-aligned text starts at x - width',
+        Math.abs(box.x0 - (540 - w)) < 1.5, `ink x0 = ${box.x0}, want ${(540 - w).toFixed(2)}`);
+}
+d3d.BeginScene(); clearAll(BLACK);
+untextured();
+const nq2 = K.drawTextAt('threestate**in***lost***vegas**', 20, 200, 192, WHITE);
+d3d.EndScene();
+check('the "*" spacer strings lay out without error',
+      nq2 === 'threestate**in***lost***vegas**'.length, nq2);
+{
+  const box = inkBox(0, 0, 0);
+  // '*' contributes 0 width but still advances the pen by one gap, which is
+  // exactly how "threestate**in***lost***vegas**" gets its wide word spacing.
+  const S = 'threestate**in***lost***vegas**', sc = 192, gap = sc / 64;
+  let pen = 20, right = 20;
+  for (const ch of S) {
+    const g = K.glyphMetrics(ch, sc, {});
+    if (g.w > 0 && g.h > 0) right = Math.max(right, pen + g.w);
+    pen += g.w + gap;
+  }
+  check('drawTextAt is left-aligned at x, "*" adding only the gap',
+        Math.abs(box.x0 - 20) < 1.5 && Math.abs(box.x1 + 1 - right) < 1.5,
+        `ink x ${box.x0}..${box.x1 + 1}, want ${20}..${right.toFixed(2)}`);
+  check('star-spaced title renders and stays on screen', box.n > 500 && box.x0 >= 20,
+        `${box.n} px, x ${box.x0}..${box.x1}`);
+}
+
+// =========================================================================
+// PHASE 6 — the showcase frame (screenshot target).
+// =========================================================================
+d3d.BeginScene();
+clearAll(D3DCOLOR_ARGB(255, 8, 10, 20));
+K.setCamera(cam);
+d3d.SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+d3d.SetRenderState(D3DRS_ZWRITEENABLE, 1);
+d3d.SetRenderState(D3DRS_ALPHABLENDENABLE, 0);
+d3d.SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);
+modulateTex();
+d3d.SetTexture(0, envTex);
+sphere.px = -60; sphere.py = 0; sphere.pz = 40;
+sphere.scale = 0.85; sphere.flags = 1; sphere.rx = 0.4; sphere.ry = 1.2;
+K.meshEnvMapUV(sphere, cam, 1.0, 1);
+K.drawMesh(sphere);
+
+parts.count = 8;
+for (let i = 0; i < 8; i++) {
+  const a = i / 8 * Math.PI * 2;
+  parts.pos[i * 3] = 140 + Math.cos(a) * 70;
+  parts.pos[i * 3 + 1] = Math.sin(a) * 70;
+  parts.pos[i * 3 + 2] = Math.sin(a * 2) * 40;
+  parts.size[i] = 34;
+  parts.color[i] = D3DCOLOR_ARGB(255, 255, 200 - i * 12, 80 + i * 18);
+}
+d3d.SetRenderState(D3DRS_ALPHABLENDENABLE, 1);
+d3d.SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+d3d.SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+d3d.SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+untextured();
+K.drawParticles(parts, cam);
+
+d3d.SetRenderState(D3DRS_ZENABLE, 0);
+untextured();
+K.drawRect2D(20, 424, 620, 432, DESIGN_YELLOW);
+K.drawRect2D(20, 440, 300, 448, SKY_BLUE);
+// the text engine assumes the FUN_004041df stage-0 baseline: MODULATE(TEXTURE,
+// DIFFUSE). It never sets it itself — restore it after any untextured pass.
+modulateTex();
+K.drawText('lost vegas', 320, 30, 256, DESIGN_YELLOW);
+K.drawTextRight('threestate # ambience 2000', 620, 452, 96, WHITE);
+d3d.EndScene();
+check('showcase frame: gl.getError() == 0', gl.getError() === 0);
+{
+  const px = new Uint8Array(640 * 480 * 4);
+  gl.readPixels(0, 0, 640, 480, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  const seen = new Set(); let lit = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    seen.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
+    if (px[i] + px[i + 1] + px[i + 2] > 60) lit++;
+  }
+  check('showcase frame has many distinct colours', seen.size > 200, `${seen.size}`);
+  check('showcase frame has substantial coverage', lit > 15000, `${lit} px`);
+  info('showcase colours / lit pixels', `${seen.size} / ${lit}`);
+}
+
+finish();
+
+function finish() {
+  const hard = results.filter((r) => !r.info);
+  const failed = hard.filter((r) => !r.pass);
+  window.__results = results;
+  window.__pass = failed.length === 0;
+  window.__done = true;
+  document.getElementById('log').innerHTML = results.map((r) =>
+    r.info ? `<span class="info">INFO</span>  ${r.name}   [${r.detail}]`
+           : `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span>  ${r.name}` +
+             (r.detail ? `   [${r.detail}]` : '')).join('\n') +
+    `\n\n${hard.length - failed.length}/${hard.length} passed`;
+}
+</script>
+</body>
+</html>

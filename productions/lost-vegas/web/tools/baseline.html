@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lost vegas — font baseline editor</title>
+<style>
+  :root { --bg:#101418; --panel:#171d23; --line:#2a343d; --ink:#d7b45a; --sky:#7dafc8; --txt:#c8d2da; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:13px/1.45 ui-monospace,Menlo,monospace; }
+  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
+  h1 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+  .hint { color:#7d8b97; }
+  main { display:grid; grid-template-columns:300px 1fr; gap:0; height:calc(100vh - 46px); }
+  #left { border-right:1px solid var(--line); overflow:auto; padding:10px; }
+  #right { overflow:auto; padding:14px 16px; }
+  button { background:#222c35; color:var(--txt); border:1px solid var(--line); padding:5px 10px;
+           font:inherit; cursor:pointer; border-radius:3px; }
+  button:hover { background:#2c3843; }
+  button.pri { background:var(--ink); color:#12181d; border-color:var(--ink); font-weight:600; }
+  table { border-collapse:collapse; width:100%; }
+  th { text-align:left; font-weight:500; color:#7d8b97; padding:3px 6px; position:sticky; top:0; background:var(--panel); }
+  td { padding:2px 6px; border-top:1px solid #1e262e; }
+  tr.sel { background:#243039; outline:1px solid var(--ink); }
+  tr:hover { background:#1d252c; cursor:pointer; }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .chg { color:var(--ink); font-weight:600; }
+  canvas { image-rendering:pixelated; background:var(--sky); display:block; border:1px solid var(--line); }
+  .row { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; margin-bottom:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:10px; }
+  .card h2 { font-size:12px; margin:0 0 8px; color:#7d8b97; font-weight:500; text-transform:uppercase; letter-spacing:.06em; }
+  label { display:inline-flex; gap:6px; align-items:center; color:#7d8b97; }
+  textarea { width:100%; height:150px; background:#0c1013; color:var(--txt); border:1px solid var(--line);
+             font:12px ui-monospace,monospace; padding:8px; border-radius:3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>font baseline editor</h1>
+  <span class="hint">click a glyph &middot; <b>↑/↓</b> nudge &middot; <b>shift</b> ×5 &middot; <b>0</b> reset glyph</span>
+  <label><input type="checkbox" id="guides" checked> baseline guides</label>
+  <label><input type="checkbox" id="ab"> show original</label>
+  <span id="status" class="hint"></span>
+</header>
+<main>
+  <div id="left">
+    <div class="row" style="gap:6px">
+      <button id="auto" class="pri">auto-align</button>
+      <button id="reset">reset all</button>
+    </div>
+    <table><thead><tr><th>ch</th><th class="num">ink↓</th><th class="num">orig</th><th class="num">kern</th></tr></thead>
+    <tbody id="rows"></tbody></table>
+  </div>
+  <div id="right">
+    <div class="card" style="margin-bottom:14px">
+      <h2>preview — the intro's own strings</h2>
+      <canvas id="prev" width="960" height="430"></canvas>
+    </div>
+    <div class="row">
+      <div class="card">
+        <h2>selected glyph</h2>
+        <canvas id="zoom" width="260" height="220"></canvas>
+      </div>
+      <div class="card" style="flex:1; min-width:340px">
+        <h2>kern table — paste into font_metrics.json as <code>"kern"</code></h2>
+        <textarea id="out" readonly></textarea>
+        <div style="margin-top:8px"><button id="copy">copy JSON</button></div>
+      </div>
+    </div>
+  </div>
+</main>
+<script type="module">
+const ORDER = 'abcdefghijklmnopqrstuvwxyz0123456789#+'.split('');
+// the original's vertical kern table (units) — everything else 0
+const ORIG = { a:-4, g:-4, e:-1, c:-2, h:-2, i:-2, k:2, p:2, x:2, z:2 };
+const LINES = ['lost vegas','threestate','effect vs design','mass media',
+               'we lost our explosive','hard facts # we are better','cheap imitations',
+               'why limit ourselves','sagacity sarix stevie distance','abcdefghijklm','nopqrstuvwxyz','0123456789#+'];
+
+const [img, metrics] = await Promise.all([
+  new Promise((r,j)=>{const i=new Image();i.onload=()=>r(i);i.onerror=j;i.src='../assets/font.png';}),
+  fetch('../assets/font_metrics.json').then(r=>r.json()),
+]);
+const G = metrics.glyphs, C = metrics.constants;
+
+// read the atlas alpha so we can measure where each glyph's ink actually sits
+const ac = document.createElement('canvas'); ac.width=img.width; ac.height=img.height;
+const actx = ac.getContext('2d', {willReadFrequently:true}); actx.drawImage(img,0,0);
+const A = actx.getImageData(0,0,img.width,img.height).data;
+const lit = (x,y) => A[(y*img.width+x)*4+3] > 96;
+
+// per-glyph ink bounds within its rect
+const ink = {};
+for (const ch of ORDER) {
+  const g = G[ch]; if (!g) continue;
+  let top=null, bot=null;
+  for (let y=g.y0; y<=g.y1; y++) for (let x=g.x0; x<=g.x1; x++)
+    if (lit(x,y)) { if (top===null) top=y; bot=y; break; }
+  // measured RELATIVE to the glyph's own cell: the sheet has several rows, so
+  // absolute atlas y is meaningless across glyphs. rel = rows of ink from the
+  // top of the cell, which is exactly how the engine stacks the quads.
+  ink[ch] = { top, bot, rel: bot===null ? null : bot - g.y0, hasInk: top!==null };
+}
+// baseline = the most common relative ink bottom (descenders stay outliers)
+const counts = {};
+for (const ch of ORDER) if (ink[ch]?.hasInk) counts[ink[ch].rel] = (counts[ink[ch].rel]||0)+1;
+const BASE = +Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+
+const kern = Object.fromEntries(ORDER.map(c => [c, ORIG[c] ?? 0]));
+let sel = 'a';
+
+// SIGN: the engine does `y0 = kern + y` with screen y growing DOWNWARD, so a
+// POSITIVE kern moves the glyph DOWN. Preview and suggestions follow that.
+// 1 unit == 1 atlas px at the engine's unitScale.
+const suggest = (ch) => ink[ch]?.hasInk ? (BASE - ink[ch].rel) : 0;
+
+function drawTable(){
+  const tb = document.getElementById('rows'); tb.innerHTML='';
+  for (const ch of ORDER) {
+    const tr = document.createElement('tr');
+    if (ch===sel) tr.className='sel';
+    const changed = kern[ch] !== (ORIG[ch] ?? 0);
+    tr.innerHTML = `<td>${ch}</td><td class="num">${ink[ch]?.rel ?? '–'}</td>`
+      + `<td class="num" style="color:#63707c">${ORIG[ch] ?? 0}</td>`
+      + `<td class="num${changed?' chg':''}">${kern[ch]}</td>`;
+    tr.onclick = () => { sel = ch; draw(); };
+    tb.appendChild(tr);
+  }
+}
+
+function drawPreview(){
+  const cv = document.getElementById('prev'), g = cv.getContext('2d');
+  const useOrig = document.getElementById('ab').checked;
+  const showGuides = document.getElementById('guides').checked;
+  g.fillStyle='#7dafc8'; g.fillRect(0,0,cv.width,cv.height);
+  const S = 1.35, gap = C.charGapUnits;
+  let y = 26;
+  for (const line of LINES) {
+    let x = 10;
+    if (showGuides) {
+      g.strokeStyle='rgba(0,0,0,.28)'; g.beginPath();
+      g.moveTo(0, Math.round(y + (BASE+1)*S) + .5); g.lineTo(cv.width, Math.round(y + (BASE+1)*S) + .5); g.stroke();
+    }
+    for (const ch of line) {
+      if (ch===' ') { x += (C.spaceWidthUnits + gap)*S; continue; }
+      const gl = G[ch]; if (!gl) { x += gap*S; continue; }
+      const k = useOrig ? (ORIG[ch] ?? 0) : kern[ch];
+      // engine places each glyph quad at the line y, offset by its kern
+      g.drawImage(img, gl.x0, gl.y0, gl.w, gl.h,
+                  Math.round(x), Math.round(y + k*S),
+                  Math.round(gl.w*S), Math.round(gl.h*S));
+      x += (gl.w + gap)*S;
+    }
+    y += 34;
+  }
+  document.getElementById('status').textContent =
+    `atlas ${img.width}×${img.height} · baseline y=${BASE} · ${ORDER.filter(c=>kern[c]!==(ORIG[c]??0)).length} glyphs adjusted`;
+}
+
+function drawZoom(){
+  const cv = document.getElementById('zoom'), g = cv.getContext('2d');
+  g.fillStyle='#0c1013'; g.fillRect(0,0,cv.width,cv.height);
+  const gl = G[sel]; if(!gl) return;
+  const Z = Math.min(220/gl.w, 150/gl.h, 8);
+  const ox = 20, oy = 30;
+  g.imageSmoothingEnabled = false;
+  g.drawImage(img, gl.x0, gl.y0, gl.w, gl.h, ox, oy, gl.w*Z, gl.h*Z);
+  // baseline (target) and this glyph's ink bottom
+  const yAt = (relRow) => oy + relRow*Z;            // relative row -> screen
+  g.strokeStyle='#d7b45a'; g.setLineDash([4,3]); g.beginPath();
+  g.moveTo(0, yAt(BASE+1)); g.lineTo(cv.width, yAt(BASE+1)); g.stroke();
+  g.setLineDash([]);
+  if (ink[sel]?.hasInk) {                            // where this glyph's ink ends, after kern
+    g.strokeStyle='#5ad7a0'; g.beginPath();
+    g.moveTo(0, yAt(ink[sel].rel + 1 + kern[sel])); g.lineTo(cv.width, yAt(ink[sel].rel + 1 + kern[sel])); g.stroke();
+  }
+  g.fillStyle='#7d8b97'; g.font='11px ui-monospace,monospace';
+  g.fillText(`'${sel}'  kern ${kern[sel]}  (orig ${ORIG[sel]??0}, suggest ${suggest(sel)})`, 8, 16);
+  g.fillStyle='#5ad7a0'; g.fillText('ink bottom', 8, cv.height-20);
+  g.fillStyle='#d7b45a'; g.fillText('target baseline', 8, cv.height-6);
+}
+
+function drawOut(){
+  const entries = ORDER.filter(c=>kern[c]!==0).map(c=>`  "${c}": ${kern[c]}`);
+  document.getElementById('out').value = '"kern": {\n' + entries.join(',\n') + '\n}';
+}
+function draw(){ drawTable(); drawPreview(); drawZoom(); drawOut(); }
+
+document.getElementById('auto').onclick = () => {
+  for (const ch of ORDER) kern[ch] = suggest(ch);
+  draw();
+};
+document.getElementById('reset').onclick = () => {
+  for (const ch of ORDER) kern[ch] = ORIG[ch] ?? 0;
+  draw();
+};
+document.getElementById('copy').onclick = async () => {
+  await navigator.clipboard.writeText(document.getElementById('out').value);
+  const b = document.getElementById('copy'); b.textContent='copied'; setTimeout(()=>b.textContent='copy JSON',900);
+};
+for (const id of ['guides','ab']) document.getElementById(id).onchange = draw;
+addEventListener('keydown', (e) => {
+  const step = e.shiftKey ? 5 : 1;
+  if (e.key==='ArrowUp')   { kern[sel] -= step; draw(); e.preventDefault(); }  // up = smaller kern
+  if (e.key==='ArrowDown') { kern[sel] += step; draw(); e.preventDefault(); }
+  if (e.key==='0')         { kern[sel] = ORIG[sel] ?? 0; draw(); }
+  if (e.key==='ArrowRight'){ sel = ORDER[(ORDER.indexOf(sel)+1)%ORDER.length]; draw(); e.preventDefault(); }
+  if (e.key==='ArrowLeft') { sel = ORDER[(ORDER.indexOf(sel)+ORDER.length-1)%ORDER.length]; draw(); e.preventDefault(); }
+});
+draw();
+</script>
+</body>
+</html>

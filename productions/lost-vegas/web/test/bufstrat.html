@@ -1,0 +1,65 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>buffer strategy</title></head><body>
+<canvas id="c" width="640" height="480"></canvas><pre id="o"></pre>
+<script>
+// Isolates ONLY the vertex/index upload strategy: same shader, same tiny
+// geometry, same draw count. flush on both sides of the clock, best of 3.
+const gl = document.getElementById('c').getContext('webgl2', {antialias:false});
+const N = 2000, VB = 96, IB = 6;           // 3 verts * 32B, 3 indices * 2B
+const vs=`#version 300 es
+layout(location=0) in vec4 aPos; uniform mat4 uM; void main(){ gl_Position=uM*vec4(aPos.xyz,1.0);}`;
+const fs=`#version 300 es
+precision highp float; out vec4 o; void main(){o=vec4(1.0);}`;
+const mk=(t,s)=>{const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);return sh;};
+const P=gl.createProgram(); gl.attachShader(P,mk(gl.VERTEX_SHADER,vs)); gl.attachShader(P,mk(gl.FRAGMENT_SHADER,fs));
+gl.linkProgram(P); gl.useProgram(P);
+const uM=gl.getUniformLocation(P,'uM');
+const vao=gl.createVertexArray(); gl.bindVertexArray(vao);
+const vbo=gl.createBuffer(), ibo=gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,vbo); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibo);
+gl.enableVertexAttribArray(0);
+const verts=new Uint8Array(VB), f=new Float32Array(verts.buffer);
+f[0]=0; f[1]=0.004; f[8]=0.004; f[9]=-0.004; f[16]=-0.004; f[17]=-0.004;
+const idx=new Uint16Array([0,1,2]);
+const M=new Float32Array(16); M[0]=M[5]=M[10]=M[15]=1;
+const CAP_V=1<<20, CAP_I=1<<18;
+function timed(fn){ gl.finish(); const t0=performance.now(); fn(); gl.finish(); return performance.now()-t0; }
+const out=[];
+function bench(label, setup, fn){ setup&&setup(); fn(); fn(); let best=Infinity;
+  for(let k=0;k<3;k++){ setup&&setup(); best=Math.min(best,timed(fn)); }
+  out.push(label.padEnd(46)+(best/N*1000).toFixed(2).padStart(8)+' us/call'); 
+  document.getElementById('o').textContent = out.join('\n'); }
+
+bench('A bufferSubData @0, exact-size buffer',
+  ()=>{ gl.bufferData(gl.ARRAY_BUFFER,VB,gl.STREAM_DRAW); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,IB,gl.STREAM_DRAW); },
+  ()=>{ for(let i=0;i<N;i++){ gl.bufferSubData(gl.ARRAY_BUFFER,0,verts); gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER,0,idx);
+    gl.vertexAttribPointer(0,3,gl.FLOAT,false,32,0); gl.uniformMatrix4fv(uM,false,M);
+    gl.drawElements(gl.TRIANGLES,3,gl.UNSIGNED_SHORT,0); } });
+
+bench('B bufferData(data) every draw (orphan)', null,
+  ()=>{ for(let i=0;i<N;i++){ gl.bufferData(gl.ARRAY_BUFFER,verts,gl.STREAM_DRAW); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,idx,gl.STREAM_DRAW);
+    gl.vertexAttribPointer(0,3,gl.FLOAT,false,32,0); gl.uniformMatrix4fv(uM,false,M);
+    gl.drawElements(gl.TRIANGLES,3,gl.UNSIGNED_SHORT,0); } });
+
+let vh=0, ih=0;
+bench('C bufferSubData rising offset, 1MB arena',
+  ()=>{ gl.bufferData(gl.ARRAY_BUFFER,CAP_V,gl.DYNAMIC_DRAW); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,CAP_I,gl.DYNAMIC_DRAW); vh=0; ih=0; },
+  ()=>{ for(let i=0;i<N;i++){
+    if(vh+VB>CAP_V){gl.bufferData(gl.ARRAY_BUFFER,CAP_V,gl.DYNAMIC_DRAW);vh=0;}
+    if(ih+IB>CAP_I){gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,CAP_I,gl.DYNAMIC_DRAW);ih=0;}
+    gl.bufferSubData(gl.ARRAY_BUFFER,vh,verts); gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER,ih,idx);
+    gl.vertexAttribPointer(0,3,gl.FLOAT,false,32,vh); gl.uniformMatrix4fv(uM,false,M);
+    gl.drawElements(gl.TRIANGLES,3,gl.UNSIGNED_SHORT,ih); vh+=VB; ih+=8; } });
+
+bench('D bufferData(null,CAP) orphan/frame + subData', 
+  ()=>{ vh=0; ih=0; },
+  ()=>{ gl.bufferData(gl.ARRAY_BUFFER,CAP_V,gl.STREAM_DRAW); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,CAP_I,gl.STREAM_DRAW); vh=0; ih=0;
+    for(let i=0;i<N;i++){ gl.bufferSubData(gl.ARRAY_BUFFER,vh,verts); gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER,ih,idx);
+    gl.vertexAttribPointer(0,3,gl.FLOAT,false,32,vh); gl.uniformMatrix4fv(uM,false,M);
+    gl.drawElements(gl.TRIANGLES,3,gl.UNSIGNED_SHORT,ih); vh+=VB; ih+=8; } });
+
+bench('E no upload at all (floor)',
+  ()=>{ gl.bufferData(gl.ARRAY_BUFFER,verts,gl.STREAM_DRAW); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,idx,gl.STREAM_DRAW); },
+  ()=>{ for(let i=0;i<N;i++){ gl.vertexAttribPointer(0,3,gl.FLOAT,false,32,0); gl.uniformMatrix4fv(uM,false,M);
+    gl.drawElements(gl.TRIANGLES,3,gl.UNSIGNED_SHORT,0); } });
+window.__r = out; window.__done = true;
+</script></body></html>

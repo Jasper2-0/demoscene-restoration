@@ -1,0 +1,60 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>percall</title></head><body>
+<canvas id="c" width="640" height="480"></canvas>
+<script type="module">
+// Per-call cost, measured the way the coordinator specified: gl.finish() both
+// before starting the clock and before stopping it, warm-up first, best-of-3.
+import { MiniD3D7, D3DMatrix, makeVertexScratch, D3DCOLOR_ARGB,
+  FVF_XYZ_DIFFUSE_TEX2, D3DPT_TRIANGLELIST, D3DTS_WORLD, D3DTS_VIEW, D3DTS_PROJECTION,
+  D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER } from '../js/minid3d7.js';
+const N = 2000;
+const d3d = new MiniD3D7(document.getElementById('c'));
+d3d.applyDefaultState();
+const gl = d3d.gl;
+d3d.SetTransform(D3DTS_PROJECTION, D3DMatrix.perspectiveFovLH(Math.PI/2, 4/3, 0.2, 100));
+d3d.SetTransform(D3DTS_VIEW, D3DMatrix.lookAtLH([0,0,-4],[0,0,0],[0,1,0]));
+const v = makeVertexScratch(FVF_XYZ_DIFFUSE_TEX2, 3);
+[[0,0.004,0],[0.004,-0.004,0],[-0.004,-0.004,0]].forEach((p,i)=>{ const b=v.base(i);
+  v.f32[b]=p[0]; v.f32[b+1]=p[1]; v.f32[b+2]=p[2];
+  v.u32[v.colorIndex(i)]=D3DCOLOR_ARGB(255,255,255,255);
+  v.f32[b+4]=0; v.f32[b+5]=0; v.f32[b+6]=0; v.f32[b+7]=0; });
+const idx = new Uint16Array([0,1,2]);
+const mats = []; for (let i=0;i<64;i++) mats.push(D3DMatrix.translation(((i%8)-4)*0.05, (((i>>3)%8)-4)*0.05, 0));
+function shimPass() {
+  for (let i=0;i<N;i++) { d3d.SetTransform(D3DTS_WORLD, mats[i & 63]);
+    d3d.DrawIndexedPrimitive(D3DPT_TRIANGLELIST, FVF_XYZ_DIFFUSE_TEX2, v.bytes, 3, idx, 3, 0); } }
+// raw WebGL2 equivalent
+const vs=`#version 300 es
+layout(location=0) in vec4 aPos; layout(location=1) in vec4 aC; uniform mat4 uM; out vec4 vC;
+void main(){ vC=aC.zyxw; gl_Position=uM*vec4(aPos.xyz,1.0);}`;
+const fs=`#version 300 es
+precision highp float; in vec4 vC; out vec4 o; void main(){o=vC;}`;
+const mk=(t,s)=>{const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);return sh;};
+const P=gl.createProgram(); gl.attachShader(P,mk(gl.VERTEX_SHADER,vs)); gl.attachShader(P,mk(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(P);
+const rvao=gl.createVertexArray(), rvbo=gl.createBuffer(), ribo=gl.createBuffer();
+const uM=gl.getUniformLocation(P,'uM');
+function rawPass() {
+  gl.useProgram(P); gl.bindVertexArray(rvao);
+  gl.bindBuffer(gl.ARRAY_BUFFER,rvbo); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ribo);
+  gl.enableVertexAttribArray(0); gl.enableVertexAttribArray(1);
+  for (let i=0;i<N;i++) {
+    gl.bufferData(gl.ARRAY_BUFFER, v.bytes, gl.STREAM_DRAW);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STREAM_DRAW);
+    gl.vertexAttribPointer(0,3,gl.FLOAT,false,32,0);
+    gl.vertexAttribPointer(1,4,gl.UNSIGNED_BYTE,true,32,12);
+    gl.uniformMatrix4fv(uM,false,mats[i&63].m);
+    gl.drawElements(gl.TRIANGLES,3,gl.UNSIGNED_SHORT,0);
+  }
+  gl.bindVertexArray(d3d.vao); gl.useProgram(d3d.prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, d3d.vbo); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, d3d.ibo);
+}
+function timed(fn){ gl.finish(); const t0=performance.now(); fn(); gl.finish(); return performance.now()-t0; }
+const out=[];
+function bench(label, fn){ fn(); fn(); let best=Infinity;
+  for(let k=0;k<3;k++){ d3d.Clear(D3DCLEAR_TARGET|D3DCLEAR_ZBUFFER,0xff000000,1.0);
+    best=Math.min(best,timed(fn)); }
+  out.push({label, total:best, us:best/N*1000}); }
+bench('shim DrawIndexedPrimitive', shimPass);
+bench('raw WebGL2 equivalent', rawPass);
+bench('shim again', shimPass);
+window.__r = out; window.__done = true;
+</script></body></html>

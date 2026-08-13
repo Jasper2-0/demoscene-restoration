@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lost vegas — bitmap type forensics</title>
+<style>
+  :root { --bg:#101418; --panel:#171d23; --line:#2a343d; --ink:#d7b45a; --txt:#c8d2da; --hot:#5ad7a0; --bad:#e2685f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:13px/1.45 ui-monospace,Menlo,monospace; }
+  header { padding:8px 14px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+  .hint { color:#7d8b97; font-size:12px; }
+  main { display:grid; grid-template-columns:1fr 330px; gap:0; height:calc(100vh - 43px); }
+  #view { overflow:auto; padding:14px; }
+  #side { border-left:1px solid var(--line); padding:10px; overflow-y:auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:9px; margin-bottom:10px; }
+  .card h2 { font-size:11px; margin:0 0 7px; color:#7d8b97; font-weight:500; text-transform:uppercase; letter-spacing:.06em; }
+  label { display:flex; gap:8px; align-items:center; color:#7d8b97; margin:4px 0; }
+  label span { min-width:74px; }
+  input[type=text],select { flex:1; background:#0c1013; color:var(--txt); border:1px solid var(--line);
+                            font:inherit; padding:3px 5px; border-radius:3px; }
+  input[type=range] { flex:1; }
+  button { background:#222c35; color:var(--txt); border:1px solid var(--line); padding:4px 9px;
+           font:inherit; cursor:pointer; border-radius:3px; }
+  button:hover { background:#2c3843; } button.pri { background:var(--ink); color:#12181d; border-color:var(--ink); font-weight:600; }
+  canvas { image-rendering:pixelated; display:block; border:1px solid var(--line); background:#000; margin-bottom:10px; }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  td { padding:2px 5px; border-top:1px solid #1e262e; }
+  td.s { text-align:right; font-variant-numeric:tabular-nums; }
+  tr.best td { color:var(--hot); font-weight:600; }
+  .lbl { color:#7d8b97; font-size:11px; margin:2px 0 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>bitmap type forensics</h1>
+  <span class="hint">the original was a 64k — only fonts that shipped with a 2000-era Windows PC are offered</span>
+  <button id="sweep" class="pri">auto-search font + size</button>
+  <span id="stat" class="hint"></span>
+</header>
+<main>
+  <div id="view">
+    <div class="lbl">reference (from the executable) &middot; candidate &middot; difference</div>
+    <canvas id="ref"></canvas>
+    <canvas id="cand"></canvas>
+    <canvas id="diff"></canvas>
+    <div class="lbl">onion skin — reference in yellow, candidate in green</div>
+    <canvas id="onion"></canvas>
+  </div>
+  <div id="side">
+    <div class="card">
+      <h2>reference</h2>
+      <label><span>bitmap</span><select id="src"></select></label>
+      <label><span>crop x,y</span><input type="text" id="cx" value="255"><input type="text" id="cy" value="14"></label>
+      <label><span>w,h</span><input type="text" id="cw" value="72"><input type="text" id="chh" value="22"></label>
+      <label><span>zoom</span><input type="range" id="zm" min="1" max="10" value="6"></label>
+      <label><span>threshold</span><input type="range" id="th" min="1" max="254" value="200"></label>
+      <label><input type="checkbox" id="inv" checked> invert (glyphs are knocked OUT of an opaque panel)</label>
+    </div>
+    <div class="card">
+      <h2>candidate</h2>
+      <label><span>text</span><input type="text" id="txt" value="legend"></label>
+      <label><span>font</span><select id="font"></select></label>
+      <label><span>size px</span><input type="range" id="sz" min="6" max="40" value="11" step="0.5"></label>
+      <label><span>x,y</span><input type="text" id="tx" value="3"><input type="text" id="ty" value="16"></label>
+      <label><span>tracking</span><input type="range" id="tr" min="-3" max="6" value="0" step="0.25"></label>
+      <span class="lbl">candidate is rendered antialiased and compared as coverage — the embedded sheets are 2-bit AA, so a 1-bit comparison would bias toward heavier faces.</span>
+    </div>
+    <div class="card">
+      <h2>match</h2>
+      <div id="score" class="lbl">–</div>
+      <table><tbody id="rank"></tbody></table>
+    </div>
+  </div>
+</main>
+<script type="module">
+// Fonts that shipped with Windows 98 / 2000 (plus the IE4 core web set), i.e.
+// everything a 64k intro could rely on without embedding anything.
+// {label, css} — bold must be a WEIGHT, not part of the family name, or canvas
+// silently falls back to the regular face and heavy families win by default.
+const ERA = [
+  ['Verdana',            '"Verdana"'],
+  ['Verdana Bold',       'bold "Verdana"'],
+  ['Tahoma',             '"Tahoma"'],
+  ['Tahoma Bold',        'bold "Tahoma"'],
+  ['Arial',              '"Arial"'],
+  ['Arial Bold',         'bold "Arial"'],
+  ['Arial Black',        '"Arial Black"'],
+  ['Times New Roman',    '"Times New Roman"'],
+  ['Times NR Bold',      'bold "Times New Roman"'],
+  ['Courier New',        '"Courier New"'],
+  ['Courier New Bold',   'bold "Courier New"'],
+  ['Georgia',            '"Georgia"'],
+  ['Georgia Bold',       'bold "Georgia"'],
+  ['Impact',             '"Impact"'],
+  ['Trebuchet MS',       '"Trebuchet MS"'],
+  ['Trebuchet Bold',     'bold "Trebuchet MS"'],
+  ['Comic Sans MS',      '"Comic Sans MS"'],
+  ['Andale Mono',        '"Andale Mono"'],
+  ['Wingdings',          '"Wingdings"'],
+  ['Wingdings 2',        '"Wingdings 2"'],
+  ['Webdings',           '"Webdings"'],
+];
+const cssOf = (label) => (ERA.find(e=>e[0]===label)||['','"Arial"'])[1];
+const SOURCES = { 'legend sheet (336x84, FUN_00406160)': 'ref/legend.png' };
+
+const $ = (id)=>document.getElementById(id);
+for (const [label] of ERA){ const o=document.createElement('option'); o.value=o.textContent=label; $('font').appendChild(o); }
+for (const k of Object.keys(SOURCES)){ const o=document.createElement('option'); o.value=SOURCES[k]; o.textContent=k; $('src').appendChild(o); }
+
+let refImg = null;
+async function loadRef(){
+  refImg = await new Promise((r,j)=>{const i=new Image();i.onload=()=>r(i);i.onerror=j;i.src=$('src').value;});
+  draw();
+}
+
+const crop = () => ({ x:+$('cx').value|0, y:+$('cy').value|0,
+                      w:Math.max(1,+$('cw').value|0), h:Math.max(1,+$('chh').value|0) });
+
+/** binary mask of the reference crop */
+function refMask(){
+  const c=crop(), t=+$('th').value;
+  const k=document.createElement('canvas'); k.width=c.w; k.height=c.h;
+  const g=k.getContext('2d',{willReadFrequently:true});
+  g.drawImage(refImg, c.x, c.y, c.w, c.h, 0,0, c.w,c.h);
+  const d=g.getImageData(0,0,c.w,c.h).data;
+  const m=new Uint8Array(c.w*c.h);
+  // COVERAGE, 0..1. The embedded sheets are 2-bit ANTIALIASED (levels 0/85/
+  // 170/255), so thresholding them to 1-bit throws away the very information
+  // that distinguishes one face from another — and biases the match toward
+  // heavier fonts, because a thresholded AA stroke reads thicker than it is.
+  const invert = $('inv').checked;
+  for(let i=0;i<m.length;i++){ const v=Math.max(d[i*4],d[i*4+1],d[i*4+2])/255;
+    m[i] = invert ? 1-v : v; }
+  return {m, w:c.w, h:c.h};
+}
+/** binary mask of the candidate text */
+function candMask(font, size, tx, ty, tracking){
+  const c=crop();
+  const k=document.createElement('canvas'); k.width=c.w; k.height=c.h;
+  const g=k.getContext('2d',{willReadFrequently:true});
+  g.fillStyle='#000'; g.fillRect(0,0,c.w,c.h);
+  g.fillStyle='#fff'; g.textBaseline='alphabetic';
+  const css = cssOf(font);
+  const m2 = css.match(/^(bold |italic )?(.*)$/);
+  g.font = `${m2[1]||''}${size}px ${m2[2]}`;
+
+  const s=$('txt').value;
+  let x=tx;
+  for (const ch of s){ g.fillText(ch,x,ty); x += g.measureText(ch).width + tracking; }
+  const d=g.getImageData(0,0,c.w,c.h).data;
+  const m=new Float32Array(c.w*c.h);
+  for(let i=0;i<m.length;i++) m[i]= d[i*4]/255;      // antialiased coverage
+  return {m,w:c.w,h:c.h};
+}
+/** intersection-over-union: 1.0 == identical ink */
+/** normalised cross-correlation of the two coverage maps (1.0 == identical) */
+function score(a,b){
+  const n=a.m.length; let ma=0,mb=0;
+  for(let i=0;i<n;i++){ ma+=a.m[i]; mb+=b.m[i]; } ma/=n; mb/=n;
+  let num=0,da=0,db=0;
+  for(let i=0;i<n;i++){ const x=a.m[i]-ma, y=b.m[i]-mb; num+=x*y; da+=x*x; db+=y*y; }
+  return (da&&db)? num/Math.sqrt(da*db) : 0;
+}
+
+function paint(cv, mask, colour){
+  const Z=+$('zm').value;
+  cv.width=mask.w*Z; cv.height=mask.h*Z;
+  const g=cv.getContext('2d'); g.fillStyle='#000'; g.fillRect(0,0,cv.width,cv.height);
+  g.fillStyle=colour;
+  for(let y=0;y<mask.h;y++) for(let x=0;x<mask.w;x++){
+    const a=mask.m[y*mask.w+x]; if(a>0.02){ g.globalAlpha=Math.min(1,a); g.fillRect(x*Z,y*Z,Z,Z); } }
+  g.globalAlpha=1;
+}
+function draw(){
+  if(!refImg) return;
+  const R=refMask();
+  const C=candMask($('font').value, +$('sz').value, +$('tx').value, +$('ty').value, +$('tr').value);
+  paint($('ref'), R, '#d7b45a');
+  paint($('cand'), C, '#5ad7a0');
+  // difference
+  const Z=+$('zm').value, dv=$('diff'); dv.width=R.w*Z; dv.height=R.h*Z;
+  const g=dv.getContext('2d'); g.fillStyle='#000'; g.fillRect(0,0,dv.width,dv.height);
+  for(let y=0;y<R.h;y++) for(let x=0;x<R.w;x++){
+    const i=y*R.w+x, dd=R.m[i]-C.m[i];
+    if(Math.abs(dd)<0.06) continue;          // agreement = black
+    g.globalAlpha=Math.min(1,Math.abs(dd));
+    g.fillStyle = dd>0 ? '#e2685f' : '#3f7fd0';   // red: too little ink; blue: too much
+    g.fillRect(x*Z,y*Z,Z,Z); g.globalAlpha=1;
+  }
+  // onion
+  const ov=$('onion'); ov.width=R.w*Z; ov.height=R.h*Z;
+  const o=ov.getContext('2d'); o.fillStyle='#000'; o.fillRect(0,0,ov.width,ov.height);
+  for(let y=0;y<R.h;y++) for(let x=0;x<R.w;x++){
+    const i=y*R.w+x;
+    if(R.m[i]>0.02){ o.globalAlpha=R.m[i]*.85; o.fillStyle='#d7b45a'; o.fillRect(x*Z,y*Z,Z,Z); }
+    if(C.m[i]>0.02){ o.globalAlpha=C.m[i]*.55; o.fillStyle='#5ad7a0'; o.fillRect(x*Z,y*Z,Z,Z); }
+    o.globalAlpha=1;
+  }
+  const s=score(R,C);
+  $('score').innerHTML = `NCC <b style="color:${s>.7?'var(--hot)':s>.45?'var(--ink)':'var(--bad)'}">${s.toFixed(3)}</b>`
+    + ` &middot; red = only in the original, blue = only in the candidate`;
+  $('stat').textContent = `${$('font').value} ${$('sz').value}px`;
+}
+
+/** sweep every era font and a size range, rank by IoU */
+$('sweep').onclick = ()=>{
+  const R=refMask(); const out=[];
+  for (const [f] of ERA)
+    for (let s=6; s<=26; s+=0.5)
+      for (let dy=-3; dy<=3; dy++)
+        for (let dx=-2; dx<=2; dx++){
+          const C=candMask(f, s, +$('tx').value+dx, +$('ty').value+dy, +$('tr').value);
+          out.push({f,s,dx,dy,v:score(R,C)});
+        }
+  out.sort((a,b)=>b.v-a.v);
+  const tb=$('rank'); tb.innerHTML='';
+  out.slice(0,12).forEach((r,i)=>{
+    const tr=document.createElement('tr'); if(!i) tr.className='best';
+    tr.innerHTML=`<td>${r.f}</td><td class="s">${r.s}px</td><td class="s">${r.v.toFixed(3)}</td>`;
+    tr.onclick=()=>{ $('font').value=r.f; $('sz').value=r.s;
+      $('tx').value=+$('tx').value+r.dx; $('ty').value=+$('ty').value+r.dy; draw(); };
+    tb.appendChild(tr);
+  });
+  const b=out[0];
+  $('font').value=b.f; $('sz').value=b.s; $('tx').value=+$('tx').value+b.dx; $('ty').value=+$('ty').value+b.dy;
+  draw();
+};
+for (const id of ['cx','cy','cw','chh','zm','th','inv','txt','font','sz','tx','ty','tr']) {
+  const el=$(id); el.addEventListener(el.type==='range'||el.tagName==='SELECT'?'input':'input', draw);
+}
+$('src').addEventListener('change', loadRef);
+await loadRef();
+</script>
+</body>
+</html>

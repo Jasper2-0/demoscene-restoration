@@ -1,0 +1,18 @@
+import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path'; import { fileURLToPath } from 'node:url';
+import puppeteer from 'puppeteer-core';
+const root=path.resolve(fileURLToPath(import.meta.url),'../../..');
+const MIME={'.html':'text/html','.js':'text/javascript','.json':'application/json','.png':'image/png'};
+const srv=http.createServer((q,r)=>{const p=path.join(root,decodeURIComponent(q.url.split('?')[0]).replace(/^\/+/,''));
+ try{const d=fs.readFileSync(p);r.writeHead(200,{'Content-Type':MIME[path.extname(p)]||'application/octet-stream'});r.end(d);}catch{r.writeHead(404);r.end();}});
+await new Promise(r=>srv.listen(0,r));
+const b=await puppeteer.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:'new'});
+const pg=await b.newPage(); await pg.setViewport({width:1400,height:900});
+const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
+await pg.goto(`http://127.0.0.1:${srv.address().port}/web/tools/font.html`,{waitUntil:'networkidle0'});
+await new Promise(r=>setTimeout(r,600));
+await pg.evaluate(()=>{ document.getElementById('addGuide').click(); document.getElementById('addGuide').click(); document.getElementById('trace').click(); });
+await new Promise(r=>setTimeout(r,400));
+console.log('status:', await pg.evaluate(()=>document.getElementById('stat').textContent));
+console.log('errors:', errs.length?errs.slice(0,2):'none');
+await pg.screenshot({path:'/tmp/tool.png'});
+await b.close(); srv.close();

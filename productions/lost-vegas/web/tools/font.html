@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lost vegas — font editor</title>
+<style>
+  :root { --bg:#101418; --panel:#171d23; --line:#2a343d; --ink:#d7b45a; --sky:#7dafc8; --txt:#c8d2da;
+          --hot:#5ad7a0; --gA:#e2685f; --gC:#e2a05f; --gX:#5ad7a0; --gB:#d7b45a; --gD:#8f7fd0; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:13px/1.45 ui-monospace,Menlo,monospace;
+         overflow:hidden; height:100vh; display:flex; flex-direction:column; }
+  header { flex:0 0 auto; padding:7px 14px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+  .hint { color:#7d8b97; font-size:12px; }
+  button { background:#222c35; color:var(--txt); border:1px solid var(--line); padding:4px 9px;
+           font:inherit; cursor:pointer; border-radius:3px; }
+  button:hover { background:#2c3843; }
+  button.pri { background:var(--ink); color:#12181d; border-color:var(--ink); font-weight:600; }
+  #modes { display:inline-flex; }
+  button.mode { border-radius:0; } #modes button:first-child{border-radius:3px 0 0 3px}
+  #modes button:last-child{border-radius:0 3px 3px 0} #modes button+button{border-left:none}
+  button.mode.on { background:var(--hot); color:#10201a; border-color:var(--hot); font-weight:600; }
+  /* Glyph list and right rail run full height; the stage gives up its lower
+     edge to the tool bar so the panels sit under the artwork they act on. */
+  main { flex:1 1 auto; min-height:0; display:grid;
+         grid-template-columns:166px 1fr 320px; grid-template-rows:minmax(0,1fr) auto; }
+  #strip { grid-row:1/3; border-right:1px solid var(--line); overflow-y:auto; padding:5px; }
+  #side  { grid-row:1/3; }
+  #stage { grid-row:1; min-height:0; }
+  #bottom { grid-column:2; grid-row:2; border-top:1px solid var(--line); padding:8px;
+            display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+            gap:8px; align-items:start; max-height:40vh; overflow-y:auto; }
+  #bottom .card { margin-bottom:0; height:100%; }
+  /* compact horizontal field rows — a bar is wide, not tall */
+  .row { display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
+  .row label { margin:0; }
+  .f { flex-direction:column; align-items:flex-start; gap:1px; }
+  .f span.l { min-width:0; font-size:11px; }
+  .f input[type=number] { width:46px; }
+  .f { flex:0 1 auto; }
+  .g { display:flex; align-items:center; gap:7px; padding:2px 5px; border-radius:3px; cursor:pointer; }
+  .g:hover { background:#1d252c; } .g.sel { background:#243039; outline:1px solid var(--ink); }
+  .g canvas { background:#0c1013; border:1px solid #232c34; }
+  .g input.pick { margin:0 1px 0 0; width:12px; height:12px; accent-color:var(--hot); flex:0 0 auto; }
+  .g .n { color:#7d8b97; } .g.done .n { color:var(--hot); }
+  .g .k { margin-left:auto; color:#5d6a75; font-size:11px; }
+  #stage { position:relative; overflow:hidden; background:#0c1013; }
+  #edit { position:absolute; inset:0; cursor:crosshair; }
+  #side { border-left:1px solid var(--line); padding:9px; overflow-y:auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:8px; margin-bottom:9px; }
+  .card h2 { font-size:11px; margin:0 0 6px; color:#7d8b97; font-weight:500; text-transform:uppercase; letter-spacing:.06em; }
+  label { display:flex; gap:7px; align-items:center; color:#7d8b97; margin:3px 0; }
+  label span.l { min-width:78px; }
+  input[type=range] { flex:1; } input[type=number] { width:56px; background:#0c1013; color:var(--txt);
+    border:1px solid var(--line); font:inherit; padding:2px 4px; border-radius:3px; }
+  textarea { width:100%; height:74px; background:#0c1013; color:var(--txt); border:1px solid var(--line);
+             font:11px ui-monospace,monospace; padding:5px; border-radius:3px; }
+  #prev { background:var(--sky); border:1px solid var(--line); display:block; width:100%; }
+  kbd { background:#222c35; border:1px solid var(--line); border-radius:3px; padding:0 4px; }
+  .sw { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>font editor</h1>
+  <span id="modes">
+    <button id="mDraw" class="mode on">1 · draw</button><button id="mBox" class="mode">2 · box</button><button id="mGuide" class="mode">3 · guides</button>
+  </span>
+  <span id="modehint" class="hint"></span>
+  <button id="trace">auto-trace</button>
+  <button id="clear">clear glyph</button>
+  <button id="export" class="pri">export both</button>
+  <span id="stat" class="hint"></span>
+</header>
+<main>
+  <div id="strip"></div>
+  <div id="stage"><canvas id="edit"></canvas></div>
+  <div id="side">
+
+    <div class="card">
+      <h2>view</h2>
+      <label><span class="l">bitmap</span><input type="range" id="op" min="0" max="100" value="55"></label>
+      <label><span class="l">zoom</span><input type="range" id="zm" min="4" max="34" value="15"></label>
+      <label><input type="checkbox" id="grid" checked> pixel grid</label>
+      <label><input type="checkbox" id="snap" checked> snap ½ px</label>
+      <label><input type="checkbox" id="snapG" checked> snap to guides (baseline, x-height…)</label>
+      <label><input type="checkbox" id="fill" checked> fill contours</label>
+      <label><input type="checkbox" id="guides" checked> metric guides</label>
+    </div>
+
+    <div class="card">
+      <h2>preview — the intro's own strings</h2>
+      <label><input type="checkbox" id="pvVec" checked> render from vectors where drawn</label>
+      <label><input type="checkbox" id="pvGuide"> show baseline</label>
+
+      <canvas id="prev" width="300" height="330"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>export</h2>
+      <textarea id="out" readonly></textarea>
+      <div style="margin-top:5px; display:flex; gap:5px">
+        <button id="copyV">copy vectors</button><button id="copyK">copy kern</button>
+        <button id="load">import…</button>
+      </div>
+      <input type="file" id="file" accept="application/json" style="display:none">
+    </div>
+  </div>
+
+  <div id="bottom">
+    <div class="card">
+      <h2>metrics — drag the lines in the editor</h2>
+      <div class="row">
+        <label class="f" title="ascender"><span class="l"><i class="sw" style="background:var(--gA)"></i>asc</span><input type="number" id="mAsc" step="0.5"></label>
+        <label class="f" title="cap"><span class="l"><i class="sw" style="background:var(--gC)"></i>cap</span><input type="number" id="mCap" step="0.5"></label>
+        <label class="f" title="x-height"><span class="l"><i class="sw" style="background:var(--gX)"></i>x-ht</span><input type="number" id="mX" step="0.5"></label>
+        <label class="f" title="baseline"><span class="l"><i class="sw" style="background:var(--gB)"></i>base</span><input type="number" id="mBase" step="0.5"></label>
+        <label class="f" title="descender"><span class="l"><i class="sw" style="background:var(--gD)"></i>desc</span><input type="number" id="mDesc" step="0.5"></label>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="guess">measure from bitmap</button>
+        <button id="addGuide">+ guide</button>
+        <button id="pickClear">clear ✓</button><button id="pickSel">✓ drawn</button>
+      </div>
+      <span class="hint">Tick glyphs in the list to show them beside the one you are editing.</span>
+      <div id="guideList" style="margin-top:5px"></div>
+    </div>
+
+    <div class="card">
+      <h2>glyph box — drag the ■ handles in the editor</h2>
+      <div class="row">
+        <label class="f" title="box origin x"><span class="l">org x</span><input type="number" id="bX" step="1"></label>
+        <label class="f" title="box origin y"><span class="l">org y</span><input type="number" id="bY" step="1"></label>
+        <label class="f" title="box width — this is the advance"><span class="l">width</span><input type="number" id="bW" step="1"></label>
+        <label class="f" title="box height"><span class="l">height</span><input type="number" id="bH" step="1"></label>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="boxReset">original box</button><button id="boxFit">fit to ink</button>
+      </div>
+      <label style="margin-top:4px"><input type="checkbox" id="autoKern" checked> derive kern from box (keeps baselines aligned)</label>
+      <span class="hint">Anchored at the ✛ ORIGIN — where the baseline meets the left edge. Resizing from the top-right grows the box up and right; the origin never moves. Width sets the advance.</span>
+    </div>
+
+    <div class="card">
+      <h2>baseline offset (kern) for this glyph</h2>
+      <div class="row">
+        <label class="f"><span class="l">kern</span><input type="number" id="kern" step="1"></label>
+        <span id="inkinfo" class="hint"></span>
+      </div>
+      <div id="artInfo" class="hint" style="margin:4px 0 0"></div>
+      <div class="row" style="margin-top:6px">
+        <button id="artToBase">art → baseline</button>
+        <button id="alignOne">align this glyph</button>
+        <button id="alignAll">align all</button>
+        <button id="kernReset">original table</button>
+      </div>
+    </div>
+  </div>
+</main>
+<script type="module">
+const ORDER = 'abcdefghijklmnopqrstuvwxyz0123456789#+'.split('');
+const KEY = 'lv_font_editor_v1';
+/* threestate's own vertical kern table. POSITIVE MOVES A GLYPH DOWN —
+   kernel.js does `y0 = kern + y` and screen y grows downward. */
+const ORIG_KERN = { a:-4, g:-4, e:-1, c:-2, h:-2, i:-2, k:2, p:2, x:2, z:2 };
+/* every string the intro actually sets */
+const LINES = ['lost vegas','threestate','effect vs design','mass media',
+  'we lost our explosive','please return it','hard facts # we are better',
+  'effect of the year','cheap imitations','why limit ourselves',
+  'sagacity sarix stevie distance','amsterdam','abcdefghijklm','nopqrstuvwxyz','0123456789#+'];
+
+const $ = (id)=>document.getElementById(id);
+const [img, metrics] = await Promise.all([
+  new Promise((r,j)=>{const i=new Image();i.onload=()=>r(i);i.onerror=j;i.src='../assets/font.png';}),
+  fetch('../assets/font_metrics.json').then(r=>r.json()),
+]);
+const G = metrics.glyphs, C = metrics.constants;
+
+/* atlas alpha — backdrop, auto-trace and ink measurement all read this */
+const ac=document.createElement('canvas'); ac.width=img.width; ac.height=img.height;
+const actx=ac.getContext('2d',{willReadFrequently:true}); actx.drawImage(img,0,0);
+const A=actx.getImageData(0,0,img.width,img.height).data;
+const lit=(x,y)=> x>=0&&y>=0&&x<img.width&&y<img.height && A[(y*img.width+x)*4+3]>96;
+
+const origCell = (ch)=>{ const g=G[ch]; return g?{w:g.w,h:g.h,x0:g.x0,y0:g.y0}:{w:16,h:19,x0:0,y0:0}; };
+/* the editable box: falls back to the original glyph rect until overridden */
+const cell = (ch)=>{ const o=origCell(ch), b=doc.box[ch]; return b?{...o,...b}:o; };
+
+/* ink extent per glyph, measured RELATIVE to its own cell (the sheet has four
+   rows, so absolute atlas y means nothing across glyphs) */
+const ink={};
+for (const ch of ORDER){
+  const g=origCell(ch); let top=null, bot=null;
+  for (let y=0;y<g.h;y++) for (let x=0;x<g.w;x++)
+    if (lit(g.x0+x,g.y0+y)){ if(top===null) top=y; bot=y; break; }
+  ink[ch]={top,bot,has:top!==null};
+}
+
+/* ---------------- document: vectors + kern + metrics ---------------- */
+const blank = ()=>({ glyphs:{}, kern:Object.fromEntries(ORDER.map(c=>[c,ORIG_KERN[c]??0])), metrics:null, guides:[], box:{}, picked:[] });
+let doc = JSON.parse(localStorage.getItem(KEY)||'null') || blank();
+doc.glyphs ||= {}; doc.kern ||= {}; doc.guides ||= []; doc.box ||= {}; doc.picked ||= []; for(const c of ORDER) doc.kern[c] ??= (ORIG_KERN[c]??0);
+if (!doc.metrics){
+  // first run: measure sensible defaults from the bitmap
+  const bots=ORDER.filter(c=>ink[c].has).map(c=>ink[c].bot);
+  const tops=ORDER.filter(c=>ink[c].has).map(c=>ink[c].top);
+  const mode=a=>{const m={};let b=a[0],n=0;for(const v of a){m[v]=(m[v]||0)+1;if(m[v]>n){n=m[v];b=v;}}return b;};
+  const base=mode(bots)+1;
+  doc.metrics={ asc:Math.min(...tops), cap:mode(tops), x:mode(tops), base, desc:Math.max(...bots)+1 };
+}
+const contoursOf=(ch)=>((doc.glyphs[ch] ||= {contours:[]}).contours);
+let sel='a', cur=null, drag=null, dragGuide=null, dragBox=null;
+/* Viewport pan. Held in SCREEN px, not glyph units, so the offset does not
+   change meaning when you zoom — and it survives switching glyphs, which is
+   what you want when stepping through a row comparing the same detail. */
+let pan={x:0,y:0}, panning=null, spaceDown=false;
+/* One canvas, three jobs — so they are explicitly modal rather than fighting
+   over the same click. Only the active mode hit-tests or shows its handles. */
+let mode='draw';
+const MODE_HINT = {
+  draw:'<kbd>click</kbd> add point · <kbd>drag</kbd> move · <kbd>alt+click</kbd> delete · <kbd>c</kbd> new contour · <kbd>⌫</kbd> undo',
+  box:'<kbd>drag ✛</kbd> move origin · <kbd>drag ■</kbd> resize up/right · advance = width',
+  guides:'<kbd>drag</kbd> a line · <kbd>alt+click</kbd> delete a free guide · <kbd>+ guide</kbd> adds one',
+};
+const PAN_HINT = ' · <kbd>space</kbd>+drag or <kbd>middle-drag</kbd> pans · <kbd>0</kbd> recentres';
+const setCursor = ()=> cv.style.cursor =
+  panning ? 'grabbing' : spaceDown ? 'grab'
+  : mode==='draw' ? 'crosshair' : mode==='box' ? 'move' : 'ns-resize';
+function setMode(m){ mode=m; cur=null; drag=dragGuide=dragBox=null;
+  for(const [id,k] of [['mDraw','draw'],['mBox','box'],['mGuide','guides']])
+    $(id).classList.toggle('on', k===m);
+  $('modehint').innerHTML = MODE_HINT[m] + PAN_HINT;
+  setCursor();
+  redraw();
+}
+
+/* ---------------- auto-trace ---------------- */
+function autoTrace(ch){
+  const c=cell(ch); const inside=(x,y)=>lit(c.x0+x,c.y0+y);
+  const seen=new Set(), out=[];
+  for(let y=0;y<c.h;y++) for(let x=0;x<c.w;x++){
+    if(!inside(x,y)||seen.has(x+','+y)||inside(x-1,y)) continue;
+    const path=[]; let px=x,py=y,dir=0,guard=0; const start=px+','+py;
+    do{ seen.add(px+','+py); path.push({x:px,y:py});
+      const step=[[1,0],[0,1],[-1,0],[0,-1]]; let moved=false;
+      for(const t of [3,0,1,2]){ const nd=(dir+t)%4,[dx,dy]=step[nd];
+        if(inside(px+dx,py+dy)){ px+=dx;py+=dy;dir=nd;moved=true;break; } }
+      if(!moved) break;
+    } while((px+','+py)!==start && ++guard<4000);
+    if(path.length>2) out.push(simplify(path));
+  }
+  return out;
+}
+const simplify=(p)=>{ const r=[];
+  for(let i=0;i<p.length;i++){ const a=p[(i-1+p.length)%p.length],b=p[i],c=p[(i+1)%p.length];
+    if((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x)!==0) r.push({x:b.x,y:b.y}); }
+  return r.length>2?r:p; };
+
+/* ---------------- editor ---------------- */
+const stage=$('stage'), cv=$('edit');
+const view=()=>{ const Z=+$('zm').value, c=cell(sel);
+  return {Z,c, ox:Math.round((cv.width-c.w*Z)/2)+pan.x,
+              oy:Math.round((cv.height-c.h*Z)/2)+pan.y}; };
+const toGlyph=(mx,my)=>{ const {Z,ox,oy}=view(); let x=(mx-ox)/Z, y=(my-oy)/Z;
+  if($('snap').checked){ x=Math.round(x*2)/2; y=Math.round(y*2)/2; }
+  if($('snapG').checked){
+    // land exactly ON a metric line when close — this is what makes two glyphs
+    // share a baseline by construction instead of by eye
+    const tol = 7/Z;                                   // 7 screen px
+    let best=null, bd=tol;
+    for(const [k] of GUIDES){ const d=Math.abs(y-doc.metrics[k]); if(d<bd){ bd=d; best=doc.metrics[k]; } }
+    for(const gy of doc.guides){ const d=Math.abs(y-gy); if(d<bd){ bd=d; best=gy; } }
+    if(best!==null) y=best;
+  }
+  return {x,y}; };
+const GUIDES=[['asc','ascender','--gA'],['cap','cap height','--gC'],['x','x-height','--gX'],
+              ['base','baseline','--gB'],['desc','descender','--gD']];
+
+/** one neighbouring glyph, dimmed and non-editable, for spacing/alignment */
+function drawContext(g, ch, x, y, Z){
+  const c=cell(ch), cs=doc.glyphs[ch]?.contours||[];
+  g.save();
+  if(cs.length){
+    g.globalAlpha=0.5; g.fillStyle='#d7b45a'; g.strokeStyle='#d7b45a'; g.lineWidth=1;
+    g.beginPath();
+    for(const pts of cs){ if(!pts.length)continue;
+      pts.forEach((p,i)=> i?g.lineTo(x+p.x*Z,y+p.y*Z):g.moveTo(x+p.x*Z,y+p.y*Z)); g.closePath(); }
+    g.fill('evenodd'); g.stroke();
+  } else {                                        // not drawn yet — show its bitmap
+    g.globalAlpha=0.28; g.imageSmoothingEnabled=false;
+    g.drawImage(img,c.x0,c.y0,c.w,c.h, x,y, c.w*Z,c.h*Z);
+  }
+  g.globalAlpha=0.35; g.strokeStyle='#6f8296';
+  g.strokeRect(x+.5,y+.5,c.w*Z,c.h*Z);            // its box, for spacing
+  g.globalAlpha=1; g.fillStyle='#6f8296'; g.font='10px ui-monospace,monospace';
+  g.fillText(ch, x+2, y+c.h*Z+11);
+  g.restore();
+}
+function drawEditor(){
+  cv.width=stage.clientWidth; cv.height=stage.clientHeight;
+  const g=cv.getContext('2d'); const {Z,ox,oy,c}=view();
+  g.fillStyle='#0c1013'; g.fillRect(0,0,cv.width,cv.height);
+  g.save(); g.globalAlpha=+$('op').value/100; g.imageSmoothingEnabled=false;
+  g.drawImage(img,c.x0,c.y0,c.w,c.h, ox,oy, c.w*Z,c.h*Z); g.restore();
+  if($('grid').checked && Z>=8){
+    g.strokeStyle='rgba(255,255,255,.07)'; g.beginPath();
+    for(let i=0;i<=c.w;i++){ g.moveTo(ox+i*Z+.5,oy); g.lineTo(ox+i*Z+.5,oy+c.h*Z); }
+    for(let j=0;j<=c.h;j++){ g.moveTo(ox,oy+j*Z+.5); g.lineTo(ox+c.w*Z,oy+j*Z+.5); }
+    g.stroke();
+  }
+  // CONTEXT: the ticked glyphs, laid out either side of the one being edited
+  // with the real advances, in the same cell space and against the same guides.
+  // Kern is deliberately NOT applied — every glyph is judged as drawn, so what
+  // you are comparing is the art itself, not the art plus its offset.
+  if(doc.picked.length){
+    const seq = doc.picked.includes(sel) ? doc.picked : doc.picked.concat([sel]);
+    const idx = seq.indexOf(sel);
+    const adv = (ch)=> (cell(ch).w + C.charGapUnits) * Z;
+    let cx = ox;                                  // walk left from the edited glyph
+    for(let i=idx-1;i>=0;i--){ cx -= adv(seq[i]); drawContext(g, seq[i], cx, oy, Z); }
+    cx = ox + adv(sel);                           // then right
+    for(let i=idx+1;i<seq.length;i++){ drawContext(g, seq[i], cx, oy, Z); cx += adv(seq[i]); }
+  }
+  g.strokeStyle= doc.box[sel] ? '#5ad7a0' : '#3b4854';
+  g.strokeRect(ox+.5,oy+.5,c.w*Z,c.h*Z);
+  // ORIGIN = where the baseline meets the left edge (the type-design anchor).
+  // Move handle sits there; the resize handle is top-right so the box grows
+  // up and to the right while the origin stays put.
+  const oyB = oy + doc.metrics.base*Z;
+  if(mode==='box'){
+    g.fillStyle= doc.box[sel] ? '#5ad7a0' : '#6f8296';
+    g.fillRect(ox-5, oyB-5, 10, 10);                   // move (origin)
+    g.fillRect(ox+c.w*Z-5, oy-5, 10, 10);              // resize (top-right)
+    g.strokeStyle='#5ad7a0'; g.lineWidth=1.5; g.beginPath();
+    g.moveTo(ox-13,oyB+.5); g.lineTo(ox+13,oyB+.5);
+    g.moveTo(ox+.5,oyB-13); g.lineTo(ox+.5,oyB+13); g.stroke();
+  } else {                                              // quiet origin marker
+    g.strokeStyle='rgba(90,215,160,.45)'; g.lineWidth=1; g.beginPath();
+    g.moveTo(ox-7,oyB+.5); g.lineTo(ox+7,oyB+.5);
+    g.moveTo(ox+.5,oyB-7); g.lineTo(ox+.5,oyB+7); g.stroke();
+  }
+  if($('guides').checked){
+    g.globalAlpha = mode==='guides' ? 1 : 0.55;   // recede when not editable
+    g.font='10px ui-monospace,monospace';
+    GUIDES.forEach(([k,label,cssv],gi)=>{
+      const col=getComputedStyle(document.documentElement).getPropertyValue(cssv).trim();
+      const y=oy+doc.metrics[k]*Z;
+      g.strokeStyle=col; g.setLineDash(k==='base'?[]:[5,4]); g.lineWidth=k==='base'?1.5:1;
+      g.beginPath(); g.moveTo(0,y+.5); g.lineTo(cv.width,y+.5); g.stroke(); g.setLineDash([]);
+      // stagger the captions so coincident guides (cap/x-height often share a
+      // row in this face) stay readable
+      g.fillStyle=col; g.fillText(label, 6 + gi*74, y-3);
+    });
+    // free horizontal guides the user has added
+    g.strokeStyle='#6f8296'; g.fillStyle='#8fa3b3'; g.lineWidth=1;
+    doc.guides.forEach((gy,i)=>{
+      const y=oy+gy*Z;
+      g.setLineDash([2,3]); g.beginPath(); g.moveTo(0,y+.5); g.lineTo(cv.width,y+.5); g.stroke(); g.setLineDash([]);
+      g.fillText(`guide ${i+1}  ${gy}`, cv.width-104, y-3);
+    });
+    g.globalAlpha=1;
+  }
+  const cs=contoursOf(sel);
+  g.globalAlpha = mode==='draw' ? 1 : 0.45;      // contours recede outside draw
+  cs.forEach((pts,ci)=>{ if(!pts.length) return;
+    g.beginPath(); pts.forEach((p,i)=> i?g.lineTo(ox+p.x*Z,oy+p.y*Z):g.moveTo(ox+p.x*Z,oy+p.y*Z));
+    if(ci!==cur) g.closePath();
+    if($('fill').checked && ci!==cur){ g.fillStyle='rgba(215,180,90,.30)'; g.fill(); }
+    g.strokeStyle=ci===cur?'#5ad7a0':'#d7b45a'; g.lineWidth=1.6; g.stroke();
+    if(mode==='draw') pts.forEach((p,i)=>{ g.fillStyle=(ci===cur&&i===pts.length-1)?'#5ad7a0':'#d7b45a';
+      g.fillRect(ox+p.x*Z-2.5,oy+p.y*Z-2.5,5,5); });
+  });
+  g.globalAlpha=1;
+  const done=ORDER.filter(k=>doc.glyphs[k]?.contours?.length).length;
+  $('stat').textContent=`'${sel}' cell ${c.w}x${c.h} · ${cs.length} contour(s), ${cs.reduce((a,p)=>a+p.length,0)} pts · ${done}/${ORDER.length} drawn`;
+  $('inkinfo').textContent = ink[sel].has ? `ink ${ink[sel].top}..${ink[sel].bot}` : 'no ink';
+}
+
+function drawStrip(){
+  const s=$('strip'); s.innerHTML='';
+  for(const ch of ORDER){
+    const d=document.createElement('div');
+    d.className='g'+(ch===sel?' sel':'')+(doc.glyphs[ch]?.contours?.length?' done':'');
+    const c=cell(ch), k=document.createElement('canvas'); k.width=30; k.height=24;
+    const g=k.getContext('2d'); g.imageSmoothingEnabled=false;
+    const z=Math.min(26/c.w,20/c.h);
+    g.drawImage(img,c.x0,c.y0,c.w,c.h, 2,2, c.w*z,c.h*z);
+    const cs=doc.glyphs[ch]?.contours||[];
+    if(cs.length){ g.strokeStyle='#5ad7a0';
+      for(const pts of cs){ if(!pts.length)continue; g.beginPath();
+        pts.forEach((p,i)=>i?g.lineTo(2+p.x*z,2+p.y*z):g.moveTo(2+p.x*z,2+p.y*z)); g.closePath(); g.stroke(); } }
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.className='pick';
+    cb.checked=doc.picked.includes(ch); cb.title='show in the compare row';
+    cb.onclick=(ev)=>{ ev.stopPropagation();                 // don't also select
+      const i=doc.picked.indexOf(ch);
+      if(i<0) doc.picked.push(ch); else doc.picked.splice(i,1);
+      redraw(); };
+    const n=document.createElement('span'); n.className='n'; n.textContent=ch;
+    const kk=document.createElement('span'); kk.className='k'; kk.textContent=doc.kern[ch]||'';
+    d.append(cb,k,n,kk); d.onclick=()=>{ sel=ch; cur=null; redraw(); };
+    s.appendChild(d);
+  }
+}
+
+function drawPreview(){
+  const k=$('prev'), g=k.getContext('2d');
+  g.fillStyle='#7dafc8'; g.fillRect(0,0,k.width,k.height);
+  const S=0.9, useVec=$('pvVec').checked, showG=$('pvGuide').checked;
+  let y=12;
+  for(const line of LINES){
+    let x=5;
+    if(showG){ g.strokeStyle='rgba(0,0,0,.25)'; g.beginPath();
+      g.moveTo(0,y+doc.metrics.base*S+.5); g.lineTo(k.width,y+doc.metrics.base*S+.5); g.stroke(); }
+    for(const ch of line){
+      if(ch===' '){ x+=(C.spaceWidthUnits+C.charGapUnits)*S; continue; }
+      const c=cell(ch), cs=doc.glyphs[ch]?.contours||[], kern=doc.kern[ch]||0;
+      const yy = y + kern*S;
+      if(useVec && cs.length){
+        g.fillStyle='#fff'; g.beginPath();
+        for(const pts of cs){ if(!pts.length)continue;
+          pts.forEach((p,i)=> i?g.lineTo(x+p.x*S, yy+p.y*S):g.moveTo(x+p.x*S, yy+p.y*S)); g.closePath(); }
+        g.fill('evenodd');
+      } else {
+        g.save(); g.globalAlpha=useVec?.4:1; g.imageSmoothingEnabled=false;
+        g.drawImage(img,c.x0,c.y0,c.w,c.h, x, yy, c.w*S, c.h*S); g.restore();
+      }
+      x += (c.w+C.charGapUnits)*S;
+    }
+    y += 21;
+  }
+}
+
+function exportObj(){
+  const vec={ note:'Vector glyph outlines for the Lost Vegas remaster. Coordinates are glyph-cell pixels (origin = cell top-left); contours are closed polygons, even-odd fill.',
+              metrics:doc.metrics, guides:doc.guides, glyphs:{} };
+  for(const ch of ORDER) if(doc.glyphs[ch]?.contours?.length){
+    const c=cell(ch);
+    vec.glyphs[ch]={ w:c.w, h:c.h, srcX:c.x0, srcY:c.y0,
+      boxAdjusted: !!doc.box[ch],
+      contours:doc.glyphs[ch].contours.map(p=>p.map(q=>[q.x,q.y])) };
+  }
+  const kern={}; for(const ch of ORDER) if(doc.kern[ch]) kern[ch]=doc.kern[ch];
+  return {vec, kern:{ _note:'Remaster baseline correction. POSITIVE MOVES A GLYPH DOWN (kernel.js: y0 = kern + y).', kern }};
+}
+function drawGuideList(){
+  const el=$('guideList');
+  if(!doc.guides.length){ el.innerHTML='<span class="hint">no extra guides — drag one to move, alt-click to delete</span>'; return; }
+  el.innerHTML='';
+  doc.guides.forEach((gy,i)=>{
+    const row=document.createElement('label');
+    row.innerHTML=`<span class="l" style="color:#8fa3b3">guide ${i+1}</span>`;
+    const inp=document.createElement('input'); inp.type='number'; inp.step='0.5'; inp.value=gy;
+    inp.oninput=()=>{ doc.guides[i]=+inp.value; redraw(); };
+    const del=document.createElement('button'); del.textContent='×'; del.title='delete';
+    del.onclick=()=>{ doc.guides.splice(i,1); redraw(); };
+    row.append(inp,del); el.appendChild(row);
+  });
+}
+function redraw(){
+  for(const [k] of GUIDES) $('m'+k[0].toUpperCase()+k.slice(1)) && ($('m'+k[0].toUpperCase()+k.slice(1)).value=doc.metrics[k]);
+  $('mAsc').value=doc.metrics.asc; $('mCap').value=doc.metrics.cap; $('mX').value=doc.metrics.x;
+  $('mBase').value=doc.metrics.base; $('mDesc').value=doc.metrics.desc;
+  $('kern').value=doc.kern[sel]||0;
+  { const c=cell(sel); $('bX').value=c.x0; $('bY').value=c.y0; $('bW').value=c.w; $('bH').value=c.h; }
+  { const e=artExtent(sel);
+    $('artInfo').innerHTML = e
+      ? `drawn art ${e.top.toFixed(1)}..${e.bot.toFixed(1)} · baseline ${doc.metrics.base} · ` +
+        (Math.abs(e.bot-doc.metrics.base)<0.01
+          ? '<b style="color:var(--hot)">on the baseline</b>'
+          : `<b style="color:var(--gA)">${(e.bot-doc.metrics.base>0?'+':'')}${(e.bot-doc.metrics.base).toFixed(1)} off</b>`)
+      : 'nothing drawn yet'; }
+  drawEditor(); drawStrip(); drawPreview(); drawGuideList();
+  $('out').value=JSON.stringify(exportObj().vec).slice(0,4000);
+  localStorage.setItem(KEY, JSON.stringify(doc));
+}
+
+/* ---------------- interaction ---------------- */
+cv.addEventListener('auxclick', e=>{ if(e.button===1) e.preventDefault(); });
+cv.addEventListener('mousedown', e=>{
+  const r=cv.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+  const {Z,ox,oy}=view();
+  if(spaceDown || e.button===1){          // pan wins over draw/box/guide hit-tests
+    panning={mx,my,px:pan.x,py:pan.y}; setCursor(); e.preventDefault(); return; }
+  if(e.button!==0) return;
+  if(mode==='guides' && $('guides').checked){
+    for(let i=0;i<doc.guides.length;i++){       // free guides take priority
+      if(Math.abs(oy+doc.guides[i]*Z-my)<5){
+        if(e.altKey){ doc.guides.splice(i,1); redraw(); return; }
+        dragGuide={free:i}; return;
+      }
+    }
+    for(const [k] of GUIDES){                   // then the named metrics
+      if(Math.abs(oy+doc.metrics[k]*Z-my)<5 && mx<cv.width){ dragGuide={metric:k}; return; }
+    }
+  }
+  if(mode==='box'){
+    const c=cell(sel), oyB=oy+doc.metrics.base*Z;
+    if(Math.abs(mx-ox)<9 && Math.abs(my-oyB)<9){ dragBox={mode:'move', mx, my, c:{...c}}; return; }
+    if(Math.abs(mx-(ox+c.w*Z))<9 && Math.abs(my-oy)<9){ dragBox={mode:'size', mx, my, c:{...c}}; return; }
+    return;                                     // box mode never edits contours
+  }
+  if(mode!=='draw') return;
+  const cs=contoursOf(sel);
+  for(let ci=0;ci<cs.length;ci++) for(let i=0;i<cs[ci].length;i++){
+    const p=cs[ci][i];
+    if(Math.abs(ox+p.x*Z-mx)<5 && Math.abs(oy+p.y*Z-my)<5){
+      if(e.altKey){ cs[ci].splice(i,1); if(!cs[ci].length) cs.splice(ci,1); redraw(); return; }
+      drag={ci,i}; return; }
+  }
+  if(e.altKey) return;
+  const p=toGlyph(mx,my);
+  if(cur===null){ cs.push([p]); cur=cs.length-1; } else cs[cur].push(p);
+  redraw();
+});
+addEventListener('keyup', e=>{
+  if(e.code==='Space'){ spaceDown=false; if(!panning) setCursor(); } });
+addEventListener('mousemove', e=>{
+  const r=cv.getBoundingClientRect(); const {Z,oy}=view();
+  if(panning){ pan={ x:panning.px+(e.clientX-r.left-panning.mx),
+                     y:panning.py+(e.clientY-r.top -panning.my) }; redraw(); return; }
+  if(dragGuide){ let v=(e.clientY-r.top-oy)/Z; if($('snap').checked) v=Math.round(v*2)/2;
+    if(dragGuide.free!==undefined) doc.guides[dragGuide.free]=v; else doc.metrics[dragGuide.metric]=v;
+    redraw(); return; }
+  if(dragBox){
+    const {Z}=view();
+    const dx=Math.round((e.clientX-r.left-dragBox.mx)/Z), dy=Math.round((e.clientY-r.top-dragBox.my)/Z);
+    const c=dragBox.c;
+    if(dragBox.mode==='move'){
+      doc.box[sel]={ x0:c.x0+dx, y0:c.y0+dy, w:c.w, h:c.h };
+    } else {
+      // grow up/right from the origin: the bottom edge (y0+h) stays fixed, so
+      // dragging the top-right handle upward makes the box taller, not lower.
+      const h=Math.max(1, c.h-dy), w=Math.max(1, c.w+dx);
+      doc.box[sel]={ x0:c.x0, y0:c.y0+(c.h-h), w, h };
+    }
+    if($('autoKern').checked) syncKern(sel);
+    redraw(); return;
+  }
+  if(!drag) return;
+  const p=toGlyph(e.clientX-r.left, e.clientY-r.top);
+  const c=contoursOf(sel)[drag.ci]; if(c&&c[drag.i]){ c[drag.i].x=p.x; c[drag.i].y=p.y; redraw(); }
+});
+addEventListener('mouseup', ()=>{ drag=null; dragGuide=null; dragBox=null;
+  if(panning){ panning=null; setCursor(); } });
+// A stuck space flag after alt-tabbing is the classic bug here — clear on blur.
+addEventListener('blur', ()=>{ if(spaceDown||panning){ spaceDown=false; panning=null; setCursor(); } });
+addEventListener('keydown', e=>{
+  if(/INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  if(e.code==='Space'){ if(!spaceDown){ spaceDown=true; setCursor(); } e.preventDefault(); return; }
+  if(e.key==='0'){ pan={x:0,y:0}; redraw(); return; }
+  const cs=contoursOf(sel);
+  if(e.shiftKey && (e.key==='ArrowUp'||e.key==='ArrowDown')){
+    doc.kern[sel]=(doc.kern[sel]||0)+(e.key==='ArrowUp'?-1:1); redraw(); e.preventDefault(); return; }
+  if(e.key==='1'){ setMode('draw'); return; }
+  if(e.key==='2'){ setMode('box'); return; }
+  if(e.key==='3'){ setMode('guides'); return; }
+  if(mode!=='draw' && (e.key==='c'||e.key==='n'||e.key==='Backspace')) return;
+  if(e.key==='c'||e.key==='n'){ cur=null; redraw(); }
+  else if(e.key==='Backspace'){ if(cur!==null&&cs[cur]?.length){ cs[cur].pop();
+      if(!cs[cur].length){cs.splice(cur,1);cur=null;} redraw(); } e.preventDefault(); }
+  else if(e.key==='ArrowRight'){ sel=ORDER[(ORDER.indexOf(sel)+1)%ORDER.length]; cur=null; redraw(); e.preventDefault(); }
+  else if(e.key==='ArrowLeft'){ sel=ORDER[(ORDER.indexOf(sel)+ORDER.length-1)%ORDER.length]; cur=null; redraw(); e.preventDefault(); }
+  else if(e.key==='g'){ $('grid').checked=!$('grid').checked; redraw(); }
+});
+/* The engine draws each box top at `y + kern` and hangs it downward, so a
+   glyph's baseline lands at `y + kern + (baseline within its box)`. For every
+   glyph to share one baseline that sum must be constant — which makes kern a
+   DERIVED value once the box is anchored on the baseline. Reference is the
+   original cell, so an unadjusted glyph keeps kern 0. */
+function syncKern(ch){
+  const o=origCell(ch), c=cell(ch);
+  const baseInBox = doc.metrics.base - (c.y0 - o.y0);   // baseline within this box
+  doc.kern[ch] = Math.round(doc.metrics.base - baseInBox);
+}
+/* extent of the DRAWN contours (not the bitmap) */
+function artExtent(ch){
+  const cs=doc.glyphs[ch]?.contours||[];
+  if(!cs.length) return null;
+  let top=Infinity, bot=-Infinity;
+  for(const p of cs.flat()){ if(p.y<top) top=p.y; if(p.y>bot) bot=p.y; }
+  return {top, bot};
+}
+/* shift this glyph's vectors so their lowest point sits on the baseline */
+function artToBaseline(ch){
+  const e=artExtent(ch); if(!e) return;
+  const dy=doc.metrics.base - e.bot;
+  for(const pts of doc.glyphs[ch].contours) for(const p of pts) p.y+=dy;
+}
+/* align: put this glyph's ink bottom on the baseline (kern is +down) */
+const alignOne=(ch)=> ink[ch].has ? (doc.metrics.base - 1 - ink[ch].bot) : 0;
+$('pickClear').onclick=()=>{ doc.picked=[]; redraw(); };
+$('pickSel').onclick=()=>{ doc.picked=ORDER.filter(c=>doc.glyphs[c]?.contours?.length); redraw(); };
+$('artToBase').onclick=()=>{ artToBaseline(sel); redraw(); };
+$('alignOne').onclick=()=>{ doc.kern[sel]=alignOne(sel); redraw(); };
+$('alignAll').onclick=()=>{ for(const ch of ORDER) doc.kern[ch]=alignOne(ch); redraw(); };
+$('kernReset').onclick=()=>{ for(const ch of ORDER) doc.kern[ch]=ORIG_KERN[ch]??0; redraw(); };
+$('addGuide').onclick=()=>{
+  // drop a new guide mid-cell; drag it in the editor or type an exact value
+  const c=cell(sel); doc.guides.push(Math.round(c.h/2*2)/2); redraw();
+};
+$('guess').onclick=()=>{
+  const bots=ORDER.filter(c=>ink[c].has).map(c=>ink[c].bot), tops=ORDER.filter(c=>ink[c].has).map(c=>ink[c].top);
+  const mode=a=>{const m={};let b=a[0],n=0;for(const v of a){m[v]=(m[v]||0)+1;if(m[v]>n){n=m[v];b=v;}}return b;};
+  doc.metrics={ asc:Math.min(...tops), cap:mode(tops), x:mode(tops), base:mode(bots)+1, desc:Math.max(...bots)+1 };
+  redraw();
+};
+for(const [id,k] of [['mAsc','asc'],['mCap','cap'],['mX','x'],['mBase','base'],['mDesc','desc']])
+  $(id).oninput=()=>{ doc.metrics[k]=+$(id).value; redraw(); };
+$('kern').oninput=()=>{ doc.kern[sel]=+$('kern').value|0; redraw(); };
+for(const [id,k] of [['bX','x0'],['bY','y0'],['bW','w'],['bH','h']])
+  $(id).oninput=()=>{
+    const c=cell(sel), v=+$(id).value|0;
+    // editing height grows the box upward from the origin, matching the drag
+    doc.box[sel] = k==='h' ? {x0:c.x0, y0:c.y0+(c.h-Math.max(1,v)), w:c.w, h:Math.max(1,v)}
+                           : {x0:c.x0, y0:c.y0, w:c.w, h:c.h, [k]:v};
+    if($('autoKern').checked) syncKern(sel);
+    redraw();
+  };
+$('boxReset').onclick=()=>{ delete doc.box[sel]; redraw(); };
+$('boxFit').onclick=()=>{                       // shrink the box to the drawn ink
+  const cs=contoursOf(sel); const o=origCell(sel);
+  if(!cs.length){ const i=ink[sel]; if(i.has) doc.box[sel]={x0:o.x0,y0:o.y0,w:o.w,h:i.bot+1}; redraw(); return; }
+  let x1=0,y1=0; for(const p of cs.flat()){ x1=Math.max(x1,p.x); y1=Math.max(y1,p.y); }
+  doc.box[sel]={ x0:o.x0, y0:o.y0, w:Math.max(1,Math.ceil(x1)), h:Math.max(1,Math.ceil(y1)) };
+  redraw();
+};
+$('trace').onclick=()=>{ doc.glyphs[sel]={contours:autoTrace(sel)}; cur=null; redraw(); };
+$('clear').onclick=()=>{ doc.glyphs[sel]={contours:[]}; cur=null; redraw(); };
+$('export').onclick=()=>{
+  const {vec,kern}=exportObj();
+  for(const [name,data] of [['font_vectors.json',vec],['font_kern_remaster.json',kern]]){
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,1)],{type:'application/json'}));
+    a.download=name; a.click();
+  }
+};
+$('copyV').onclick=async()=>{ await navigator.clipboard.writeText(JSON.stringify(exportObj().vec,null,1));
+  $('copyV').textContent='copied'; setTimeout(()=>$('copyV').textContent='copy vectors',900); };
+$('copyK').onclick=async()=>{ await navigator.clipboard.writeText(JSON.stringify(exportObj().kern,null,1));
+  $('copyK').textContent='copied'; setTimeout(()=>$('copyK').textContent='copy kern',900); };
+$('load').onclick=()=>$('file').click();
+$('file').onchange=async e=>{
+  const f=e.target.files[0]; if(!f) return; const j=JSON.parse(await f.text());
+  if(j.glyphs){ doc.glyphs={}; for(const [ch,g] of Object.entries(j.glyphs))
+    doc.glyphs[ch]={contours:(g.contours||[]).map(p=>p.map(([x,y])=>({x,y})))}; }
+  if(j.metrics) doc.metrics=j.metrics;
+  if(j.guides) doc.guides=j.guides;
+  if(j.glyphs) for(const [ch,g] of Object.entries(j.glyphs))
+    if(g.boxAdjusted) doc.box[ch]={x0:g.srcX,y0:g.srcY,w:g.w,h:g.h};
+  if(j.kern) for(const [ch,v] of Object.entries(j.kern)) doc.kern[ch]=v;
+  redraw();
+};
+for(const id of ['op','zm','grid','snap','snapG','fill','guides','pvVec','pvGuide','autoKern']) $(id).oninput=redraw;
+$('mDraw').onclick=()=>setMode('draw');
+$('mBox').onclick=()=>setMode('box');
+$('mGuide').onclick=()=>setMode('guides');
+addEventListener('resize', redraw);
+setMode('draw');
+</script>
+</body>
+</html>

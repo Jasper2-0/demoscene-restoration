@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "slug": "lost-vegas",
+  "title": "Lost Vegas",
+  "group": "3State",
+  "kind": "restoration",
+  "platform": "Browser, Windows",
+  "releaseDate": "2000-03-11",
+  "party": {
+    "name": null,
+    "compo": null,
+    "ranking": null
+  },
+  "ids": {
+    "demozoo": 46023,
+    "pouet": 93
+  },
+  "links": {
+    "demozoo": "https://demozoo.org/productions/46023/",
+    "pouet": "https://www.pouet.net/prod.php?which=93",
+    "youtube": "https://www.youtube.com/watch?v=H0NmbvzmuNs"
+  },
+  "credits": [
+    {
+      "name": "Sarix",
+      "role": "Code"
+    },
+    {
+      "name": "Sagacity",
+      "role": "Code"
+    },
+    {
+      "name": "Distance",
+      "role": "Music"
+    },
+    {
+      "name": "Stevie",
+      "role": "Graphics"
+    },
+    {
+      "name": "Coat",
+      "role": "Code"
+    }
+  ],
+  "originals": [
+    {
+      "path": "originals/threestate/lost-vegas/3s-vegas.zip",
+      "urls": [
+        "https://files.scene.org/get/parties/2000/ambience00/in64/3s-vegas.zip"
+      ],
+      "sha256": "275298cccfbb409f163c2b54c9aec14c7b260ad007ec92827299803505936d80",
+      "bytes": 60681
+    }
+  ],
+  "captures": [
+    {
+      "youtube": "H0NmbvzmuNs",
+      "path": "productions/lost-vegas/work/reference/lostvegas_ref.webm",
+      "format": "bestvideo+bestaudio",
+      "sha256": "9de88cdcd72d4feb249271c888f3855397d90681c3cc804163b66e1311d6b606",
+      "alignmentOffsetMs": null,
+      "note": "NOT the 2002 remix (9_zHem33lq4); ref_audio.raw = 11025 Hz mono s16le for cross-correlation"
+    }
+  ],
+  "status": {
+    "web": "published",
+    "pagesRepo": "lost-vegas-webgl"
+  }
+}

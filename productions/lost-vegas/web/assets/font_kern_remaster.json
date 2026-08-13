@@ -1,0 +1,29 @@
+{
+  "_note": "Remaster-only vertical baseline correction, authored by coat / solar with web-lv/tools/font.html. Sign convention: POSITIVE MOVES A GLYPH DOWN (kernel.js does y0 = kern + y, screen y grows downward). threestate's original table (a,g=-4; e=-1; c,h,i=-2; k,p,x,z=+2) was right for the ten glyphs it covered but left the other 28 at zero, which is why baselines wander. ?quality=original keeps the original.",
+  "kern": {
+    "a": -4,
+    "b": -1,
+    "c": -1,
+    "d": -1,
+    "e": -1,
+    "f": -4,
+    "g": -1,
+    "h": -1,
+    "i": -1,
+    "j": -1,
+    "k": 3,
+    "l": 1,
+    "m": 1,
+    "n": 1,
+    "o": 1,
+    "p": 1,
+    "q": -1,
+    "r": 1,
+    "s": 1,
+    "x": 2,
+    "z": 2,
+    "4": -3,
+    "8": -3,
+    "9": -3
+  }
+}
