@@ -316,6 +316,7 @@ gl.bindAttribLocation(prog, 2, 'aUV');
 // as the next thing to confirm, not as fact.
 const TEXDIR = 'work/unpacked/lapsus_dat/data/lwo/textures/';
 const texCache = new Map();
+const texSize = new Map();   // GL texture -> [w, h], for the backdrop fit
 async function loadTexture(file) {
   if (texCache.has(file)) return texCache.get(file);
   const url = ROOT + TEXDIR + file.replace(/\\/g, '/').split('/').pop();
@@ -330,16 +331,25 @@ async function loadTexture(file) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+  texSize.set(tex, [img.width, img.height]);
   texCache.set(file, tex);
   return tex;
 }
 
 // Full-screen backdrop image (LWS `BGImage`). Scene::render draws it before
 // the 3D (RENDER.md §draw order), with no depth interaction.
+// The backdrop images are 640x512 while the display is 640x480: the artwork
+// is 640x480 padded to a power-of-two height with a flat fill (pure black in
+// MatureFurkTitle, pure white in eHollow/End_Mature). The original never
+// shows those bottom 32 rows — it draws the image 1:1 in pixels, so the pad
+// falls off the bottom of the screen. Stretching all 512 rows into 480
+// squashes the whole backdrop by 6.7%, which misaligns every feature in it.
+// uFit is (canvas / texture) per axis, so only the on-screen part is sampled.
 const BG_VS = `#version 300 es
 const vec2 P[4] = vec2[4](vec2(-1.,-1.), vec2(1.,-1.), vec2(-1.,1.), vec2(1.,1.));
+uniform vec2 uFit;
 out vec2 vUV;
-void main(){ vec2 p = P[gl_VertexID]; vUV = vec2(p.x*.5+.5, .5-p.y*.5);
+void main(){ vec2 p = P[gl_VertexID]; vUV = vec2(p.x*.5+.5, .5-p.y*.5) * uFit;
   gl_Position = vec4(p,0.,1.); }`;
 const BG_FS = `#version 300 es
 precision highp float;
@@ -431,6 +441,9 @@ const bgVao = gl.createVertexArray();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, bgTex);
     gl.uniform1i(gl.getUniformLocation(bgProg, 'uTex'), 0);
+    const [tw, th] = texSize.get(bgTex) ?? [canvas.width, canvas.height];
+    gl.uniform2f(gl.getUniformLocation(bgProg, 'uFit'),
+      Math.min(1, canvas.width / tw), Math.min(1, canvas.height / th));
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
