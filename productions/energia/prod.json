@@ -23,7 +23,8 @@
   "credits": [
     {
       "name": "Saffron",
-      "role": "Graphics"
+      "role": "Graphics",
+      "note": "additional"
     },
     {
       "name": "Unreal",
@@ -31,7 +32,8 @@
     },
     {
       "name": "Orion",
-      "role": "Other"
+      "role": "Other",
+      "note": "unknown"
     },
     {
       "name": "Yolk",
@@ -39,7 +41,8 @@
     },
     {
       "name": "Yoghurt",
-      "role": "Code"
+      "role": "Code",
+      "note": "additional"
     },
     {
       "name": "Louie",

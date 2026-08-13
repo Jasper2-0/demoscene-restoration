@@ -27,31 +27,38 @@
     },
     {
       "name": "Oyise",
-      "role": "Graphics"
+      "role": "Graphics",
+      "note": "Textures"
     },
     {
       "name": "Ile",
-      "role": "Code"
+      "role": "Code",
+      "note": "Effects"
     },
     {
       "name": "Rob",
-      "role": "Code"
+      "role": "Code",
+      "note": "Effects"
     },
     {
       "name": "Snq",
-      "role": "Code"
+      "role": "Code",
+      "note": "System & Effects"
     },
     {
       "name": "Balance",
-      "role": "Other"
+      "role": "Other",
+      "note": "Player"
     },
     {
       "name": "Inopia",
-      "role": "Code"
+      "role": "Code",
+      "note": "3d"
     },
     {
       "name": "Coat",
-      "role": "Code"
+      "role": "Code",
+      "note": "WebGL remake"
     }
   ],
   "originals": [

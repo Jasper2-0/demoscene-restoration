@@ -37,9 +37,16 @@ const incoming = {
   releaseDate: p.release_date ?? null,
   ids: { demozoo: id },
   links: { demozoo: `https://demozoo.org/productions/${id}/` },
-  credits: (p.credits ?? []).map((c) => ({
-    name: c.nick?.name ?? null, role: c.category || c.role || null,
-  })),
+  // Keep BOTH fields. Demozoo's `role` is the qualifier that separates work on
+  // the original production from work on later derivatives — "Code" +
+  // "WebGL remake" is a restoration credit, not a 2000 credit. Collapsing to
+  // `category || role` erases that distinction and silently promotes a
+  // remake author into the original team's credit list.
+  credits: (p.credits ?? []).map((c) => {
+    const credit = { name: c.nick?.name ?? null, role: c.category || null };
+    if (c.role) credit.note = c.role;
+    return credit;
+  }),
 };
 
 // external links: pouet id + youtube capture candidates. The API hands back

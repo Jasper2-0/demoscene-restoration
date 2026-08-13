@@ -39,7 +39,8 @@
     },
     {
       "name": "mrdoob",
-      "role": "Code"
+      "role": "Code",
+      "note": "WebGL port"
     }
   ],
   "originals": [

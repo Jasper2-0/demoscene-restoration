@@ -35,19 +35,23 @@
     },
     {
       "name": "Timo",
-      "role": "Graphics"
+      "role": "Graphics",
+      "note": "2d"
     },
     {
       "name": "Juha",
-      "role": "Graphics"
+      "role": "Graphics",
+      "note": "3d"
     },
     {
       "name": "Eetu",
-      "role": "Graphics"
+      "role": "Graphics",
+      "note": "3d"
     },
     {
       "name": "Janne",
-      "role": "Graphics"
+      "role": "Graphics",
+      "note": "3d"
     }
   ],
   "originals": [
