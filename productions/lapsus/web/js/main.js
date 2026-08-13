@@ -26,6 +26,7 @@ const DATA = ROOT + 'work/unpacked/lapsus_dat/data/';
 const qs = new URLSearchParams(location.search);
 const SCENE = qs.get('scene') ?? 'hulluolli';
 const T = parseFloat(qs.get('t') ?? '4');
+const WMUL = parseFloat(qs.get('wmul') ?? '1');   // debug: scale cylindrical wrap
 // near=0.01 only for Diskojea and Kaivoalieni (RENDER.md §8)
 const NEAR = /^(diskojea|kaivoalieni)$/i.test(SCENE) ? 0.01 : 1.0;
 const FAR = 100.0;
@@ -159,7 +160,7 @@ function projectUV(x, y, z, blk) {
   // surround of a front-projected texture instead of the subject, which reads
   // as "the model is untextured" rather than as an inverted axis.
   if (blk.projection === 1) {                    // cylindrical around `axis`
-    const w = blk.wrapW ?? 1;
+    const w = (blk.wrapW ?? 1) * WMUL;
     // The ANGLE pivots on the object origin, not on CNTR; CNTR only offsets
     // the height. naamiotaus's CNTR sits at z=-100, far behind geometry that
     // lives at z=4..20, so pivoting there compresses the backdrop into a 62°

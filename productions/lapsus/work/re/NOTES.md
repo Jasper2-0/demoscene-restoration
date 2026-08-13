@@ -126,6 +126,53 @@ carry no TXUV map, only a projection + axis + size + centre. Surfaces with
 textures are pre-rendered views of the object with the lighting already baked
 in.
 
+### Background mapping is NOT solved — measured, not guessed
+
+Jasper flagged the backdrop tiling. Quantified by cross-correlating the
+horizontal intensity profile of the top 110 px (pure background) of our frame
+against the reference:
+
+- best fit under a pure scale+shift is **×1.11 and 14 px**, and even there the
+  correlation only reaches **0.754**;
+- sweeping the cylindrical wrap multiplier gives 0.348 / 0.540 / 0.647 /
+  0.668 / **0.710** / 0.698 for 1.80 / 1.91 / 2.00 / 2.02 / 2.14 / 2.25
+  repeats across the backdrop.
+
+So the correlation plateaus near 0.70 for *every* wrap value: **no tiling
+factor fixes it**, and the tempting round number (exactly 2.0 repeats) is
+actually worse than what we ship. The mapping's shape is wrong, not its
+scale.
+
+**The LWO data is complete and does not explain it.** Every projection
+parameter was dumped with values (`naamiotaus.lwo`, sole BLOK):
+
+| chunk | value | meaning |
+|---|---|---|
+| `PROJ` | 1 | cylindrical |
+| `AXIS` | 1 | about Y |
+| `CNTR` | (0, 5, −100) | projection centre |
+| `SIZE` | (125, 100, 15.74) | projection extent |
+| `ROTA` | (0, 0, 0) | **no** projection rotation |
+| `CSYS` | 0 | **object** coordinates, not world |
+| `WRAP` | Repeat / Repeat | tiles on both axes |
+| `WRPW` / `WRPH` | 5 / 1 | wrap counts |
+
+Nothing is missing or ambiguous, and nothing there is a hidden shape
+parameter: `ROTA` is zero so the projection is unrotated, `CSYS` is object
+space which is what we use, and `WRAP` is Repeat which is what we bind.
+(Watch out: dumping `WRAP`'s 4 bytes through a float formatter prints
+"0.0000" and reads as `Reset` — it is two u16s, and it is `1/1`.)
+
+Conclusion: rendering the data faithfully by LightWave's own cylindrical
+rules does **not** reproduce the capture, so **dm2000 does not implement
+LightWave cylindrical projection faithfully**. That makes this a question
+about the engine, not about the assets, and it is only answerable by reading
+its texgen — which RENDER.md lists as unread. The origin-pivot currently in
+`main.js` is an empirical stand-in that looks closer; it is not derived and
+should be replaced by whatever the disassembly says.
+
+`?wmul=` on the renderer scales the cylindrical wrap for sweeps like this one.
+
 Still open on this frame: ours sits a fraction smaller and further left than
 the reference, and the reference is slightly warmer/higher contrast. Candidates
 are a sub-frame time offset (the demo is free-running, so the capture's frame
