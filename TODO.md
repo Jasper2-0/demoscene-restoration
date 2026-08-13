@@ -54,6 +54,20 @@ behavior, so a human signs off.
 - [ ] **build-energia.sh** — mirror of build-wonder.sh (asset gate, drift
   gate, dist verify), plus a `publish-pages.sh energia` arm once it exists.
 
+- [ ] **Top-level asset viewer for 3D scene formats** (`tools/`) — a browser
+  viewer for LightWave (`.lwo` / `.lws`) and 3DS (`.3ds`) content, so
+  extracted geometry, materials, UVs and animation can be *looked at* rather
+  than inferred from parser output. METHOD.md §4 already says it: "before
+  theorising about an unidentified blob, render it" — that rule currently
+  only has tooling for raw bitmaps, not for scene formats.
+  Foundations exist: `productions/lapsus/work/js/{lwo,lws}.mjs` parse all 50
+  LWO2 objects and all 23 LWSC scenes cleanly, so the viewer is mostly a
+  renderer plus a file picker. Promote those parsers to `shared/` when it is
+  built, since 3DS shows up across the sunflower/maturefurk era too.
+  Useful beyond Lapsus: it doubles as a diffing surface (original asset vs
+  ported render) and as the eyeball check for n-gon triangulation and UV
+  splitting.
+
 - [ ] **Capture alignment backfill** — `alignmentOffsetMs` is recorded for
   ptct (+4431 ms) and wonder (0); lost-vegas and sonnet captures are pinned
   but their offsets are still null in `prod.json` — recover them from the
