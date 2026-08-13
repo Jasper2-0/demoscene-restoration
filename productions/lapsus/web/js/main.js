@@ -143,19 +143,24 @@ void main(){
     vec3 lit = uAmbient;
     for (int i = 0; i < MAXL; i++) {
       if (i >= uNumLights) break;
-      lit += uLightColor[i] * (uDiffuse * max(dot(n, uLightDir[i]), 0.0));
+      lit += uLightColor[i] * max(dot(n, uLightDir[i]), 0.0);
     }
     col = base * lit;
   }
   // GL_SPHERE_MAP on the eye-space reflection vector, added on top: the
   // engine puts the RIMG reflection on texture unit 1 with env mode GL_ADD
-  // (RENDER.md 8), which is why these surfaces read as glowing/additive
-  // rather than as a plain modulated texture.
+  // (RENDER.md §4, mask 0x81), which is why these surfaces read as glowing.
+  //
+  // The texel is added UNSCALED. LWO reflectivity does not attenuate it — it
+  // only decides whether the sphere-map bit is set at all: RENDER.md records
+  // that mask bit 0x80 is cleared unless surface reflectivity > 0.95. So REFL
+  // is a threshold, not a coefficient, and multiplying by it here was
+  // inventing an attenuation the fixed-function pipeline cannot express.
   if (uHasEnv) {
     vec3 u = normalize(vP);
     vec3 r = u - 2.0 * n * dot(n, u);
     float m = 2.0 * sqrt(r.x*r.x + r.y*r.y + (r.z + 1.0)*(r.z + 1.0));
-    col += texture(uEnv, vec2(r.x/m + 0.5, r.y/m + 0.5)).rgb * uRefl;
+    col += texture(uEnv, vec2(r.x/m + 0.5, r.y/m + 0.5)).rgb;
   }
   o = vec4(col, uAlpha);
 }`;
@@ -380,8 +385,18 @@ const bgVao = gl.createVertexArray();
       const clip = blk ? lwo.clips.find((c) => c.index === blk.imageIndex) : null;
       let tex = null;
       if (clip?.file) { try { tex = await loadTexture(clip.file); } catch { tex = null; } }
+      // Diffuse colour, per RENDER.md §4.5: with NO colour texture the
+      // material is surfaceColour x diffuseLevel, but WITH one it is a
+      // neutral grey diffuseLevel in all three channels — the texture
+      // supplies the colour and the surface colour is not multiplied in.
+      // Folding pene's 0.78 surface grey into its textured surfaces was
+      // darkening them by 22%.
+      const dl = s.diffuse ?? 1;
+      const sc = s.color ?? [1, 1, 1];
+      const blk0 = s.blocks.find((b) => b.channel === 'COLR');
+      const matColor = blk0 ? [dl, dl, dl] : [sc[0]*dl, sc[1]*dl, sc[2]*dl];
       mats.set(s.name, {
-        tex, color: s.color ?? [1, 1, 1],
+        tex, color: matColor,
         // RENDER.md §8: luminosity > 0.95 is drawn unlit via glColor4f
         unlit: (s.luminosity ?? 0) > 0.95,
         diffuse: s.diffuse ?? 1,
@@ -390,7 +405,11 @@ const bgVao = gl.createVertexArray();
         alpha: 1 - (s.transparency ?? 0),
         twoSided: (s.sides ?? 1) === 3,
         refl: s.reflection ?? 0,
+        // Mask bit 0x80 (sphere-map texgen) is cleared unless reflectivity
+        // > 0.95 (RENDER.md §4), so a dim reflection is not a faint one — it
+        // is no reflection at all.
         envTex: await (async () => {
+          if ((s.reflection ?? 0) <= 0.95) return null;
           const c = s.reflectionImage ? lwo.clips.find((c) => c.index === s.reflectionImage) : null;
           if (!c?.file) return null;
           try { return await loadTexture(c.file); } catch { return null; }

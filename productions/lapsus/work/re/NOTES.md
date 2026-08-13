@@ -234,9 +234,35 @@ Do not "fix" this by adding a fudge to the frame harness: an offset that
 varies with t cannot be a constant, and fitting one would hide whichever of
 the above is real.
 
-Still open on this frame: the object is slightly lighter than the reference
-with softer detail (the reflection/material path), and the reference is
-slightly warmer/higher contrast. Candidates
+### Material path: applied from RENDER.md, but measurement is confounded
+
+Implemented from RENDER.md §4.5 rather than by eye: reflection added
+**unscaled** (`REFL` is a threshold — mask bit 0x80 is cleared unless
+reflectivity > 0.95 — not a coefficient), and material diffuse is a
+**neutral grey** when a COLR texture is present rather than surfaceColour ×
+diffuseLevel. Archive-wide, reflectivity is effectively binary: 35 surfaces
+> 0.95, **0 surfaces between 0 and 0.95**, 38 at zero — which independently
+supports reading it as a threshold.
+
+Neither changed the correlation, and that is the useful result: pene sits at
+0.906 whether the object is too dark (mean 36.1) or too bright (38.1), so
+**brightness is not what limits this frame**. Re-running the time sweep with
+the material fixes in place:
+
+| render t | corr |
+|---:|---:|
+| 4.0 (nominal) | 0.906 |
+| 4.3 | 0.947 |
+| **4.4** | **0.948** |
+| 4.5 | 0.920 |
+
+The timing offset is worth ~0.04 of correlation — more than any material term
+touched so far. **Do not tune materials further until the timing probe is
+sound**, or the fitting target is a mistimed frame. Note also that at the
+best-matching time the material changes moved 0.9525 → 0.9482, i.e. very
+slightly worse with the mean overshooting, which points at a remaining term
+(specular is specified in RENDER.md §4.5 and is not implemented) rather than
+at the two rules above, both of which are engine-derived. Candidates
 are a sub-frame time offset (the demo is free-running, so the capture's frame
 is not exactly at t=4.8), and the fact that no lighting, fog or fader is
 implemented yet. Worth settling with a small time sweep before assuming a
