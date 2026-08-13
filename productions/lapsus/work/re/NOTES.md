@@ -105,9 +105,43 @@ guessing at class boundaries.
 - The 0x45c688 records were **MSVC RTTI**, not a part registry — hypothesis
   killed. Nothing sequencing-related runs at CRT init.
 
+## First static frame (2026-08-13) — transform chain VERIFIED
+
+`node productions/lapsus/work/verify/frame.mjs hulluolli 4.8` renders one
+frame and montages it against the capture. The jester statue matches the
+reference in **silhouette, framing, scale, orientation and pose**, which
+validates the whole transform chain at once:
+
+- `fovX = 2·atan(1/zoom)` with `fovY = 0.75·fovX` **as an angle** (34.7° here)
+- `local = T · Ry(h) · Rx(p) · Rz(b)`, `world = local · parentWorld`
+- `modelview = Scale(1,1,−1) · inverse(cameraWorld) · objectWorld` with
+  `frontFace(CW)`
+- near = 1.0, far = 100.0
+
+Remaining differences are exactly the unimplemented layers: no textures, no
+material/lighting model, so the statue is flat grey and `naamiotaus.lwo` —
+the background plane at z≈19.4 that carries the blurred colonnade in the
+original — renders as an untextured wall.
+
+Two format facts cost a debugging round each and are now in
+`LWS_INVENTORY.md`: **cameras carry 6 motion channels, not 9**, and
+**`ParentItem` is a hex item ID**. Both fail *silently* into something that
+looks like a different bug.
+
+Also: the schedule in `ENGINE.md` was independently confirmed against the
+capture with ffmpeg scene detection. Detected cuts at 61.43 / 70.95 / 99.53 s
+match predicted part boundaries at 61.41 / 70.94 / 99.53, and 147.97 matches
+HigherBiing's internal camera cut at 148.16. The boundaries that went
+undetected are precisely those with slow black fades rather than the fast
+white ones — so the schedule, the 6.41 s audio alignment and the fade table
+all corroborate each other.
+
 ## Next steps
 
-1. Per-part draw functions (the `vf2` of each factory) and `LW::Scene`
+1. Textures + materials: LWO `SURF`/`BLOK` → GL state per `RENDER.md` §8
+   (RGBA8, REPEAT, `LINEAR_MIPMAP_NEAREST`, no row flip, alpha from the
+   separate `_a` image, unit-1 env `GL_ADD`).
+2. Per-part draw functions (the `vf2` of each factory) and `LW::Scene`
    rendering internals — several sit near x87-audit SUSPECT entries, so read
    `disasm.asm` for those rather than the C.
 2. LWO (binary IFF) parser — `work/js/lws.mjs` already covers the scenes.

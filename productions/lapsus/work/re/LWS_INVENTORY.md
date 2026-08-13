@@ -4,7 +4,19 @@ Parsed by `work/js/lws.mjs` (run the table below via the snippet in its
 header). All scenes are **LWSC version 3, text, 30 fps**. Every envelope key
 is spantype 0 = TCB (Kochanek-Bartels) except a handful of spantype 3
 (Linear) in `rad_out.lws`; every envelope ends `Behaviors 1 1` (Reset).
-Motion channels are always 9: `px py pz  h p b  sx sy sz` (meters / radians).
+Motion channels: **objects and lights carry 9** (`px py pz  h p b  sx sy sz`,
+meters / radians); **cameras carry 6** — no scale. Across the 23 scenes that
+is 201 nine-channel motions and 27 six-channel ones, and 27 is exactly the
+camera count. A renderer that requires 9 channels silently falls back to
+identity for every camera, i.e. puts the viewer at the world origin inside
+the geometry — which reads as a broken projection rather than as a missing
+transform, and cost a debugging round on the first static frame.
+
+`ParentItem` values are **hex item IDs without an `0x` prefix**: the top
+nibble is the type (1 object, 2 light, 3 camera, 4 bone) and the remainder is
+that type's 0-based index, so `10000002` is object #2. Parsing it as decimal
+resolves every parent to nothing and looks like "this scene has no
+parenting". All 79 parents across the archive resolve once decoded properly.
 
 **RESOLVED — do not derive timing from `LastFrame`.** The `FirstFrame`/
 `LastFrame`/`Preview*` headers are LightWave *authoring* metadata and the

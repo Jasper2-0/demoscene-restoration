@@ -20,20 +20,33 @@
 // parser does not convert — conversion is the renderer's decision and is
 // recorded in re/RENDER.md.
 
-const ID = (b, o) => b.toString('latin1', o, o + 4);
+// Byte access that works on BOTH Node Buffers and browser Uint8Arrays. The
+// first version used Buffer.readUInt32BE/toString, which made the parser
+// silently Node-only: it parsed all 50 files in a test script and then threw
+// "not an LWO2 file" the moment a browser handed it the same bytes.
+const dvCache = new WeakMap();
+const DV = (b) => {
+  let d = dvCache.get(b);
+  if (!d) { d = new DataView(b.buffer, b.byteOffset, b.byteLength); dvCache.set(b, d); }
+  return d;
+};
+const u32 = (b, o) => DV(b).getUint32(o, false);
+const u16 = (b, o) => DV(b).getUint16(o, false);
+const ID = (b, o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+const latin1 = (b, o, e) => { let s = ''; for (let i = o; i < e; i++) s += String.fromCharCode(b[i]); return s; };
 const pad = (n) => n + (n & 1);
 
 // Variable-length index. Returns [value, bytesConsumed].
 function readVX(b, o) {
   return b[o] === 0xff
     ? [((b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0, 4]
-    : [b.readUInt16BE(o), 2];
+    : [u16(b, o), 2];
 }
 
 function readStr(b, o, end) {
   let e = o;
   while (e < end && b[e] !== 0) e++;
-  return [b.toString('latin1', o, e), pad(e - o + 1)];
+  return [latin1(b, o, e), pad(e - o + 1)];
 }
 
 // SURF/CLIP/BLOK sub-chunk walker: ID + u16 len.
@@ -41,7 +54,7 @@ function subChunks(b, o, end) {
   const out = [];
   while (o + 6 <= end) {
     const id = ID(b, o);
-    const len = b.readUInt16BE(o + 4);
+    const len = u16(b, o + 4);
     if (!/^[A-Z0-9 ]{4}$/.test(id) || o + 6 + len > end) break;
     out.push({ id, start: o + 6, len });
     o += 6 + pad(len);
@@ -49,7 +62,7 @@ function subChunks(b, o, end) {
   return out;
 }
 
-const f32 = (b, o) => b.readFloatBE(o);
+const f32 = (b, o) => DV(b).getFloat32(o, false);
 
 function parseSurface(b, start, len) {
   const end = start + len;
@@ -68,16 +81,16 @@ function parseSurface(b, start, len) {
       case 'GLOS': surf.glossiness = f32(b, o); break;
       case 'SMAN': surf.smoothingAngle = f32(b, o); break;          // radians
       case 'ADTR': surf.additiveTransparency = f32(b, o); break;
-      case 'SIDE': surf.sides = b.readUInt16BE(o); break;            // 1 or 3(=double)
-      case 'RFOP': surf.reflectionOptions = b.readUInt16BE(o); break;
-      case 'TROP': surf.refractionOptions = b.readUInt16BE(o); break;
+      case 'SIDE': surf.sides = u16(b, o); break;            // 1 or 3(=double)
+      case 'RFOP': surf.reflectionOptions = u16(b, o); break;
+      case 'TROP': surf.refractionOptions = u16(b, o); break;
       case 'RIMG': surf.reflectionImage = readVX(b, o)[0]; break;
       case 'RSAN': surf.reflectionSeamAngle = f32(b, o); break;
       case 'CLRF': surf.colorFilter = f32(b, o); break;
       case 'CLRH': surf.colorHighlights = f32(b, o); break;
       case 'SHRP': surf.diffuseSharpness = f32(b, o); break;
       case 'BUMP': surf.bumpIntensity = f32(b, o); break;
-      case 'LINE': surf.lineFlags = b.readUInt16BE(o); break;
+      case 'LINE': surf.lineFlags = u16(b, o); break;
       case 'LSIZ': surf.lineSize = f32(b, o); break;
       case 'LCOL': surf.lineColor = [f32(b, o), f32(b, o + 4), f32(b, o + 8)]; break;
       case 'BLOK': surf.blocks.push(parseBlock(b, o, c.len)); break;
@@ -105,11 +118,11 @@ function parseBlock(b, start, len) {
       const o = c.start;
       switch (c.id) {
         case 'CHAN': blk.channel = ID(b, o); break;       // COLR/DIFF/BUMP/TRAN…
-        case 'OPAC': blk.opacity = { type: b.readUInt16BE(o), value: f32(b, o + 2) }; break;
-        case 'ENAB': blk.enabled = !!b.readUInt16BE(o); break;
+        case 'OPAC': blk.opacity = { type: u16(b, o), value: f32(b, o + 2) }; break;
+        case 'ENAB': blk.enabled = !!u16(b, o); break;
         case 'IMAG': blk.imageIndex = readVX(b, o)[0]; break;
-        case 'PROJ': blk.projection = b.readUInt16BE(o); break;
-        case 'WRAP': blk.wrap = [b.readUInt16BE(o), b.readUInt16BE(o + 2)]; break;
+        case 'PROJ': blk.projection = u16(b, o); break;
+        case 'WRAP': blk.wrap = [u16(b, o), u16(b, o + 2)]; break;
         case 'VMAP': blk.uvMap = readStr(b, o, o + c.len)[0]; break;
         case 'SIZE': blk.size = [f32(b, o), f32(b, o + 4), f32(b, o + 8)]; break;
         case 'CNTR': blk.center = [f32(b, o), f32(b, o + 4), f32(b, o + 8)]; break;
@@ -135,7 +148,7 @@ export function parseLWO(buf) {
   let o = 12;
   while (o + 8 <= buf.length) {
     const id = ID(buf, o);
-    const len = buf.readUInt32BE(o + 4);
+    const len = u32(buf, o + 4);
     const s = o + 8, end = s + len;
     switch (id) {
       case 'TAGS': {
@@ -145,8 +158,8 @@ export function parseLWO(buf) {
       }
       case 'LAYR': {
         layer = newLayer();
-        layer.number = buf.readUInt16BE(s);
-        layer.flags = buf.readUInt16BE(s + 2);
+        layer.number = u16(buf, s);
+        layer.flags = u16(buf, s + 2);
         layer.pivot = [f32(buf, s + 4), f32(buf, s + 8), f32(buf, s + 12)];
         layer.name = readStr(buf, s + 16, end)[0];
         obj.layers.push(layer);
@@ -168,7 +181,7 @@ export function parseLWO(buf) {
         let p = s + 4;
         const polys = [];
         while (p < end) {
-          const hdr = buf.readUInt16BE(p); p += 2;
+          const hdr = u16(buf, p); p += 2;
           const count = hdr & 0x03ff;
           const idx = new Array(count);
           for (let i = 0; i < count; i++) { const [v, n] = readVX(buf, p); idx[i] = v; p += n; }
@@ -183,7 +196,7 @@ export function parseLWO(buf) {
         const map = new Int32Array(layer?.polygons.length ?? 0).fill(-1);
         while (p < end) {
           const [poly, n] = readVX(buf, p); p += n;
-          const tag = buf.readUInt16BE(p); p += 2;
+          const tag = u16(buf, p); p += 2;
           if (poly < map.length) map[poly] = tag;
         }
         if (layer && type === 'SURF') layer.polygonSurface = map;
@@ -192,7 +205,7 @@ export function parseLWO(buf) {
       }
       case 'VMAP': {
         const type = ID(buf, s);
-        const dim = buf.readUInt16BE(s + 4);
+        const dim = u16(buf, s + 4);
         const [name, nn] = readStr(buf, s + 6, end);
         let p = s + 6 + nn;
         const entries = [];
@@ -207,7 +220,7 @@ export function parseLWO(buf) {
       }
       case 'SURF': obj.surfaces.push(parseSurface(buf, s, len)); break;
       case 'CLIP': {
-        const clip = { index: buf.readUInt32BE(s), file: null };
+        const clip = { index: u32(buf, s), file: null };
         for (const c of subChunks(buf, s + 4, end)) {
           if (c.id === 'STIL') clip.file = readStr(buf, c.start, c.start + c.len)[0];
         }

@@ -143,12 +143,18 @@ export async function shootCanvas(page, {
  * case-mismatched or missing server fetches. Throws with everything it found
  * rather than the first item, so one run tells you the whole story.
  */
-export function assertClean({ errors = [], failedRequests = [] } = {}, server = null) {
+export function assertClean({ errors = [], failedRequests = [] } = {}, server = null, {
+  // Chrome requests /favicon.ico for every page on its own. No page controls
+  // it, so failing on it makes the check cry wolf and trains people to ignore
+  // it — which is exactly how a real 404 would then get missed.
+  ignore = [/\/favicon\.ico$/],
+} = {}) {
+  const keep = (s) => !ignore.some((re) => re.test(s));
   const problems = [
     ...errors.map((e) => `page error: ${e}`),
-    ...failedRequests.map((r) => `request: ${r}`),
-    ...(server?.caseErrors ?? []).map((c) => `case mismatch: ${c}`),
-    ...(server?.missing ?? []).map((m) => `404: ${m}`),
+    ...failedRequests.filter(keep).map((r) => `request: ${r}`),
+    ...(server?.caseErrors ?? []).filter(keep).map((c) => `case mismatch: ${c}`),
+    ...(server?.missing ?? []).filter(keep).map((m) => `404: ${m}`),
   ];
   if (problems.length) {
     throw new Error(`page did not run clean (${problems.length}):\n  ` + problems.join('\n  '));

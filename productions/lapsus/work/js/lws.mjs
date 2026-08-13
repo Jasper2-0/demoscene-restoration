@@ -124,13 +124,22 @@ export function parseLWS(text) {
         else if (/^[A-Z]/.test(kw)) scene.unhandled.push(l);
     }
   }
-  // resolve ParentItem indices (LWSC v3: index into all-items parse order, 1-based
-  // per type nibble in newer versions — here plain integers; keep raw + resolved)
+  // Resolve ParentItem. LWSC v3 writes an item ID in HEX with no 0x prefix:
+  // the top nibble is the item type (1 = object, 2 = light, 3 = camera,
+  // 4 = bone) and the rest is that type's 0-based index. So `10000002` is
+  // object #2, NOT decimal 10,000,002 — reading it as decimal silently
+  // resolves every parent to nothing, which looks like "no parenting" rather
+  // than like a bug. Lapsus leans on this heavily (kuubiotekniikka parents
+  // all 32 of its objects).
+  const byType = { 1: scene.objects, 2: scene.lights, 3: scene.cameras };
   for (const it of items) {
-    if (it.parent != null) {
-      const idx = Number(it.parent);
-      it.parentItem = Number.isFinite(idx) && items[idx - 1] ? items[idx - 1] : null;
-    }
+    if (it.parent == null) continue;
+    const id = parseInt(String(it.parent).trim(), 16);
+    if (!Number.isFinite(id)) { it.parentItem = null; continue; }
+    const list = byType[(id >>> 28) & 0xf];
+    it.parentType = (id >>> 28) & 0xf;
+    it.parentIndex = id & 0x0fffffff;
+    it.parentItem = list?.[it.parentIndex] ?? null;
   }
   return scene;
 }

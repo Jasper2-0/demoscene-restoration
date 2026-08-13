@@ -64,3 +64,5 @@ productions/sonnet/work/baked/tex_2x/*
 # -- local agent config (machine-specific absolute paths) -------------------
 .claude/
 .codex/
+# Rendered comparison frames (regenerable via work/verify/frame.mjs).
+productions/lapsus/work/verify/frames/
