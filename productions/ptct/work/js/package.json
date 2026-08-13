@@ -1,0 +1,1 @@
+{"name":"ptct-bake","private":true,"type":"module","dependencies":{"canvas":"^3.2.3","puppeteer-core":"^25.4.0"}}

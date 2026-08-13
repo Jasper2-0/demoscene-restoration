@@ -1,0 +1,152 @@
+# idx  op      effect                        start      end        layer
+   0  SHOW    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) 00:00 -> 26:00  layer= 99
+   1  SHOW    id=34 ovl_grid_zoom_flash      (405b30)          10:00 -> 10:16  layer= 90
+   2  SHOW    id=34 ovl_grid_zoom_flash      (405b30)          11:52 -> 12:16  layer= 90
+   3  TRESET  id=FF -                                          at 11:56  layer= 90
+   4  TRESET  id=FF -                                          at 11:60  layer= 90
+   5  SHOW    id=34 ovl_grid_zoom_flash      (405b30)          16:00 -> 16:16  layer= 90
+   6  SHOW    id=34 ovl_grid_zoom_flash      (405b30)          26:00 -> 26:16  layer= 90
+   7  SHOW    id=34 ovl_grid_zoom_flash      (405b30)          27:00 -> 27:16  layer= 90
+   8  SHOW    id=32 ovl_white_flash_1s       (405840)          10:00 -> 10:16  layer=100
+   9  SHOW    id=32 ovl_white_flash_1s       (405840)          14:00 -> 14:16  layer=100
+  10  SHOW    id=32 ovl_white_flash_1s       (405840)          16:00 -> 16:16  layer=100
+  11  SHOW    id=32 ovl_white_flash_1s       (405840)          20:00 -> 20:16  layer=100
+  12  SHOW    id=32 ovl_white_flash_1s       (405840)          22:00 -> 22:16  layer=100
+  13  SHOW    id=32 ovl_white_flash_1s       (405840)          24:00 -> 24:16  layer=100
+  14  SHOW    id=32 ovl_white_flash_1s       (405840)          26:00 -> 26:16  layer=100
+  15  SHOW    id=32 ovl_white_flash_1s       (405840)          30:00 -> 30:16  layer=100
+  16  SHOW    id=32 ovl_white_flash_1s       (405840)          32:00 -> 32:16  layer=100
+  17  SHOW    id=36 ovl_black_flash_07       (405aa0)          08:00 -> 08:16  layer=100
+  18  SHOW    id=37 ovl_white_flash_07       (4058e0)          09:00 -> 09:16  layer=100
+  19  SHOW    id=37 ovl_white_flash_07       (4058e0)          09:32 -> 09:48  layer=101
+  20  SHOW    id=33 ovl_black_fadein         (405980)          18:00 -> 18:16  layer=100
+  21  SHOW    id=35 ovl_black_slow_veil      (405a10)          00:00 -> 10:00  layer=  9
+  22  SHOW    id=0A landscape_flyover        (init 401490, rend 4016e0) 00:00 -> 10:00  layer=  1
+  23  SHOW    id=13 credits_pixel_spray      (init 406140, rend 406660+406280) 04:00 -> 08:00  layer=  2
+  24  SHOW    id=12 title_board_ptct         (init 4091b0, rend 4092a0, trig 409410) 08:00 -> 10:00  layer=  2
+  25  SHOW    id=11 twin_warped_tubes        (init 405e70, rend 405f80) 10:00 -> 12:00  layer=  1
+  26  SHOW    id=37 ovl_white_flash_07       (4058e0)          11:00 -> 11:16  layer=100
+  27  SHOW    id=37 ovl_white_flash_07       (4058e0)          11:32 -> 11:48  layer=101
+  28  SHOW    id=10 radial_wave_pool         (init 407780, rend 4078d0, trig 4078b0) 12:00 -> 18:00  layer=  1
+  29  SHOW    id=32 ovl_white_flash_1s       (405840)          12:00 -> 12:16  layer=100
+  30  SHOW    id=15 tube_worm                (init 407bf0, rend 407e40) 12:00 -> 14:00  layer=  2
+  31  SHOW    id=18 marching_squares_blob    (init 4041a0, rend 404fb0) 14:00 -> 18:00  layer=  2
+  32  SHOW    id=20 jumping_cloth_domes      (init 408da0, rend 408f30) 18:00 -> 22:00  layer=  1
+  33  TRESET  id=FF -                                          at 20:00  layer=  1
+  34  SHOW    id=1D greetings_typewriter     (init 4017e0, rend 4019eb) 18:00 -> 22:00  layer=  7
+  35  SHOW    id=0D lightgrid_floor_ceiling  (init 4066f0, rend 4069c0, trig 406960) 22:00 -> 24:00  layer=  1
+  36  SHOW    id=21 pulsating_blob_sphere    (init 401a80, rend 401b70) 22:00 -> 24:00  layer=  2
+  37  SHOW    id=19 lissajous_tunnel_ribbon  (init 402ec0, rend 403410) 24:00 -> 26:00  layer=  1
+  38  SHOW    id=37 ovl_white_flash_07       (4058e0)          25:00 -> 25:16  layer=104
+  39  SHOW    id=37 ovl_white_flash_07       (4058e0)          25:32 -> 25:48  layer=104
+  40  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:00  param=0x0000  layer=  0
+  41  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:02  param=0x0001  layer=  0
+  42  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:04  param=0x0002  layer=  0
+  43  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:06  param=0x0003  layer=  0
+  44  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:08  param=0x0004  layer=  0
+  45  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:10  param=0x0005  layer=  0
+  46  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:12  param=0x0006  layer=  0
+  47  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:14  param=0x0007  layer=  0
+  48  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:16  param=0x0008  layer=  0
+  49  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:18  param=0x0009  layer=  0
+  50  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:20  param=0x000A  layer=  0
+  51  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:22  param=0x000B  layer=  0
+  52  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:24  param=0x000C  layer=  0
+  53  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:26  param=0x000D  layer=  0
+  54  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:28  param=0x000E  layer=  0
+  55  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:30  param=0x000F  layer=  0
+  56  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:32  param=0x0010  layer=  0
+  57  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:34  param=0x0011  layer=  0
+  58  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:36  param=0x0012  layer=  0
+  59  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:38  param=0x0013  layer=  0
+  60  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:40  param=0x0000  layer=  0
+  61  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:42  param=0x0001  layer=  0
+  62  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:44  param=0x0002  layer=  0
+  63  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:46  param=0x0003  layer=  0
+  64  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:48  param=0x0004  layer=  0
+  65  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:50  param=0x0005  layer=  0
+  66  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:52  param=0x0006  layer=  0
+  67  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:54  param=0x0007  layer=  0
+  68  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:56  param=0x0008  layer=  0
+  69  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:58  param=0x0009  layer=  0
+  70  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:60  param=0x000A  layer=  0
+  71  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 24:62  param=0x000B  layer=  0
+  72  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:00  param=0x000C  layer=  0
+  73  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:02  param=0x000D  layer=  0
+  74  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:04  param=0x000E  layer=  0
+  75  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:06  param=0x000F  layer=  0
+  76  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:08  param=0x0010  layer=  0
+  77  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:10  param=0x0011  layer=  0
+  78  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:12  param=0x0012  layer=  0
+  79  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:14  param=0x0013  layer=  0
+  80  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:16  param=0x0000  layer=  0
+  81  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:18  param=0x0001  layer=  0
+  82  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:20  param=0x0002  layer=  0
+  83  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:22  param=0x0003  layer=  0
+  84  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:24  param=0x0004  layer=  0
+  85  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:26  param=0x0005  layer=  0
+  86  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:28  param=0x0006  layer=  0
+  87  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:30  param=0x0007  layer=  0
+  88  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:32  param=0x0008  layer=  0
+  89  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:33  param=0x0009  layer=  0
+  90  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:34  param=0x000A  layer=  0
+  91  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:35  param=0x000B  layer=  0
+  92  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:36  param=0x000C  layer=  0
+  93  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:37  param=0x000D  layer=  0
+  94  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:38  param=0x000E  layer=  0
+  95  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:39  param=0x000F  layer=  0
+  96  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:40  param=0x0010  layer=  0
+  97  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:41  param=0x0011  layer=  0
+  98  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:42  param=0x0012  layer=  0
+  99  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:43  param=0x0013  layer=  0
+ 100  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:44  param=0x0000  layer=  0
+ 101  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:45  param=0x0001  layer=  0
+ 102  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:46  param=0x0002  layer=  0
+ 103  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:47  param=0x0003  layer=  0
+ 104  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:48  param=0x0004  layer=  0
+ 105  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:48  param=0x0005  layer=  0
+ 106  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:49  param=0x0006  layer=  0
+ 107  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:49  param=0x0007  layer=  0
+ 108  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:50  param=0x0008  layer=  0
+ 109  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:50  param=0x0009  layer=  0
+ 110  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:51  param=0x000A  layer=  0
+ 111  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:51  param=0x000B  layer=  0
+ 112  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:52  param=0x000C  layer=  0
+ 113  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:52  param=0x000D  layer=  0
+ 114  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:53  param=0x000E  layer=  0
+ 115  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:53  param=0x000F  layer=  0
+ 116  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:54  param=0x0010  layer=  0
+ 117  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:54  param=0x0011  layer=  0
+ 118  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:55  param=0x0012  layer=  0
+ 119  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:55  param=0x0013  layer=  0
+ 120  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:56  param=0x0000  layer=  0
+ 121  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:56  param=0x0001  layer=  0
+ 122  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:56  param=0x0002  layer=  0
+ 123  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:57  param=0x0003  layer=  0
+ 124  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:57  param=0x0004  layer=  0
+ 125  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:57  param=0x0005  layer=  0
+ 126  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:58  param=0x0006  layer=  0
+ 127  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:58  param=0x0007  layer=  0
+ 128  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:58  param=0x0008  layer=  0
+ 129  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:59  param=0x0009  layer=  0
+ 130  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:59  param=0x000A  layer=  0
+ 131  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:59  param=0x000B  layer=  0
+ 132  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:60  param=0x000C  layer=  0
+ 133  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:60  param=0x000D  layer=  0
+ 134  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:60  param=0x000E  layer=  0
+ 135  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:61  param=0x000F  layer=  0
+ 136  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:61  param=0x0010  layer=  0
+ 137  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:61  param=0x0011  layer=  0
+ 138  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:62  param=0x0012  layer=  0
+ 139  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:62  param=0x0013  layer=  0
+ 140  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:62  param=0x0000  layer=  0
+ 141  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:63  param=0x0001  layer=  0
+ 142  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:63  param=0x0002  layer=  0
+ 143  TRIG    id=3C please_it_text_flashes   (init 402330, rend 402490, trig 4021f0) at 25:63  param=0x0003  layer=  0
+ 144  SHOW    id=1E rotating_rings_bounce    (init 407470, rend 407570) 26:00 -> 27:127  layer=  1
+ 145  SHOW    id=0C triple_tube_flight       (init 408120, rend 408300) 27:63 -> 30:00  layer=  2
+ 146  SHOW    id=1F morphing_cylinder        (init 401000, rend 4013d0) 27:63 -> 30:00  layer=  3
+ 147  SHOW    id=0D lightgrid_floor_ceiling  (init 4066f0, rend 4069c0, trig 406960) 30:00 -> 32:00  layer=  1
+ 148  SHOW    id=1A spiky_blob_flower        (init 402a90, rend 402de0) 30:00 -> 32:00  layer=  2
+ 149  SHOW    id=1C streak_field             (init 4025c0, rend 402a50+402750) 32:00 -> 255:00  layer=  3
+ 150  SHOW    id=46 end_logo_fade            (rend 405d70, trig 405e60) 32:00 -> 255:00  layer=  4

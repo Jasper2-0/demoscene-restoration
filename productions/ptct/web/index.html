@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>please the cookie thing — aardbei (2000) — web restoration</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; display: flex;
+    align-items: center; justify-content: center; overflow: hidden; }
+  #frame { position: relative; overflow: hidden; background: #000; }
+  canvas { image-rendering: auto; background: #000; position: absolute; left: 0; }
+  #overlay { position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; color: #ccc; font: 16px monospace; cursor: pointer;
+    background: #000; z-index: 2; }
+</style>
+</head>
+<body>
+<div id="frame"><canvas id="screen" width="960" height="960"></canvas></div>
+<div id="overlay">loading…</div>
+<script type="module" src="js/main.js?v=6"></script>
+</body>
+</html>

@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PTCT sync calibration</title>
+<style>
+  body { margin: 0; background: #111; color: #ccc; font: 13px monospace; }
+  #wrap { padding: 12px; }
+  canvas { display: block; background: #000; border: 1px solid #333; cursor: crosshair; width: 100%; }
+  .bar { margin: 8px 0; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  button { background: #222; color: #ccc; border: 1px solid #444; padding: 4px 10px; font: inherit; cursor: pointer; }
+  button:hover { background: #333; }
+  b.lead { color: #6f6; font-size: 15px; }
+  .hint { color: #777; }
+  a { color: #8cf; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="bar">
+    <b>PTCT sync calibration</b>
+    <span class="hint">green line = sync-map row start (order 10, row 0) · orange line = your marker:
+      click the audible transient · arrows ±1 ms (shift ±10 ms) · wheel zooms · drag pans · space plays around marker</span>
+  </div>
+  <canvas id="wave" height="360"></canvas>
+  <div class="bar">
+    <button id="play">▶ play around marker (space)</button>
+    <button id="reset">reset marker to map time</button>
+    <span>marker: <span id="mt">–</span></span>
+    <span>map row start: <span id="rt">–</span></span>
+    <span>lead = map − marker: <b class="lead" id="lead">–</b></span>
+    <a id="golink" href="#">→ play demo with this lead</a>
+  </div>
+</div>
+<script type="module">
+const canvas = document.getElementById('wave');
+const actx = new AudioContext();
+const [buf, sync] = await Promise.all([
+  fetch('assets/world_of_noise.m4a').then((r) => r.arrayBuffer()).then((b) => actx.decodeAudioData(b)),
+  fetch('assets/sync_map.json').then((r) => r.json()),
+]);
+const ch = buf.getChannelData(0);
+const sr = buf.sampleRate;
+
+// target: order 10 row 0
+const target = sync.rows.find(([, o, r]) => o === 10 && r === 0);
+const tMap = target[0];
+let marker = tMap;
+let t0 = tMap - 1.5, t1 = tMap + 1.5; // view window
+
+const rowsInView = () => sync.rows.filter(([t]) => t >= t0 && t <= t1);
+
+function draw() {
+  const W = canvas.clientWidth * devicePixelRatio;
+  const H = canvas.height;
+  canvas.width = W;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+  // waveform min/max per column
+  g.fillStyle = '#39f';
+  const s0 = Math.max(0, Math.floor(t0 * sr)), s1 = Math.min(ch.length, Math.ceil(t1 * sr));
+  for (let x = 0; x < W; x++) {
+    const a = s0 + Math.floor((x / W) * (s1 - s0));
+    const b = s0 + Math.floor(((x + 1) / W) * (s1 - s0));
+    let mn = 1, mx = -1;
+    for (let i = a; i < b; i += 4) { const v = ch[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    const y0 = H / 2 - mx * (H / 2 - 4), y1 = H / 2 - mn * (H / 2 - 4);
+    g.fillRect(x, y0, 1, Math.max(1, y1 - y0));
+  }
+  const tx = (t) => ((t - t0) / (t1 - t0)) * W;
+  // row grid
+  for (const [t, o, r] of rowsInView()) {
+    g.fillStyle = r === 0 ? '#666' : '#2a2a2a';
+    g.fillRect(tx(t), 0, r % 4 === 0 ? 1.5 : 0.75, H);
+    if (r === 0) { g.fillStyle = '#888'; g.fillText(`${o}:00`, tx(t) + 3, 12); }
+  }
+  // map target (green) + marker (orange)
+  g.fillStyle = '#3f3'; g.fillRect(tx(tMap), 0, 2, H);
+  g.fillStyle = '#f93'; g.fillRect(tx(marker), 0, 2, H);
+  // readouts
+  const lead = tMap - marker;
+  document.getElementById('mt').textContent = marker.toFixed(4) + ' s';
+  document.getElementById('rt').textContent = tMap.toFixed(4) + ' s';
+  document.getElementById('lead').textContent = (lead * 1000).toFixed(1) + ' ms';
+  document.getElementById('golink').href = `index.html?lead=${lead.toFixed(4)}`;
+}
+
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  marker = t0 + ((e.clientX - rect.left) / rect.width) * (t1 - t0);
+  draw();
+});
+let dragging = null;
+canvas.addEventListener('mousedown', (e) => { dragging = { x: e.clientX, t0, t1 }; });
+window.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  const rect = canvas.getBoundingClientRect();
+  const dt = ((dragging.x - e.clientX) / rect.width) * (dragging.t1 - dragging.t0);
+  if (Math.abs(e.clientX - dragging.x) > 3) { t0 = dragging.t0 + dt; t1 = dragging.t1 + dt; draw(); }
+});
+window.addEventListener('mouseup', () => { dragging = null; });
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const f = t0 + ((e.clientX - rect.left) / rect.width) * (t1 - t0);
+  const z = e.deltaY > 0 ? 1.25 : 0.8;
+  t0 = f - (f - t0) * z; t1 = f + (t1 - f) * z;
+  draw();
+});
+window.addEventListener('keydown', (e) => {
+  const step = e.shiftKey ? 0.01 : 0.001;
+  if (e.key === 'ArrowLeft') { marker -= step; draw(); e.preventDefault(); }
+  else if (e.key === 'ArrowRight') { marker += step; draw(); e.preventDefault(); }
+  else if (e.key === ' ') { playAround(); e.preventDefault(); }
+});
+document.getElementById('reset').addEventListener('click', () => { marker = tMap; draw(); });
+
+let srcNode = null;
+function playAround() {
+  if (srcNode) { try { srcNode.stop(); } catch {} srcNode = null; return; }
+  srcNode = actx.createBufferSource();
+  srcNode.buffer = buf;
+  // soft tick at the marker: tiny oscillator burst
+  const osc = actx.createOscillator(), og = actx.createGain();
+  osc.frequency.value = 1500; og.gain.value = 0;
+  osc.connect(og).connect(actx.destination);
+  const start = Math.max(0, marker - 1.0);
+  const when = actx.currentTime + 0.05;
+  og.gain.setValueAtTime(0, when);
+  og.gain.setValueAtTime(0.4, when + (marker - start));
+  og.gain.exponentialRampToValueAtTime(0.001, when + (marker - start) + 0.06);
+  osc.start(when); osc.stop(when + (marker - start) + 0.1);
+  srcNode.connect(actx.destination);
+  srcNode.start(when, start, 2.2);
+  srcNode.onended = () => { srcNode = null; };
+}
+document.getElementById('play').addEventListener('click', playAround);
+
+new ResizeObserver(draw).observe(canvas);
+draw();
+</script>
+</body>
+</html>

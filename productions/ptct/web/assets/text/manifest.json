@@ -1,0 +1,42 @@
+{
+ "greets": [
+  "greet_00.png",
+  "greet_01.png",
+  "greet_02.png",
+  "greet_03.png",
+  "greet_04.png",
+  "greet_05.png",
+  "greet_06.png",
+  "greet_07.png",
+  "greet_08.png",
+  "greet_09.png",
+  "greet_10.png",
+  "greet_11.png",
+  "greet_12.png",
+  "greet_13.png",
+  "greet_14.png",
+  "greet_15.png",
+  "greet_16.png"
+ ],
+ "pleaseIt": "please_it.png",
+ "scale": 4,
+ "lineLens": [
+  30,
+  37,
+  0,
+  6,
+  6,
+  7,
+  3,
+  14,
+  9,
+  9,
+  4,
+  6,
+  5,
+  15,
+  13,
+  5,
+  8
+ ]
+}

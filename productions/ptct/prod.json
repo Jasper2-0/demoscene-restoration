@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "slug": "ptct",
+  "title": "Please The Cookie Thing",
+  "group": "Aardbei",
+  "kind": "restoration",
+  "platform": "Browser, Windows",
+  "releaseDate": "2000-03-11",
+  "party": {
+    "name": null,
+    "compo": null,
+    "ranking": null
+  },
+  "ids": {
+    "demozoo": 25088,
+    "pouet": 232
+  },
+  "links": {
+    "demozoo": "https://demozoo.org/productions/25088/",
+    "pouet": "https://www.pouet.net/prod.php?which=232",
+    "youtube": "https://www.youtube.com/watch?v=npSYB1r3GVk"
+  },
+  "credits": [
+    {
+      "name": "Crystal Score",
+      "role": "Music"
+    },
+    {
+      "name": "Oyise",
+      "role": "Graphics"
+    },
+    {
+      "name": "Ile",
+      "role": "Code"
+    },
+    {
+      "name": "Rob",
+      "role": "Code"
+    },
+    {
+      "name": "Snq",
+      "role": "Code"
+    },
+    {
+      "name": "Balance",
+      "role": "Other"
+    },
+    {
+      "name": "Inopia",
+      "role": "Code"
+    },
+    {
+      "name": "Coat",
+      "role": "Code"
+    }
+  ],
+  "originals": [
+    {
+      "path": "originals/aardbei/ptct/aardbei_ptct.zip",
+      "urls": [
+        "https://files.scene.org/get/demos/groups/aardbei/aardbei_ptct.zip"
+      ],
+      "sha256": "da7e6749087d134784339227f622a0f0ba9750fbc436a68c83235d96e7176602",
+      "bytes": 74381,
+      "note": "final version"
+    },
+    {
+      "path": "originals/aardbei/ptct/pleasethecookiething.zip",
+      "urls": [
+        "https://files.scene.org/get/parties/2000/ambience00/in64/pleasethecookiething.zip"
+      ],
+      "sha256": "30f0de79ba2802f4a0b712f328263bd174bde8e6228b1bd8bfc2e5dd69288550",
+      "bytes": 65875,
+      "note": "party version"
+    }
+  ],
+  "captures": [
+    {
+      "youtube": "ycmgjZLU0xQ",
+      "path": "productions/ptct/work/reference/ptct_reference.mkv",
+      "format": "bestvideo+bestaudio",
+      "sha256": "fa8cbb847b5c84a606c9545589d9bd2bec417b156e6e51e315f4aab32f2391fa",
+      "alignmentOffsetMs": 4431,
+      "note": "video time = music time + 4.431 s (audio cross-correlation vs baked world_of_noise render)"
+    }
+  ],
+  "status": {
+    "web": "published",
+    "pagesRepo": "ptct-webgl"
+  }
+}
