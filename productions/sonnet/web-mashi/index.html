@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sonnet — threestate (Assembly 2001, 64k intro)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #screen { display: block; image-rendering: auto; background: #000; }
+  #overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #c9cdd0; background: #000; cursor: pointer; z-index: 2;
+    font: 300 1.1rem/1.4 "Times New Roman", Times, serif; letter-spacing: .35em;
+  }
+  #stats {
+    position: fixed; left: 8px; top: 8px; z-index: 3; color: #7fa7d7;
+    font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="screen" width="640" height="480"></canvas>
+<div id="overlay">click to start<br>
+  <span style="font-size:.62em;opacity:.62;line-height:1.7">
+    then <b>1&ndash;9,0</b> jump to scenes &nbsp;&middot;&nbsp; <b>[ ]</b> &plusmn;1 order
+    &nbsp;&middot;&nbsp; <b>, .</b> &plusmn;8 rows<br>
+    or boot straight in with <b>?start=beach</b>
+  </span></div>
+<div id="stats"></div>
+<!--
+  The audio port (audio/*.mjs) rebuilds the module from the intro's own four
+  embedded streams instead of downloading the 1.5 MB XM, and it was written for
+  Node: it imports `node:fs` and works in `Buffer`. Those files belong to the audio
+  work, so rather than porting them the browser is given the two facilities they
+  need — see js/node_compat.js. This map is what makes their static
+  `import { readFileSync } from 'node:fs'` resolve.
+-->
+<script type="importmap">
+{ "imports": { "node:fs": "./js/node_fs.js" } }
+</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

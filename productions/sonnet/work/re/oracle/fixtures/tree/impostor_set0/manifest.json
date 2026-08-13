@@ -1,0 +1,70 @@
+{
+ "target": "tree",
+ "case": "impostor_set0",
+ "fn_va": "0x409d45",
+ "call": {
+  "convention": "thiscall",
+  "args": [
+   "node",
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   "0x3f800000",
+   "0x41200000",
+   "0x3f400000",
+   1,
+   "0x40000000"
+  ]
+ },
+ "fpcw": "0x27f",
+ "seed_before": "0xb9583054",
+ "seed_after": "0xdedf2c8d",
+ "image": {
+  "path": "unpacked/sonnet_img.bin",
+  "sha256": "66dea2fd173e0b81de5be7f54d7d611bed50be75e5b00ec4f907f26b8e037770"
+ },
+ "emulator": {
+  "unicorn": "2.1.4",
+  "host": "darwin-arm64",
+  "note": "x87 arithmetic softfloat-80 honouring FPCW; transcendentals via host libm double"
+ },
+ "dumps": [
+  {
+   "name": "branches",
+   "file": "branches.bin",
+   "size": 360096,
+   "sha256": "2f8820174912f43420b8ad95cf206ea2d783f5b6207bef3eade9c83febbea2bb"
+  },
+  {
+   "name": "leaves",
+   "file": "leaves.bin",
+   "size": 467808,
+   "sha256": "1a75445c82b0b666d12a6009d921ef8959c070d1cda50bf7da46d23c55eae362"
+  }
+ ],
+ "rand_writes": 211156,
+ "branchVerts": 8184,
+ "leafVerts": 10632,
+ "bbox": {
+  "lo": [
+   -105.86023712158203,
+   0.0,
+   -108.33646392822266
+  ],
+  "hi": [
+   113.66509246826172,
+   195.8740692138672,
+   108.46434020996094
+  ]
+ },
+ "stride": 44,
+ "expected_seed_after": "0x35f508ed",
+ "seed_check": "PASS",
+ "cold_chain_seed_after": "0xa661ec3b",
+ "cold_chain_expected": "0xa661ec3b",
+ "cold_chain_check": "PASS"
+}

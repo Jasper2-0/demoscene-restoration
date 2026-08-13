@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>sonnet — generated asset viewer</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #101014; color: #cfd2da; font: 13px/1.45 ui-monospace, Menlo, monospace;
+         display: grid; grid-template-columns: 250px 1fr; height: 100vh; overflow: hidden; }
+  #side { border-right: 1px solid #26262e; overflow-y: auto; padding: 10px 0; }
+  #side h1 { font-size: 13px; margin: 2px 12px 8px; color: #e8e9ee; }
+  #side h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #7c8090;
+             margin: 14px 12px 4px; }
+  #side button.item { display: block; width: 100%; text-align: left; background: none; border: 0;
+             color: #cfd2da; padding: 3px 12px; font: inherit; cursor: pointer; }
+  #side button.item:hover { background: #1b1b22; }
+  #side button.item.active { background: #24304a; color: #fff; }
+  #main { display: flex; flex-direction: column; min-width: 0; }
+  #bar { display: flex; gap: 14px; align-items: center; padding: 8px 14px;
+         border-bottom: 1px solid #26262e; flex-wrap: wrap; }
+  #bar label { display: inline-flex; gap: 5px; align-items: center; color: #9aa0ae; }
+  #bar .name { color: #fff; font-weight: 600; margin-right: auto; }
+  #stage { flex: 1; position: relative; overflow: auto; display: grid; place-items: center; }
+  #stage.threeD { overflow: hidden; }
+  #tex2d { image-rendering: pixelated; box-shadow: 0 0 0 1px #33333d; }
+  #tex2d.checker { background:
+      repeating-conic-gradient(#3a3a44 0% 25%, #2a2a33 0% 50%) 0 0 / 16px 16px; }
+  #gl { width: 100%; height: 100%; display: block; cursor: grab; }
+  #gl:active { cursor: grabbing; }
+  #stats { padding: 6px 14px; border-top: 1px solid #26262e; color: #9aa0ae; white-space: pre-wrap; }
+  #err { color: #ff7a76; padding: 8px 14px; white-space: pre-wrap; display: none; }
+  select, input[type=range] { accent-color: #5b8def; background: #1b1b22; color: inherit;
+         border: 1px solid #33333d; border-radius: 3px; }
+</style>
+</head>
+<body>
+<nav id="side"><h1>generated assets</h1></nav>
+<div id="main">
+  <div id="bar">
+    <span class="name" id="assetName">—</span>
+    <label id="scaleWrap">scale <select id="scaleSel"><option>1</option><option>2</option><option>4</option></select></label>
+    <label id="zoomWrap">zoom <select id="zoomSel"><option>1</option><option selected>2</option><option>4</option><option>8</option></select></label>
+    <label id="checkerWrap"><input type="checkbox" id="checker" checked> alpha checker</label>
+    <label id="wireWrap" style="display:none"><input type="checkbox" id="wire"> wireframe</label>
+    <label id="texWrap" style="display:none"><input type="checkbox" id="texOn" checked> textured</label>
+    <label id="seedWrap" style="display:none">seed <select id="seedSel"></select></label>
+    <button id="bakeCam" style="display:none">impostor bake camera</button>
+    <label id="passWrap" style="display:none">passes <select id="passSel"><option>10</option><option>5</option><option>1</option></select></label>
+    <label id="lsWrap" style="display:none">leafSize <select id="lsSel"><option>2</option><option>1</option></select></label>
+    <label id="arWrap" style="display:none">alphaRef <select id="arSel"><option>240</option><option>128</option><option>8</option></select></label>
+  </div>
+  <div id="stage"><canvas id="tex2d"></canvas><canvas id="gl" style="display:none"></canvas></div>
+  <div id="err"></div>
+  <div id="stats">pick an asset on the left</div>
+</div>
+
+<script type="module">
+import { RESOURCES } from '../../work/js/resources.mjs';
+import { runTexgen } from '../../work/js/texgen.mjs';
+import * as MG from '../../work/js/meshgen.mjs';
+import { decodeSceneDescriptor, DESC_RES_MAP } from '../../work/js/scene_desc.mjs';
+
+// Debug/experiment surface: lets a harness mutate MG.TREE constants between
+// simulator runs (reverse parameter search — see re/scenes/TREE_IMPOSTOR.md).
+globalThis.MG = MG;
+globalThis.__render = () => render();
+
+const $ = (id) => document.getElementById(id);
+const err = (m) => { const e = $('err'); e.style.display = 'block'; e.textContent += m + '\n'; };
+addEventListener('error', (e) => err(e.message));
+addEventListener('unhandledrejection', (e) => err(String(e.reason)));
+
+// ---------------------------------------------------------------------------
+// Asset registry
+// ---------------------------------------------------------------------------
+const SCENE_NAMES = ['0 spires', '1 lakes', '2 forest', '3 cloud sea',
+                     '4 beach', '5 autumn', '6 winter', '7 finale'];
+const descs = SCENE_NAMES.map((_, i) => decodeSceneDescriptor(RESOURCES[0x1c + DESC_RES_MAP[i]], i));
+
+const TEX_NOTES = { 0: 'bark (tree branches)', 1: 'leaf', 2: 'spire sphere map', 3: 'snow ground',
+  4: 'rain ground', 5: 'lens droplet', 6: 'precip rain', 7: 'cloud', 8: 'ribbon', 9: 'bird s1',
+  10: 'bird s0', 11: 'font atlas (op 17 — black in texgen; see baked PNG)', 13: 'water',
+  14: 'flare', 15: 'precip snow', 16: 'detail map', 17: 'terrain cross-fade (scene 1)',
+  22: 'HEIGHTMAP (data)', 23: 'HEIGHTMAP (data)', 24: 'HEIGHTMAP (data)', 25: 'HEIGHTMAP (data)' };
+
+// runTexgen returns {width, height, rgba: Uint8ClampedArray} — same adapter
+// shape as scene7.js's texgenImage, minus its cache semantics.
+function texImage(id, scale = 1) {
+  const r = runTexgen(RESOURCES[id], scale === 1 ? {} : { scale });
+  return { w: r.width, h: r.height, rgba: r.rgba };
+}
+
+const assets = [];
+for (let i = 0; i < 28; i++) {
+  assets.push({ kind: '2d', group: 'textures (texgen VM)',
+                name: `tex ${i}${TEX_NOTES[i] ? ' — ' + TEX_NOTES[i] : ''}`,
+                make: (scale) => texImage(i, scale) });
+}
+assets.push({ kind: 'img', group: 'textures (texgen VM)', name: 'font atlas (baked 2x PNG)',
+              url: '../../work/baked/tex_2x/11.png' });
+
+// -- meshes ------------------------------------------------------------------
+function treeAsset(name, params, note, instScale = 1) {
+  return { kind: '3d', group: 'meshes', name, seedable: true, note,
+    make: (seed) => {
+      const t = MG.buildTree({ ...params, seed });
+      const bark = texTexture(0), leaf = texTexture(1);
+      t.branches.material = { tex: bark };
+      t.leaves.material = { tex: leaf, alphaRef: 0xf0 / 255 };
+      for (const m of [t.branches, t.leaves]) m.scale = [instScale, instScale, instScale];
+      return { meshes: [t.branches, t.leaves], extra: `nodes ${t.nodes}` };
+    } };
+}
+assets.push(treeAsset('tree — impostor bake params',
+  { branchRadius: 10, levelTaper: 0.75, leafSize: 2.0, bend: [0, 0, 0] },
+  'FUN_0040abed: radius 10, taper 0.75, leafSize 2.0 — the tree every scene-2/7/8/9 billboard is baked from'));
+{
+  const r = descs[5].arrays.E[0];
+  assets.push(treeAsset('tree — autumn (scene 5 record)',
+    { branchRadius: r.branchRadius, levelTaper: r.levelTaper, bend: r.bend, leafSize: 1.0 },
+    `array-E record: radius ${r.branchRadius}, taper ${r.levelTaper.toFixed(3)}, bend [${r.bend.map(x => x.toFixed(3))}], instance scale ${r.scale}`,
+    r.scale));
+}
+for (let i = 0; i < 8; i++) {
+  assets.push({ kind: '3d', group: 'meshes', name: `terrain — scene ${SCENE_NAMES[i]}`,
+    make: () => {
+      const d = descs[i];
+      const hm = texImage(d.heightmapTexProg, 1);
+      const hmap = new Int32Array(128 * 128);
+      // scene7.js reads `argb[k] & 0xff` = the BLUE channel; in rgba bytes that
+      // is offset 2.
+      for (let k = 0; k < hmap.length; k++) hmap[k] = hm.rgba[k * 4 + 2];
+      const t = MG.buildTerrain(hmap, d.terrainGridN, d.terrainScale);
+      return { meshes: [t.mesh],
+               extra: `heightmap prog ${d.heightmapTexProg}, N ${d.terrainGridN}, scale [${d.terrainScale}]` };
+    } });
+}
+assets.push({ kind: '3d', group: 'meshes', name: 'water plane — coarse 4x4',
+  make: () => ({ meshes: [MG.buildWaterPlane(false, [3, 0.5, 3])] }) });
+assets.push({ kind: '3d', group: 'meshes', name: 'water plane — hi-res 32x32',
+  make: () => ({ meshes: [MG.buildWaterPlane(true, [3, 0.5, 3])] }) });
+assets.push({ kind: '3d', group: 'meshes', name: 'dandelion (compound prop FUN_0040c721)',
+  seedable: true,
+  make: (seed) => {
+    if (seed !== undefined) MG.srand(seed);
+    const d = MG.buildDandelion();
+    d.stem.material = { tex: texTexture(3) };
+    d.twigs.material = { tex: texTexture(3) };
+    d.leaves.material = { tex: texTexture(4) };
+    return { meshes: [d.stem, d.twigs, d.leaves],
+             extra: 'stem 0..50, head at y 50; additive twig/leaf alpha 0x5f/0x2f' };
+  } });
+assets.push({ kind: 'sim', group: 'experiments', name: 'impostor bake SIMULATION (FUN_0040abed)',
+  seedable: true });
+
+// ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+const side = $('side');
+let curBtn = null;
+let lastGroup = null;
+assets.forEach((a, idx) => {
+  if (a.group !== lastGroup) {
+    const h = document.createElement('h2'); h.textContent = a.group; side.appendChild(h);
+    lastGroup = a.group;
+  }
+  const b = document.createElement('button');
+  b.className = 'item'; b.textContent = a.name;
+  b.onclick = () => { if (curBtn) curBtn.classList.remove('active');
+                      curBtn = b; b.classList.add('active'); show(idx); };
+  side.appendChild(b);
+});
+
+// ---------------------------------------------------------------------------
+// 2D texture display
+// ---------------------------------------------------------------------------
+function imageDataOf(img) {
+  return new ImageData(img.rgba, img.w, img.h);
+}
+
+// GL textures for the mesh viewer, from texgen output (cached per id).
+const texCache = new Map();
+function texTexture(id) {
+  if (!texCache.has(id)) texCache.set(id, { img: texImage(id, 1) });
+  return texCache.get(id);
+}
+
+// ---------------------------------------------------------------------------
+// Mesh viewer (raw WebGL2, orbit camera)
+// ---------------------------------------------------------------------------
+const glc = $('gl');
+const gl = glc.getContext('webgl2', { antialias: true });
+const VS = `#version 300 es
+layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNrm;
+layout(location=2) in vec4 aCol; layout(location=3) in vec2 aUV;
+uniform mat4 uMVP; uniform vec3 uScale; uniform vec3 uOff;
+uniform float uYaw;                       // bake sim: leaf-mesh Ry, about origin
+out vec3 vNrm; out vec4 vCol; out vec2 vUV;
+void main() {
+  float c = cos(uYaw), s = sin(uYaw);
+  vec3 p = aPos * uScale;
+  p = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c) + uOff;
+  gl_Position = uMVP * vec4(p, 1.0);
+  vec3 n = aNrm / max(uScale, vec3(1e-6));
+  vNrm = normalize(vec3(n.x * c - n.z * s, n.y, n.x * s + n.z * c));
+  vCol = vec4(aCol.zyx, aCol.w);          // D3D BGRA byte order
+  vUV = aUV;
+}`;
+const FS = `#version 300 es
+precision highp float;
+in vec3 vNrm; in vec4 vCol; in vec2 vUV; out vec4 o;
+uniform sampler2D uTex; uniform bool uTextured; uniform float uAlphaRef;
+uniform vec3 uEye; uniform bool uFlat;
+void main() {
+  vec4 base = vCol;
+  if (uTextured) base *= texture(uTex, vUV);
+  if (base.a < uAlphaRef) discard;
+  if (uFlat) { o = vec4(base.rgb, 1.0); return; }
+  vec3 n = normalize(vNrm);
+  float l = 0.45 + 0.55 * abs(dot(n, normalize(uEye)));
+  o = vec4(base.rgb * l, 1.0);
+}`;
+function shader(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, shader(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+const U = {}; for (const n of ['uMVP','uScale','uOff','uTex','uTextured','uAlphaRef','uEye','uFlat','uYaw'])
+  U[n] = gl.getUniformLocation(prog, n);
+
+const cam = { yaw: 0.7, pitch: 0.35, dist: 500, target: [0, 60, 0] };
+// FUN_0040abed's exact framing: eye (0,128,-150), at (0,128,0), fov 90 deg,
+// aspect 1 — engaged by the "impostor bake camera" button, cleared by dragging.
+let fixedCam = null;
+let scene3d = null;      // {draws: [...], bbox, extra}
+
+function uploadMesh(m) {
+  const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  const vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+  gl.bufferData(gl.ARRAY_BUFFER, m.verts.subarray(0, m.vertexCount * MG.VERTEX_FLOATS), gl.STATIC_DRAW);
+  const S = MG.VERTEX_STRIDE;
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 12);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, S, 24);
+  gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, S, 28);
+  const idx = m.indices.subarray ? m.indices.subarray(0, m.triCount * 3) : m.indices;
+  const wide = idx.BYTES_PER_ELEMENT === 4;
+  const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  // line list for wireframe
+  const lines = new (wide ? Uint32Array : Uint16Array)(m.triCount * 6);
+  for (let t = 0; t < m.triCount; t++) {
+    const a = idx[t * 3], b = idx[t * 3 + 1], c = idx[t * 3 + 2];
+    lines.set([a, b, b, c, c, a], t * 6);
+  }
+  const wvao = gl.createVertexArray(); gl.bindVertexArray(wvao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 12);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, S, 24);
+  gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, S, 28);
+  const lb = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, lb);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, lines, gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  let glTex = null;
+  if (m.material && m.material.tex) {
+    const entry = m.material.tex;
+    if (!entry.glTex) {
+      const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+      const b = entry.img.rgba;
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, entry.img.w, entry.img.h, 0, gl.RGBA,
+                    gl.UNSIGNED_BYTE, new Uint8Array(b.buffer, b.byteOffset, b.byteLength));
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      entry.glTex = t;
+    }
+    glTex = entry.glTex;
+  }
+  return { vao, wvao, vb, count: m.triCount * 3, lineCount: m.triCount * 6,
+           wide, glTex, alphaRef: (m.material && m.material.alphaRef) || 0,
+           scale: m.scale.slice(), off: m.pos.slice(), name: m.name, mesh: m };
+}
+
+function bboxOf(meshes) {
+  const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9], per = [];
+  for (const m of meshes) {
+    const l = [1e9, 1e9, 1e9], h = [-1e9, -1e9, -1e9];
+    for (let i = 0; i < m.vertexCount; i++) {
+      for (let k = 0; k < 3; k++) {
+        const v = m.verts[i * MG.VERTEX_FLOATS + k] * m.scale[k] + m.pos[k];
+        if (v < l[k]) l[k] = v; if (v > h[k]) h[k] = v;
+        if (v < lo[k]) lo[k] = v; if (v > hi[k]) hi[k] = v;
+      }
+    }
+    per.push({ name: m.name, lo: l, hi: h, verts: m.vertexCount, tris: m.triCount });
+  }
+  return { lo, hi, per };
+}
+
+function mat4Persp(fovY, aspect, near, far) {
+  const f = 1 / Math.tan(fovY / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+function mat4LookMul(p) {
+  // view from orbit params, then multiply into projection (column-major p * v)
+  const { yaw, pitch, dist, target } = cam;
+  const cx = Math.cos(pitch), sx = Math.sin(pitch), cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const eye = [target[0] + dist * cx * sy, target[1] + dist * sx, target[2] + dist * cx * cy];
+  const zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2];
+  const zl = Math.hypot(zx, zy, zz), z = [zx / zl, zy / zl, zz / zl];
+  const x = [z[2], 0, -z[0]]; const xl = Math.hypot(...x) || 1; x[0] /= xl; x[2] /= xl;
+  const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+  const v = [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0,
+             -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]),
+             -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
+             -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]), 1];
+  const o = new Array(16);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    let s = 0; for (let k = 0; k < 4; k++) s += p[k * 4 + j] * v[i * 4 + k];
+    o[i * 4 + j] = s;
+  }
+  return { mvp: o, eye };
+}
+
+function lookAtMul(p, eye, at) {
+  const saved = { ...cam, target: cam.target.slice() };
+  const dx = eye[0] - at[0], dy = eye[1] - at[1], dz = eye[2] - at[2];
+  cam.dist = Math.hypot(dx, dy, dz);
+  cam.pitch = Math.asin(dy / cam.dist);
+  cam.yaw = Math.atan2(dx, dz);
+  cam.target = at.slice();
+  const r = mat4LookMul(p);
+  Object.assign(cam, saved);
+  return r;
+}
+
+function draw3d() {
+  if (!scene3d) return;
+  const dpr = devicePixelRatio || 1;
+  const w = glc.clientWidth * dpr | 0, h = glc.clientHeight * dpr | 0;
+  if (glc.width !== w || glc.height !== h) { glc.width = w; glc.height = h; }
+  gl.clearColor(0.075, 0.075, 0.09, 1);
+  gl.viewport(0, 0, w, h);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+  let mvp, eye;
+  if (fixedCam) {
+    // square viewport, exact bake projection
+    const s = Math.min(w, h);
+    gl.viewport((w - s) >> 1, (h - s) >> 1, s, s);
+    gl.enable(gl.SCISSOR_TEST); gl.scissor((w - s) >> 1, (h - s) >> 1, s, s);
+    gl.clearColor(0.13, 0.11, 0.16, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.disable(gl.SCISSOR_TEST);
+    ({ mvp, eye } = lookAtMul(mat4Persp(Math.PI / 2, 1.0, 1.0, 1000.0), fixedCam.eye, fixedCam.at));
+  } else {
+    ({ mvp, eye } = mat4LookMul(mat4Persp(Math.PI / 4, w / h, 1, cam.dist * 20 + 2000)));
+  }
+  gl.useProgram(prog);
+  gl.uniformMatrix4fv(U.uMVP, false, new Float32Array(mvp));
+  gl.uniform3fv(U.uEye, new Float32Array(eye));
+  const wire = $('wire').checked, texOn = $('texOn').checked;
+  for (const d of scene3d.draws) {
+    gl.uniform3fv(U.uScale, new Float32Array(d.scale));
+    gl.uniform3fv(U.uOff, new Float32Array(d.off));
+    gl.uniform1f(U.uAlphaRef, texOn ? d.alphaRef : 0);
+    gl.uniform1i(U.uTextured, texOn && d.glTex ? 1 : 0);
+    gl.uniform1i(U.uFlat, 0);
+    gl.uniform1f(U.uYaw, 0);
+    if (d.glTex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, d.glTex); gl.uniform1i(U.uTex, 0); }
+    gl.bindVertexArray(d.vao);
+    gl.drawElements(gl.TRIANGLES, d.count, d.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
+    if (wire) {
+      gl.uniform1i(U.uTextured, 0); gl.uniform1i(U.uFlat, 1); gl.uniform1f(U.uAlphaRef, 0);
+      gl.bindVertexArray(d.wvao);
+      gl.drawElements(gl.LINES, d.lineCount, d.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
+    }
+  }
+  gl.bindVertexArray(null);
+}
+
+// ---------------------------------------------------------------------------
+// Impostor bake simulation — FUN_0040abed's set-0 protocol into a 512 FBO:
+// one clear, then pass 0 = leaves only (lit, ambient 0x3f3f3f3f), passes 1..9 =
+// branches + leaf mesh re-yawed rand01()*2PI with fresh per-quad greys, unlit.
+// Camera: eye (0,128,-150) (k = 0), at (0,128,0), fov 90 deg, aspect 1.
+// ---------------------------------------------------------------------------
+let simFbo = null;
+function simulateBake({ passes, leafSize, alphaRef, seed }) {
+  const SZ = 512;
+  if (!simFbo) {
+    const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SZ, SZ, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    const rb = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, SZ, SZ);
+    const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+    simFbo = { fb, tex };
+  }
+  const t = MG.buildTree({ branchRadius: 10, levelTaper: 0.75, bend: [0, 0, 0], leafSize, seed });
+  t.branches.material = { tex: texTexture(0) };
+  t.leaves.material = { tex: texTexture(1), alphaRef: alphaRef / 255 };
+  const dB = uploadMesh(t.branches), dL = uploadMesh(t.leaves);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo.fb);
+  gl.viewport(0, 0, SZ, SZ);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+  const { mvp, eye } = lookAtMul(mat4Persp(Math.PI / 2, 1.0, 1.0, 1000.0),
+                                 [0, 128, -150], [0, 128, 0]);
+  gl.useProgram(prog);
+  gl.uniformMatrix4fv(U.uMVP, false, new Float32Array(mvp));
+  gl.uniform3fv(U.uEye, new Float32Array(eye));
+  gl.uniform1f(U.uAlphaRef, 0);
+  gl.uniform1i(U.uTex, 0); gl.activeTexture(gl.TEXTURE0);
+
+  const drawOne = (d, yaw, flat) => {
+    gl.uniform3fv(U.uScale, new Float32Array(d.scale));
+    gl.uniform3fv(U.uOff, new Float32Array(d.off));
+    gl.uniform1f(U.uYaw, yaw);
+    gl.uniform1i(U.uFlat, flat ? 1 : 0);
+    gl.uniform1i(U.uTextured, 1);
+    gl.uniform1f(U.uAlphaRef, d.alphaRef || 0);
+    gl.bindTexture(gl.TEXTURE_2D, d.glTex);
+    gl.bindVertexArray(d.vao);
+    gl.drawElements(gl.TRIANGLES, d.count, d.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
+  };
+
+  for (let p = 0; p < passes; p++) {
+    if (passes > 1 && p === 0) {
+      drawOne(dL, 0, false);                       // leaves only, lit
+    } else if (passes > 1) {
+      // fresh grey per leaf QUAD (rand01()*127 + 128, ftol), alpha FF
+      const V = t.leaves, n = V.vertexCount >> 2;
+      const yaw = MG.rand01() * 2 * Math.PI;
+      for (let q = 0; q < n; q++) {
+        const g = Math.trunc(MG.rand01() * 127 + 128) & 0xff;
+        const c = (0xff000000 | (g << 16) | (g << 8) | g) >>> 0;
+        for (let j = 0; j < 4; j++) V.setColor(q * 4 + j, c);
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, dL.vb);
+      gl.bufferData(gl.ARRAY_BUFFER, V.verts.subarray(0, V.vertexCount * MG.VERTEX_FLOATS), gl.STATIC_DRAW);
+      drawOne(dB, 0, true);                        // branches, unlit (ambient -1)
+      drawOne(dL, yaw, true);                      // yawed grey leaf cloud
+    } else {
+      drawOne(dB, 0, false); drawOne(dL, 0, false);
+    }
+  }
+
+  const px = new Uint8Array(SZ * SZ * 4);
+  gl.readPixels(0, 0, SZ, SZ, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  // stats: opaque coverage + margins (GL rows are bottom-up; flip for display)
+  let n = 0; const lo = [SZ, SZ], hi = [-1, -1];
+  const img = new ImageData(SZ, SZ);
+  for (let y = 0; y < SZ; y++) {
+    const src = (SZ - 1 - y) * SZ * 4;
+    img.data.set(px.subarray(src, src + SZ * 4), y * SZ * 4);
+    for (let x = 0; x < SZ; x++) {
+      if (px[src + x * 4 + 3] > 8) {
+        n++;
+        if (x < lo[0]) lo[0] = x; if (y < lo[1]) lo[1] = y;
+        if (x > hi[0]) hi[0] = x; if (y > hi[1]) hi[1] = y;
+      }
+    }
+  }
+  return { img,
+    stats: `coverage ${(100 * n / (SZ * SZ)).toFixed(1)}%   content x ${lo[0]}..${hi[0]}  y ${lo[1]}..${hi[1]}` +
+           `   margins L ${lo[0]} R ${SZ - 1 - hi[0]} T ${lo[1]} B ${SZ - 1 - hi[1]} px` };
+}
+
+let dragging = false, lx = 0, ly = 0;
+glc.addEventListener('pointerdown', (e) => { dragging = true; lx = e.clientX; ly = e.clientY; glc.setPointerCapture(e.pointerId); });
+glc.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY;
+  fixedCam = null;
+  if (e.shiftKey) {
+    const s = cam.dist * 0.002;
+    cam.target[1] += dy * s;
+    cam.target[0] -= dx * s * Math.cos(cam.yaw); cam.target[2] += dx * s * Math.sin(cam.yaw);
+  } else {
+    cam.yaw -= dx * 0.008; cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.008));
+  }
+  requestAnimationFrame(draw3d);
+});
+glc.addEventListener('pointerup', () => dragging = false);
+glc.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  cam.dist = Math.max(5, cam.dist * (e.deltaY > 0 ? 1.12 : 0.89));
+  requestAnimationFrame(draw3d);
+}, { passive: false });
+new ResizeObserver(() => requestAnimationFrame(draw3d)).observe(glc);
+
+// ---------------------------------------------------------------------------
+// Show an asset
+// ---------------------------------------------------------------------------
+const SEEDS = [1, 2, 3, 0x2be15a5b];
+$('seedSel').innerHTML = SEEDS.map((s) => `<option>${s}</option>`).join('');
+let cur = null;
+
+function fmt(v) { return v.map((x) => x.toFixed(1)).join(', '); }
+
+function show(idx) {
+  cur = assets[idx];
+  $('assetName').textContent = cur.name;
+  const is3d = cur.kind === '3d';
+  $('tex2d').style.display = is3d ? 'none' : 'block';
+  $('gl').style.display = is3d ? 'block' : 'none';
+  $('stage').classList.toggle('threeD', is3d);
+  const isSim = cur.kind === 'sim';
+  for (const [id, on] of [['scaleWrap', cur.kind === '2d'], ['zoomWrap', !is3d],
+                          ['checkerWrap', !is3d], ['wireWrap', is3d], ['texWrap', is3d],
+                          ['seedWrap', (is3d || isSim) && cur.seedable],
+                          ['bakeCam', is3d && cur.seedable],
+                          ['passWrap', isSim], ['lsWrap', isSim], ['arWrap', isSim]])
+    $(id).style.display = on ? '' : 'none';
+  fixedCam = null;
+  render();
+}
+
+function render() {
+  if (!cur) return;
+  const t0 = performance.now();
+  try {
+    if (cur.kind === 'img') {
+      const im = new Image();
+      im.onload = () => {
+        const c = $('tex2d'); c.width = im.width; c.height = im.height;
+        const zoom = +$('zoomSel').value;
+        c.style.width = im.width * zoom + 'px';
+        c.getContext('2d').drawImage(im, 0, 0);
+        c.classList.toggle('checker', $('checker').checked);
+        $('stats').textContent = `${im.width} x ${im.height} (baked PNG)`;
+      };
+      im.src = cur.url;
+    } else if (cur.kind === 'sim') {
+      const r = simulateBake({ passes: +$('passSel').value, leafSize: +$('lsSel').value,
+                               alphaRef: +$('arSel').value, seed: +$('seedSel').value });
+      const c = $('tex2d'); c.width = r.img.width; c.height = r.img.height;
+      c.getContext('2d').putImageData(r.img, 0, 0);
+      c.style.width = (r.img.width * +$('zoomSel').value) / 2 + 'px';
+      c.classList.toggle('checker', $('checker').checked);
+      $('stats').textContent = r.stats +
+        `\nprotocol: clear once -> pass 0 leaves lit -> passes 1..N-1 branches+yawed grey leaf cloud (unlit)` +
+        `\nreference target: compact tree, margins on ALL four sides (REVIEW_FIXES §3 / video 0x1210)`;
+    } else if (cur.kind === '2d') {
+      const scale = +$('scaleSel').value;
+      const img = cur.make(scale);
+      const c = $('tex2d'); c.width = img.w; c.height = img.h;
+      c.getContext('2d').putImageData(imageDataOf(img), 0, 0);
+      const zoom = +$('zoomSel').value;
+      c.style.width = img.w * zoom + 'px';
+      c.classList.toggle('checker', $('checker').checked);
+      $('stats').textContent =
+        `${img.w} x ${img.h} @ ${scale}x — generated in ${(performance.now() - t0).toFixed(1)} ms`;
+    } else {
+      const seed = cur.seedable ? +$('seedSel').value : undefined;
+      const r = cur.make(seed);
+      const bb = bboxOf(r.meshes);
+      scene3d = { draws: r.meshes.map(uploadMesh) };
+      const c = [(bb.lo[0] + bb.hi[0]) / 2, (bb.lo[1] + bb.hi[1]) / 2, (bb.lo[2] + bb.hi[2]) / 2];
+      const rad = Math.hypot(bb.hi[0] - bb.lo[0], bb.hi[1] - bb.lo[1], bb.hi[2] - bb.lo[2]) / 2;
+      cam.target = c; cam.dist = Math.max(10, rad * 2.4);
+      const per = bb.per.map((p) =>
+        `  ${p.name}: ${p.verts} v / ${p.tris} t   x ${p.lo[0].toFixed(1)}..${p.hi[0].toFixed(1)}` +
+        `  y ${p.lo[1].toFixed(1)}..${p.hi[1].toFixed(1)}  z ${p.lo[2].toFixed(1)}..${p.hi[2].toFixed(1)}`).join('\n');
+      $('stats').textContent =
+        `bbox lo [${fmt(bb.lo)}]  hi [${fmt(bb.hi)}]  (${(performance.now() - t0).toFixed(0)} ms` +
+        `${r.extra ? ', ' + r.extra : ''})${cur.note ? '\n' + cur.note : ''}\n${per}`;
+      requestAnimationFrame(draw3d);
+    }
+  } catch (e) { err(e.stack || String(e)); }
+}
+
+for (const id of ['scaleSel', 'zoomSel', 'checker', 'wire', 'texOn', 'seedSel',
+                  'passSel', 'lsSel', 'arSel'])
+  $(id).addEventListener('change', render);
+$('bakeCam').addEventListener('click', () => {
+  fixedCam = { eye: [0, 128, -150], at: [0, 128, 0] };
+  requestAnimationFrame(draw3d);
+});
+</script>
+</body>
+</html>

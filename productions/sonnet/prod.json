@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "slug": "sonnet",
+  "title": "Sonnet",
+  "group": "Threestate",
+  "kind": "restoration",
+  "platform": "Windows",
+  "releaseDate": "2001-08-04",
+  "party": {
+    "name": null,
+    "compo": null,
+    "ranking": null
+  },
+  "ids": {
+    "demozoo": 25849,
+    "pouet": 3282
+  },
+  "links": {
+    "demozoo": "https://demozoo.org/productions/25849/",
+    "pouet": "https://www.pouet.net/prod.php?which=3282",
+    "youtube": "https://www.youtube.com/watch?v=d0dPW0c8uyo"
+  },
+  "credits": [
+    {
+      "name": "Vic",
+      "role": "Music"
+    },
+    {
+      "name": "Sagacity",
+      "role": "Code"
+    },
+    {
+      "name": "Sarix",
+      "role": "Code"
+    },
+    {
+      "name": "Stevie",
+      "role": "Graphics"
+    }
+  ],
+  "originals": [
+    {
+      "path": "originals/threestate/3s-sonnet.zip",
+      "urls": [
+        "https://files.scene.org/get/parties/2001/assembly01/in64/3s-sonnet.zip"
+      ],
+      "sha256": "b775e11243695dc365955fae7c9e0f28657bf71f3b3bc00345660b3d41f39582",
+      "bytes": 66418
+    }
+  ],
+  "captures": [
+    {
+      "youtube": "d0dPW0c8uyo",
+      "path": "productions/sonnet/work/reference/sonnet_ref.mkv",
+      "format": "bestvideo+bestaudio",
+      "sha256": "1774250c9e29ff56fcb40a13b01dc3dac4cd8cb03619687fee4e24e26dce78aa",
+      "alignmentOffsetMs": null,
+      "note": "Annikras capture linked from pouet; AssemblyTV alternative Pb-r5PRQ32A rejected (lower res, slate)"
+    }
+  ],
+  "status": {
+    "web": "engineering",
+    "pagesRepo": "sonnet-webgl"
+  }
+}

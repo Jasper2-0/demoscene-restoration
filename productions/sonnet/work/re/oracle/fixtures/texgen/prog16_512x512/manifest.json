@@ -1,0 +1,38 @@
+{
+ "target": "texgen",
+ "case": "prog16_512x512",
+ "fn_va": "0x416036",
+ "call": {
+  "convention": "cdecl",
+  "args": [
+   16,
+   512,
+   512,
+   {
+    "role": "out"
+   }
+  ]
+ },
+ "fpcw": "0x27f",
+ "seed_before": "0x803d556a",
+ "seed_after": "0x310400c6",
+ "image": {
+  "path": "unpacked/sonnet_img.bin",
+  "sha256": "66dea2fd173e0b81de5be7f54d7d611bed50be75e5b00ec4f907f26b8e037770"
+ },
+ "emulator": {
+  "unicorn": "2.1.4",
+  "host": "darwin-arm64",
+  "note": "x87 arithmetic softfloat-80 honouring FPCW; transcendentals via host libm double"
+ },
+ "dumps": [
+  {
+   "name": "pixels",
+   "file": "pixels.bin",
+   "size": 1048576,
+   "sha256": "5706020b55f0b183376f07db73031401e66183e73a5c561307239e1295a4a1c2"
+  }
+ ],
+ "rand_writes": 808790,
+ "ops": 2
+}

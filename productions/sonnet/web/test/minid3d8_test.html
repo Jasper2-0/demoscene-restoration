@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>minid3d8 smoke test</title>
+<style>
+  body { background: #111; color: #ccc; font: 13px/1.5 ui-monospace, monospace; margin: 16px; }
+  canvas { border: 1px solid #333; image-rendering: pixelated; }
+  .pass { color: #6f6; } .fail { color: #f66; }
+  #log { margin-top: 12px; white-space: pre; }
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="480"></canvas>
+<div id="log">running…</div>
+
+<script type="module">
+import {
+  MiniD3D8, D3DMatrix, makeVertexScratch, buildMipsD3D8Box, sphereMapMatrix,
+  verticesForPrimitives, D3DCOLOR_ARGB, DEG2RAD, PROJECTION_DEFAULTS,
+  FVF_XYZ_NORMAL_DIFFUSE_TEX2, FVF_SONNET_STRIDE,
+  D3DPT_TRIANGLELIST, D3DPT_TRIANGLEFAN,
+  D3DTS_WORLD, D3DTS_VIEW, D3DTS_PROJECTION, D3DTS_TEXTURE0, D3DTS_TEXTURE1,
+  D3DFMT_INDEX16,
+  D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ZFUNC, D3DRS_CULLMODE,
+  D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND,
+  D3DRS_ALPHATESTENABLE, D3DRS_ALPHAFUNC, D3DRS_ALPHAREF,
+  D3DRS_FOGENABLE, D3DRS_FOGCOLOR, D3DRS_FOGTABLEMODE, D3DRS_FOGVERTEXMODE,
+  D3DRS_FOGSTART, D3DRS_FOGEND, D3DRS_RANGEFOGENABLE,
+  D3DRS_LIGHTING, D3DRS_AMBIENT, D3DRS_CLIPPLANEENABLE, D3DRS_TEXTUREFACTOR,
+  D3DRS_NORMALIZENORMALS,
+  D3DCULL_NONE, D3DCULL_CW, D3DCULL_CCW,
+  D3DCMP_LESSEQUAL, D3DCMP_GREATER, D3DZB_TRUE,
+  D3DBLEND_SRCALPHA, D3DBLEND_INVSRCALPHA, D3DBLEND_ONE,
+  D3DFOG_NONE, D3DFOG_LINEAR, D3DLIGHT_POINT, D3DLIGHT_DIRECTIONAL,
+  D3DTSS_COLOROP, D3DTSS_COLORARG1, D3DTSS_COLORARG2,
+  D3DTSS_ALPHAOP, D3DTSS_ALPHAARG1, D3DTSS_ALPHAARG2,
+  D3DTSS_TEXCOORDINDEX, D3DTSS_TEXTURETRANSFORMFLAGS,
+  D3DTSS_ADDRESSU, D3DTSS_ADDRESSV, D3DTSS_MAGFILTER, D3DTSS_MIPFILTER,
+  D3DTSS_TCI_CAMERASPACENORMAL, D3DTTFF_COUNT2, D3DTTFF_DISABLE,
+  D3DTADDRESS_CLAMP, D3DTADDRESS_WRAP,
+  D3DTEXF_POINT, D3DTEXF_LINEAR,
+  D3DTOP_DISABLE, D3DTOP_SELECTARG1, D3DTOP_MODULATE, D3DTOP_ADD, D3DTOP_SUBTRACT,
+  D3DTA_TEXTURE, D3DTA_DIFFUSE, D3DTA_CURRENT, D3DTA_TFACTOR,
+  D3DCLEAR_TARGET, D3DCLEAR_ZBUFFER,
+} from '../js/minid3d8.js';
+
+const results = [];
+const near = (a, b, tol = 4) => Math.abs(a - b) <= tol;
+function check(name, ok, detail) {
+  results.push({ name, pass: !!ok, detail: detail === undefined ? '' : String(detail) });
+}
+function checkRGB(name, px, r, g, b, tol = 5) {
+  const ok = near(px[0], r, tol) && near(px[1], g, tol) && near(px[2], b, tol);
+  check(name, ok, `got ${px[0]},${px[1]},${px[2]} want ${r},${g},${b}`);
+}
+function throws(name, fn, needle) {
+  try { fn(); check(name, false, 'did not throw'); }
+  catch (e) { check(name, !needle || e.message.includes(needle), e.message.slice(0, 90)); }
+}
+
+const W = 640, H = 480;
+const canvas = document.getElementById('c');
+let d3d;
+try {
+  d3d = new MiniD3D8(canvas, { preserveDrawingBuffer: true });
+  d3d.applyDefaultState();
+  check('construct + applyDefaultState', true,
+    d3d.useClipDistance ? 'EXT_clip_cull_distance' : 'clip fallback: discard');
+} catch (e) {
+  check('construct', false, e.message);
+  finish();
+  throw e;
+}
+const gl = d3d.gl;
+d3d.BeginScene();
+
+// --------------------------------------------------------------- helpers --
+// NDC screen mapping: x -1..1 left..right, y +1..-1 TOP..bottom (+y is UP).
+const sx = (ndcx) => Math.round((ndcx + 1) * 0.5 * W);
+const sy = (ndcy) => Math.round((1 - ndcy) * 0.5 * H);
+const px = (ndcx, ndcy) => d3d.readPixel(
+  Math.min(W - 1, Math.max(0, sx(ndcx))), Math.min(H - 1, Math.max(0, sy(ndcy))));
+
+function clearTo(color) {
+  d3d.Clear(0, null, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, color, 1.0, 0);
+}
+
+/** FVF 0x252 vertex list: [[x,y,z, nx,ny,nz, color, u0,v0, u1,v1], ...] */
+function verts(list) {
+  const v = makeVertexScratch(FVF_XYZ_NORMAL_DIFFUSE_TEX2, list.length);
+  list.forEach((p, i) => {
+    const b = v.base(i);
+    v.f32[b] = p[0]; v.f32[b + 1] = p[1]; v.f32[b + 2] = p[2];
+    v.f32[v.normalIndex(i)] = p[3];
+    v.f32[v.normalIndex(i) + 1] = p[4];
+    v.f32[v.normalIndex(i) + 2] = p[5];
+    v.u32[v.colorIndex(i)] = p[6] >>> 0;
+    v.f32[v.uv0Index(i)] = p[7]; v.f32[v.uv0Index(i) + 1] = p[8];
+    v.f32[v.uv1Index(i)] = p[9]; v.f32[v.uv1Index(i) + 1] = p[10];
+  });
+  return v;
+}
+
+/**
+ * A quad from (x0, yTop) to (x1, yBot). Vertex order is
+ * TL, TR, BR, BL — clockwise on screen. uv v = 0 at the TOP (D3D order).
+ */
+function quad(x0, yTop, x1, yBot, opt = {}) {
+  const z = opt.z === undefined ? 0.5 : opt.z;
+  const c = opt.color === undefined ? 0xffffffff : opt.color;
+  const n = opt.normal || [0, 0, 1];
+  const [u0, v0, u1, v1] = opt.uv || [0, 0, 1, 1];
+  const q = opt.uv1 || [u0, v0, u1, v1];
+  return verts([
+    [x0, yTop, z, n[0], n[1], n[2], c, u0, v0, q[0], q[1]],
+    [x1, yTop, z, n[0], n[1], n[2], c, u1, v0, q[2], q[1]],
+    [x1, yBot, z, n[0], n[1], n[2], c, u1, v1, q[2], q[3]],
+    [x0, yBot, z, n[0], n[1], n[2], c, u0, v1, q[0], q[3]],
+  ]);
+}
+const QUAD_IDX = new Uint16Array([0, 1, 2, 0, 2, 3]);
+function drawQuad(q) {
+  d3d.DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, 4, 2, QUAD_IDX, D3DFMT_INDEX16,
+    q.bytes, FVF_SONNET_STRIDE);
+}
+function drawFan(q) {
+  d3d.DrawPrimitiveUP(D3DPT_TRIANGLEFAN, 2, q.bytes, FVF_SONNET_STRIDE);
+}
+function untextured() {
+  d3d.SetTexture(0, null); d3d.SetTexture(1, null);
+  d3d.SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+  d3d.SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+  d3d.SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+  d3d.setStage1Op(0);
+}
+function identityTransforms() {
+  const I = new D3DMatrix();
+  d3d.SetTransform(D3DTS_WORLD, I);
+  d3d.SetTransform(D3DTS_VIEW, I);
+  d3d.SetTransform(D3DTS_PROJECTION, I);
+}
+
+const WHITE = D3DCOLOR_ARGB(255, 255, 255, 255);
+const RED = D3DCOLOR_ARGB(255, 255, 0, 0);
+const BLUE = D3DCOLOR_ARGB(255, 0, 0, 255);
+const BLACK = D3DCOLOR_ARGB(255, 0, 0, 0);
+
+// ======================================================================== 1
+// Constants that a D3D7 -> D3D8 port gets wrong.
+// =========================================================================
+check('D3DTS_WORLD is 0x100 (not 1)', D3DTS_WORLD === 0x100, '0x' + D3DTS_WORLD.toString(16));
+check('D3DTS_VIEW/PROJECTION/TEXTURE0/TEXTURE1',
+  D3DTS_VIEW === 2 && D3DTS_PROJECTION === 3 && D3DTS_TEXTURE0 === 0x10 && D3DTS_TEXTURE1 === 0x11);
+check('FVF is 0x252 with stride 44',
+  FVF_XYZ_NORMAL_DIFFUSE_TEX2 === 0x252 && FVF_SONNET_STRIDE === 44);
+throws('SetTransform throws on the D3D7 WORLD value (1)',
+  () => d3d.SetTransform(1, new D3DMatrix()), 'unsupported transform state');
+throws('SetTransform throws on an unknown state',
+  () => d3d.SetTransform(0x999, new D3DMatrix()), 'unsupported transform state');
+
+// stride-44 field offsets
+{
+  const v = makeVertexScratch(FVF_XYZ_NORMAL_DIFFUSE_TEX2, 2);
+  const ok = v.stride === 44 && v.strideF === 11 &&
+    v.base(1) * 4 === 44 && v.normalIndex(0) * 4 === 12 &&
+    v.colorIndex(0) * 4 === 24 && v.uv0Index(0) * 4 === 28 && v.uv1Index(0) * 4 === 36;
+  check('makeVertexScratch offsets: pos 0 / normal 12 / diffuse 24 / uv0 28 / uv1 36', ok);
+}
+
+// ======================================================================== 2
+// perspectiveFovLH takes a VERTICAL fov.
+// =========================================================================
+{
+  const fovY = 90 * DEG2RAD, aspect = 4 / 3;
+  const P = D3DMatrix.perspectiveFovLH(fovY, aspect, 1.0, 1000.0);
+  const cot = 1 / Math.tan(fovY / 2);
+  check('perspectiveFovLH _22 = cot(fovY/2)', near(P.m[5], cot, 1e-5), P.m[5]);
+  check('perspectiveFovLH _11 = cot(fovY/2)/aspect', near(P.m[0], cot / aspect, 1e-5), P.m[0]);
+  check('perspectiveFovLH _34 = 1, _44 = 0', P.m[11] === 1 && P.m[15] === 0);
+  // a point at eye-space y = tan(fovY/2) at z = 1 lands on the TOP edge of NDC
+  const t = Math.tan(fovY / 2);
+  const clipY = t * P.m[5], clipW = 1 * P.m[11];
+  check('point at y = tan(fovY/2), z = 1 lands on the NDC top edge',
+    near(clipY / clipW, 1, 1e-5), clipY / clipW);
+  // and at x = tan(fovY/2)*aspect on the RIGHT edge
+  const clipX = (t * aspect) * P.m[0];
+  check('point at x = tan(fovY/2)*aspect lands on the NDC right edge',
+    near(clipX / clipW, 1, 1e-5), clipX / clipW);
+  // degrees variant + the camera defaults
+  const Pd = D3DMatrix.perspectiveFovDegLH(PROJECTION_DEFAULTS.fovDeg,
+    PROJECTION_DEFAULTS.aspect, PROJECTION_DEFAULTS.zn, PROJECTION_DEFAULTS.zf);
+  check('perspectiveFovDegLH(90, 4/3, 1, 1000) matches the radians form',
+    Array.from(Pd.m).every((x, i) => near(x, P.m[i], 1e-5)));
+  const q = 1000 / (1000 - 1);
+  check('projection _33 = zf/(zf-zn), _43 = -zn*zf/(zf-zn)',
+    near(Pd.m[10], q, 1e-5) && near(Pd.m[14], -q * 1, 1e-4), `${Pd.m[10]}, ${Pd.m[14]}`);
+  // the Lost Vegas (horizontal) form would have given _11 = cot(fov/2)
+  check('NOT the Lost Vegas horizontal-fov form', !near(P.m[0], cot, 1e-3));
+}
+
+// ======================================================================== 3
+// 2D in NDC with identity transforms, +y UP.
+// =========================================================================
+identityTransforms();
+untextured();
+d3d.setCullMode(0);
+d3d.SetRenderState(D3DRS_ALPHABLENDENABLE, 0);
+clearTo(BLACK);
+drawQuad(quad(-1, 1, 1, 0, { color: RED }));      // top half
+drawQuad(quad(-1, 0, 1, -1, { color: BLUE }));    // bottom half
+checkRGB('NDC quad: +y is UP (top half red)', px(0, 0.7), 255, 0, 0);
+checkRGB('NDC quad: bottom half blue', px(0, -0.7), 0, 0, 255);
+clearTo(BLACK);
+drawQuad(quad(-1, 1, 1, -1, { color: WHITE }));
+checkRGB('NDC (-1,-1)..(1,1) covers the whole viewport (corner TL)', px(-0.99, 0.99), 255, 255, 255);
+checkRGB('...corner BR', px(0.99, -0.99), 255, 255, 255);
+
+// BGRA unpack
+clearTo(BLACK);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { color: D3DCOLOR_ARGB(255, 255, 128, 64) }));
+checkRGB('D3DCOLOR 0xAARRGGBB unpacks correctly (BGRA on the wire)', px(0, 0), 255, 128, 64);
+
+// ======================================================================== 4
+// DrawPrimitiveUP / DrawIndexedPrimitiveUP take a PRIMITIVE count.
+// =========================================================================
+check('verticesForPrimitives(TRIANGLELIST, 2) === 6',
+  verticesForPrimitives(D3DPT_TRIANGLELIST, 2) === 6);
+check('verticesForPrimitives(TRIANGLEFAN, 2) === 4',
+  verticesForPrimitives(D3DPT_TRIANGLEFAN, 2) === 4);
+{
+  const q = quad(-0.5, 0.5, 0.5, -0.5, { color: WHITE });
+  clearTo(BLACK);
+  d3d.DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, 4, 2, QUAD_IDX, D3DFMT_INDEX16,
+    q.bytes, FVF_SONNET_STRIDE);
+  const tl = px(-0.4, 0.4), br = px(0.4, -0.4), bl = px(-0.4, -0.4), tr = px(0.4, 0.4);
+  check('DrawIndexedPrimitiveUP(primCount=2) draws a FULL quad',
+    tl[0] > 200 && br[0] > 200 && bl[0] > 200 && tr[0] > 200,
+    `tl=${tl[0]} tr=${tr[0]} br=${br[0]} bl=${bl[0]}`);
+  clearTo(BLACK);
+  d3d.DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, 4, 1, QUAD_IDX, D3DFMT_INDEX16,
+    q.bytes, FVF_SONNET_STRIDE);
+  const bl1 = px(-0.4, -0.4), tr1 = px(0.4, 0.4);
+  check('...primCount=1 draws only the first triangle (a vertex count would be wrong)',
+    tr1[0] > 200 && bl1[0] < 40, `tr=${tr1[0]} bl=${bl1[0]}`);
+  // TRIANGLEFAN via DrawPrimitiveUP: 2 primitives = 4 vertices
+  clearTo(BLACK);
+  drawFan(q);
+  check('DrawPrimitiveUP(TRIANGLEFAN, primCount=2) draws a full quad',
+    px(-0.4, -0.4)[0] > 200 && px(0.4, 0.4)[0] > 200);
+}
+// Uint32Array indices are accepted (the remaster escape hatch)
+{
+  const q = quad(-0.3, 0.3, 0.3, -0.3, { color: RED });
+  clearTo(BLACK);
+  d3d.DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, 4, 2,
+    new Uint32Array([0, 1, 2, 0, 2, 3]), 0x66, q.bytes, FVF_SONNET_STRIDE);
+  checkRGB('Uint32Array indices work (quality-agnostic tessellation)', px(0, 0), 255, 0, 0);
+}
+
+// ======================================================================== 5
+// Textures: creation, v orientation, the two-stage combiner, uv set routing.
+// =========================================================================
+const solid = (a, r, g, b) => d3d.createTexture(
+  new Uint32Array(4 * 4).fill(D3DCOLOR_ARGB(a, r, g, b)), 4, 4, { levels: 1 });
+const texA = solid(255, 200, 100, 50);
+const texB = solid(255, 128, 128, 128);
+// 2x2, top-left unique: proves v is NOT flipped for content textures
+const texOrient = d3d.createTexture(new Uint32Array([
+  D3DCOLOR_ARGB(255, 255, 0, 0), D3DCOLOR_ARGB(255, 0, 0, 0),
+  D3DCOLOR_ARGB(255, 0, 0, 0), D3DCOLOR_ARGB(255, 0, 255, 0)]), 2, 2, { levels: 1 });
+// 2x1 horizontal ramp textures, for uv-set routing
+const texLR0 = d3d.createTexture(new Uint32Array([
+  D3DCOLOR_ARGB(255, 255, 255, 255), D3DCOLOR_ARGB(255, 0, 0, 0)]), 2, 1, { levels: 1 });
+const texLR1 = d3d.createTexture(new Uint32Array([
+  D3DCOLOR_ARGB(255, 0, 0, 0), D3DCOLOR_ARGB(255, 255, 255, 255)]), 2, 1, { levels: 1 });
+check('createTexture from a Uint32Array of ARGB dwords', !!texA.tex && texA.levels === 1);
+throws('createTexture demands an explicit `levels`',
+  () => d3d.createTexture(new Uint32Array(4), 2, 2), 'explicit `levels`');
+
+function selectTex0() {
+  d3d.SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+  d3d.SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+  d3d.setStage1Op(0);
+}
+// v orientation: uv (0..0.49) samples the TOP-LEFT texel
+d3d.SetTextureStageState(0, D3DTSS_MAGFILTER, D3DTEXF_POINT);
+d3d.SetTextureStageState(0, D3DTSS_MIPFILTER, D3DTEXF_POINT);
+selectTex0();
+d3d.SetTexture(0, texOrient);
+clearTo(BLACK);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { uv: [0.1, 0.1, 0.4, 0.4] }));
+checkRGB('texture v is NOT flipped: uv(0.25,0.25) is the top-left texel', px(0, 0), 255, 0, 0);
+clearTo(BLACK);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { uv: [0.6, 0.6, 0.9, 0.9] }));
+checkRGB('...uv(0.75,0.75) is the bottom-right texel', px(0, 0), 0, 255, 0);
+
+// uv set 1 really is at offset 36 and really does feed stage 1
+d3d.SetTextureStageState(0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
+d3d.SetTextureStageState(0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
+d3d.SetTextureStageState(1, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
+d3d.SetTextureStageState(1, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
+d3d.SetTextureStageState(1, D3DTSS_MAGFILTER, D3DTEXF_POINT);
+d3d.SetTextureStageState(1, D3DTSS_MIPFILTER, D3DTEXF_POINT);
+selectTex0();
+d3d.SetTexture(0, texLR0);
+d3d.SetTexture(1, texLR1);
+d3d.SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+d3d.SetTextureStageState(1, D3DTSS_COLORARG2, D3DTA_CURRENT);
+d3d.setStage1Op(2);   // MODULATE
+clearTo(BLACK);
+// uv0 = 0.25 -> texLR0 left = white; uv1 = 0.75 -> texLR1 right = white
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { uv: [0.25, 0.5, 0.25, 0.5], uv1: [0.75, 0.5, 0.75, 0.5] }));
+checkRGB('stage 1 samples uv set 1 (offset 36): white x white', px(0, 0), 255, 255, 255);
+clearTo(BLACK);
+// uv1 = 0.25 -> texLR1 left = black, so the product is black
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { uv: [0.25, 0.5, 0.25, 0.5], uv1: [0.25, 0.5, 0.25, 0.5] }));
+checkRGB('...changing only uv1 changes only stage 1', px(0, 0), 0, 0, 0);
+
+// stage-1 op toggle: DISABLE / ADD / MODULATE (FUN_004019a0)
+d3d.SetTexture(0, texA);            // (200,100,50)
+d3d.SetTexture(1, texB);            // (128,128,128)
+d3d.SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+d3d.SetTextureStageState(1, D3DTSS_COLORARG2, D3DTA_CURRENT);
+selectTex0();
+clearTo(BLACK);
+d3d.setStage1Op(0);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5));
+checkRGB('setStage1Op(0) = DISABLE', px(0, 0), 200, 100, 50);
+clearTo(BLACK);
+d3d.setStage1Op(1);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5));
+checkRGB('setStage1Op(1) = ADD', px(0, 0), 255, 228, 178);
+clearTo(BLACK);
+d3d.setStage1Op(2);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5));
+checkRGB('setStage1Op(2) = MODULATE', px(0, 0), 100, 50, 25);
+d3d.setStage1Op(0);
+
+// 1x1 white fallback when no texture is bound
+d3d.SetTexture(0, null);
+d3d.SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+d3d.SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+clearTo(BLACK);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { color: D3DCOLOR_ARGB(255, 90, 180, 220) }));
+checkRGB('MODULATE(TEXTURE, DIFFUSE) with no texture = the diffuse', px(0, 0), 90, 180, 220);
+
+// ======================================================================== 6
+// Culling, depth ordering, blend modes.
+// =========================================================================
+untextured();
+// CW-wound quad (TL,TR,BR,BL on screen)
+const cwQuad = quad(-0.5, 0.5, 0.5, -0.5, { color: WHITE });
+const ccwQuad = verts([
+  [-0.5, 0.5, 0.5, 0, 0, 1, WHITE, 0, 0, 0, 0],
+  [-0.5, -0.5, 0.5, 0, 0, 1, WHITE, 0, 1, 0, 1],
+  [0.5, -0.5, 0.5, 0, 0, 1, WHITE, 1, 1, 1, 1],
+  [0.5, 0.5, 0.5, 0, 0, 1, WHITE, 1, 0, 1, 0],
+]);
+clearTo(BLACK); d3d.setCullMode(2); drawQuad(cwQuad);      // CCW culled -> CW survives
+check('D3DCULL_CCW keeps clockwise geometry', px(0, 0)[0] > 200, px(0, 0)[0]);
+clearTo(BLACK); d3d.setCullMode(2); drawQuad(ccwQuad);
+check('D3DCULL_CCW culls counter-clockwise geometry', px(0, 0)[0] < 40, px(0, 0)[0]);
+clearTo(BLACK); d3d.setCullMode(1); drawQuad(ccwQuad);     // CW culled -> CCW survives
+check('D3DCULL_CW keeps counter-clockwise geometry', px(0, 0)[0] > 200, px(0, 0)[0]);
+clearTo(BLACK); d3d.setCullMode(1); drawQuad(cwQuad);
+check('D3DCULL_CW culls clockwise geometry', px(0, 0)[0] < 40, px(0, 0)[0]);
+check('setCullMode mapping is 0=NONE, 1=CW, 2=CCW (reversed vs. Lost Vegas)',
+  (d3d.setCullMode(0), d3d.GetRenderState(D3DRS_CULLMODE) === D3DCULL_NONE) &&
+  (d3d.setCullMode(1), d3d.GetRenderState(D3DRS_CULLMODE) === D3DCULL_CW) &&
+  (d3d.setCullMode(2), d3d.GetRenderState(D3DRS_CULLMODE) === D3DCULL_CCW));
+d3d.setCullMode(0);
+
+// depth ordering
+d3d.SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+d3d.SetRenderState(D3DRS_ZWRITEENABLE, 1);
+d3d.SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+clearTo(BLACK);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { color: RED, z: 0.2 }));
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { color: BLUE, z: 0.8 }));   // behind: rejected
+checkRGB('depth test rejects the farther quad', px(0, 0), 255, 0, 0);
+
+// blend modes (FUN_004019e6)
+clearTo(D3DCOLOR_ARGB(255, 40, 40, 40));
+d3d.setBlendMode(0);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { color: D3DCOLOR_ARGB(128, 200, 0, 0), z: 0.3 }));
+checkRGB('setBlendMode(0): opaque', px(0, 0), 200, 0, 0);
+check('setBlendMode(0) turns Z writes ON', d3d.GetRenderState(D3DRS_ZWRITEENABLE) === 1);
+clearTo(D3DCOLOR_ARGB(255, 40, 40, 40));
+d3d.setBlendMode(1);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { color: D3DCOLOR_ARGB(128, 200, 0, 0), z: 0.3 }));
+checkRGB('setBlendMode(1): additive (src*a + dst)', px(0, 0), 40 + 100, 40, 40);
+check('setBlendMode(1) turns Z writes OFF', d3d.GetRenderState(D3DRS_ZWRITEENABLE) === 0);
+clearTo(D3DCOLOR_ARGB(255, 40, 40, 40));
+d3d.setBlendMode(2);
+drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { color: D3DCOLOR_ARGB(128, 200, 0, 0), z: 0.3 }));
+checkRGB('setBlendMode(2): alpha blend', px(0, 0), 100 + 20, 20, 20);
+d3d.setBlendMode(0);
+
+// ======================================================================== 7
+// Fixed-function point lighting.
+// =========================================================================
+identityTransforms();
+untextured();
+d3d.setCullMode(0);
+const LQ = (normal) => quad(-0.05, 0.05, 0.05, -0.05, { color: WHITE, z: 0.5, normal });
+
+d3d.SetLight(0, {
+  Type: D3DLIGHT_POINT,
+  Diffuse: { r: 0.5, g: 0.5, b: 0.5, a: 1 },
+  Position: { x: 0, y: 0, z: -0.5 },
+  Range: 100, Attenuation0: 1, Attenuation1: 0, Attenuation2: 0,
+});
+d3d.LightEnable(0, true);
+d3d.setLighting(1, D3DCOLOR_ARGB(255, 0, 0, 0));   // no ambient
+clearTo(BLACK);
+drawQuad(LQ([0, 0, -1]));
+checkRGB('point light: unit normal facing the light -> 0.5 grey', px(0, 0), 128, 128, 128);
+
+clearTo(BLACK);
+drawQuad(LQ([0, 0, -0.5]));
+checkRGB('NORMALIZENORMALS is FALSE: |n| = 0.5 halves the shade', px(0, 0), 64, 64, 64);
+
+clearTo(BLACK);
+drawQuad(LQ([0, 0, 1]));            // facing away
+checkRGB('point light: normal facing away -> unlit', px(0, 0), 0, 0, 0);
+
+// attenuation and range
+d3d.SetLight(0, {
+  Type: D3DLIGHT_POINT, Diffuse: { r: 1, g: 1, b: 1, a: 1 },
+  Position: { x: 0, y: 0, z: -0.5 },
+  Range: 0.5, Attenuation0: 1, Attenuation1: 0, Attenuation2: 0,
+});
+clearTo(BLACK);
+drawQuad(LQ([0, 0, -1]));
+checkRGB('point light: out of Range contributes nothing', px(0, 0), 0, 0, 0);
+d3d.SetLight(0, {
+  Type: D3DLIGHT_POINT, Diffuse: { r: 1, g: 1, b: 1, a: 1 },
+  Position: { x: 0, y: 0, z: -0.5 },
+  Range: 100, Attenuation0: 0, Attenuation1: 1, Attenuation2: 0,   // 1/d, d = 1
+});
+clearTo(BLACK);
+drawQuad(LQ([0, 0, -1]));
+checkRGB('point light: Attenuation1 = 1/d at d = 1', px(0, 0), 255, 255, 255);
+
+// Where the vertex colour goes. COLORVERTEX is TRUE, but only
+// DIFFUSEMATERIALSOURCE defaults to D3DMCS_COLOR1 — AMBIENTMATERIALSOURCE
+// defaults to D3DMCS_MATERIAL, so the ambient term is scaled by the MATERIAL
+// ambient (white, per applyDefaultState) and NOT by the vertex diffuse.
+// A pure-red vertex diffuse separates the two terms cleanly.
+const REDQ = quad(-0.05, 0.05, 0.05, -0.05,
+  { color: D3DCOLOR_ARGB(255, 255, 0, 0), z: 0.5, normal: [0, 0, -1] });
+d3d.SetLight(0, {
+  Type: D3DLIGHT_POINT, Diffuse: { r: 0.5, g: 0.5, b: 0.5, a: 1 },
+  Position: { x: 0, y: 0, z: -0.5 },
+  Range: 100, Attenuation0: 1, Attenuation1: 0, Attenuation2: 0,
+});
+d3d.LightEnable(0, true);
+d3d.setLighting(1, D3DCOLOR_ARGB(255, 0, 0, 0));            // no ambient
+clearTo(BLACK);
+drawQuad(REDQ);
+checkRGB('vertex diffuse tints the DIFFUSE term (DIFFUSEMATERIALSOURCE = D3DMCS_COLOR1)',
+  px(0, 0), 128, 0, 0);
+
+d3d.LightEnable(0, false);
+d3d.setLighting(1, D3DCOLOR_ARGB(255, 128, 128, 128));      // ambient only
+clearTo(BLACK);
+drawQuad(REDQ);
+checkRGB('the AMBIENT term is NOT tinted by the vertex diffuse ' +
+  '(AMBIENTMATERIALSOURCE = D3DMCS_MATERIAL, material ambient = white)',
+  px(0, 0), 128, 128, 128);
+
+// lighting off -> the raw vertex diffuse
+const prevAmb = d3d.setLighting(0, 0xffffffff);
+check('setLighting returns the PREVIOUS D3DRS_AMBIENT',
+  prevAmb === D3DCOLOR_ARGB(255, 128, 128, 128), '0x' + (prevAmb >>> 0).toString(16));
+clearTo(BLACK);
+drawQuad(quad(-0.05, 0.05, 0.05, -0.05,
+  { color: D3DCOLOR_ARGB(255, 255, 0, 0), normal: [0, 0, -1] }));
+checkRGB('D3DRS_LIGHTING = 0 gives the raw vertex diffuse', px(0, 0), 255, 0, 0);
+
+throws('SetLight rejects directional lights',
+  () => d3d.SetLight(1, { Type: D3DLIGHT_DIRECTIONAL }), 'D3DLIGHT_POINT');
+throws('D3DRS_NORMALIZENORMALS = TRUE is loudly rejected',
+  () => d3d.SetRenderState(D3DRS_NORMALIZENORMALS, 1), 'NORMALIZENORMALS');
+
+// ======================================================================== 8
+// Linear RANGE vertex fog on radial eye-space distance.
+// =========================================================================
+untextured();
+d3d.setLighting(0, 0xffffffff);
+d3d.SetTransform(D3DTS_WORLD, new D3DMatrix());
+d3d.SetTransform(D3DTS_VIEW, D3DMatrix.translation(0, 0, 2));
+d3d.SetTransform(D3DTS_PROJECTION, D3DMatrix.scaling(0.5, 0.5, 0.25));
+d3d.setFog(1, BLACK, 1.0, 3.0);
+check('setFog uses VERTEX fog: FOGTABLEMODE = NONE, FOGVERTEXMODE = LINEAR',
+  d3d.GetRenderState(D3DRS_FOGTABLEMODE) === D3DFOG_NONE &&
+  d3d.GetRenderState(D3DRS_FOGVERTEXMODE) === D3DFOG_LINEAR);
+check('setFog enables RANGEFOGENABLE', d3d.GetRenderState(D3DRS_RANGEFOGENABLE) === 1);
+d3d.setBlendMode(0);
+clearTo(BLACK);
+// centre: view (0,0,2) -> radial 2 -> f = (3-2)/(3-1) = 0.5
+drawQuad(quad(-0.05, 0.05, 0.05, -0.05, { color: WHITE, z: 0 }));
+checkRGB('linear fog at the midpoint distance is a half blend', px(0, 0), 128, 128, 128);
+// offset in x: view (1.5,0,2) -> RADIAL 2.5 -> f = 0.25; eye-z alone would give 0.5
+clearTo(BLACK);
+drawQuad(verts([
+  [1.45, 0.05, 0, 0, 0, 1, WHITE, 0, 0, 0, 0],
+  [1.55, 0.05, 0, 0, 0, 1, WHITE, 0, 0, 0, 0],
+  [1.55, -0.05, 0, 0, 0, 1, WHITE, 0, 0, 0, 0],
+  [1.45, -0.05, 0, 0, 0, 1, WHITE, 0, 0, 0, 0],
+]));
+checkRGB('RANGE fog uses RADIAL distance, not eye-space z', px(0.75, 0), 64, 64, 64);
+// alpha is untouched by fog
+clearTo(RED);
+d3d.setBlendMode(2);
+drawQuad(quad(-0.05, 0.05, 0.05, -0.05, { color: WHITE, z: 0 }));
+checkRGB('fog blends into RGB only (alpha untouched)', px(0, 0), 128, 128, 128);
+d3d.setBlendMode(0);
+d3d.setFog(0);
+identityTransforms();
+
+// ======================================================================== 9
+// Camera-space-normal sphere map.
+// =========================================================================
+{
+  // 8x8: black except the central 2x2, which uv (0.5,0.5) lands exactly on
+  const spx = new Uint32Array(64).fill(D3DCOLOR_ARGB(255, 0, 0, 0));
+  for (const y of [3, 4]) for (const x of [3, 4]) spx[y * 8 + x] = WHITE;
+  const texSphere = d3d.createTexture(spx, 8, 8, { levels: 1 });
+  selectTex0();
+  d3d.SetTexture(0, texSphere);
+  d3d.SetTextureStageState(0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
+  d3d.SetTextureStageState(0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
+  d3d.SetTextureStageState(0, D3DTSS_MAGFILTER, D3DTEXF_LINEAR);
+  d3d.setTexTransform(0, 1);
+  check('setTexTransform(0,1) sets TTFF=COUNT2 and TCI=CAMERASPACENORMAL',
+    d3d.GetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS) === D3DTTFF_COUNT2 &&
+    d3d.GetTextureStageState(0, D3DTSS_TEXCOORDINDEX) === D3DTSS_TCI_CAMERASPACENORMAL);
+  const M = sphereMapMatrix(0.5);
+  check('sphere-map matrix is u = 0.5*Nx + 0.5, v = -0.5*Ny + 0.5',
+    M.m[0] === 0.5 && M.m[5] === -0.5 && M.m[12] === 0.5 && M.m[13] === 0.5);
+  clearTo(BLACK);
+  drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { normal: [0, 0, 1] }));
+  checkRGB('camera-facing normal maps to uv (0.5, 0.5)', px(0, 0), 255, 255, 255);
+  clearTo(BLACK);
+  drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { normal: [1, 0, 0] }));
+  checkRGB('normal (1,0,0) maps to uv (1.0, 0.5) — off the white patch', px(0, 0), 0, 0, 0);
+  d3d.setTexTransform(0, 0);
+  check('setTexTransform(0,0) restores TTFF=DISABLE and TCI=stage',
+    d3d.GetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS) === D3DTTFF_DISABLE &&
+    d3d.GetTextureStageState(0, D3DTSS_TEXCOORDINDEX) === 0);
+}
+
+// ======================================================================= 10
+// User clip plane 0.
+// =========================================================================
+untextured();
+identityTransforms();
+d3d.SetClipPlane(0, [0, -1, 0, 0]);     // visible where -y >= 0, i.e. y <= 0
+clearTo(BLACK);
+d3d.SetRenderState(D3DRS_CLIPPLANEENABLE, 1);
+drawQuad(quad(-1, 1, 1, -1, { color: WHITE }));
+const clipTop = px(0, 0.7), clipBot = px(0, -0.7);
+check('clip plane 0 removes exactly the half-space it names',
+  clipTop[0] < 40 && clipBot[0] > 200, `top=${clipTop[0]} bottom=${clipBot[0]}`);
+d3d.SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
+clearTo(BLACK);
+drawQuad(quad(-1, 1, 1, -1, { color: WHITE }));
+check('...and only while CLIPPLANEENABLE bit 0 is set',
+  px(0, 0.7)[0] > 200 && px(0, -0.7)[0] > 200);
+throws('SetClipPlane rejects any index but 0', () => d3d.SetClipPlane(1, [0, 0, 0, 0]), 'plane 0');
+throws('CLIPPLANEENABLE rejects planes the shim has no uniform for',
+  () => d3d.SetRenderState(D3DRS_CLIPPLANEENABLE, 2), 'clip plane 0');
+d3d.SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
+
+// ======================================================================= 11
+// Alpha test, D3DTOP_SUBTRACT on the alpha pipeline, TFACTOR fade.
+// =========================================================================
+untextured();
+d3d.setBlendMode(0);
+clearTo(BLACK);
+d3d.SetRenderState(D3DRS_ALPHATESTENABLE, 1);
+d3d.SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
+d3d.SetRenderState(D3DRS_ALPHAREF, 128);
+drawQuad(quad(-0.5, 0.5, 0, -0.5, { color: D3DCOLOR_ARGB(200, 255, 255, 255) }));
+drawQuad(quad(0, 0.5, 0.5, -0.5, { color: D3DCOLOR_ARGB(60, 255, 255, 255) }));
+check('alpha test GREATER/128 keeps a=200 and kills a=60',
+  px(-0.25, 0)[0] > 200 && px(0.25, 0)[0] < 40,
+  `left=${px(-0.25, 0)[0]} right=${px(0.25, 0)[0]}`);
+d3d.setAlphaTest(0);
+check('setAlphaTest(0) clears the test', d3d.GetRenderState(D3DRS_ALPHATESTENABLE) === 0 &&
+  d3d.GetRenderState(D3DRS_ALPHAREF) === 0);
+d3d.alphaRefDefault = 0x80;
+d3d.setAlphaTest(1);
+check('setAlphaTest(1) uses alphaRefDefault (DAT_00474794 = 0x80)',
+  d3d.GetRenderState(D3DRS_ALPHAREF) === 0x80 &&
+  d3d.GetRenderState(D3DRS_ALPHAFUNC) === D3DCMP_GREATER);
+d3d.setAlphaTest(0);
+
+// D3DTOP_SUBTRACT on the alpha pipeline: tex alpha 1.0 - diffuse alpha 0.25 = 0.75
+{
+  const texOpaque = solid(255, 255, 255, 255);
+  d3d.SetTexture(0, texOpaque);
+  d3d.SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+  d3d.SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SUBTRACT);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+  d3d.setStage1Op(0);
+  d3d.setBlendMode(2);
+  clearTo(RED);
+  drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { color: D3DCOLOR_ARGB(64, 255, 255, 255) }));
+  checkRGB('D3DTOP_SUBTRACT on the alpha pipeline (1.0 - 0.25 = 0.75)', px(0, 0), 255, 191, 191, 6);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+}
+
+// D3DTA_TFACTOR feeding stage-1 alpha with SELECTARG1 (material flag 0x8000)
+{
+  const texOpaque = solid(255, 255, 255, 255);
+  d3d.SetTexture(0, texOpaque);
+  d3d.SetTexture(1, texOpaque);
+  d3d.SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+  d3d.SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+  d3d.SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+  d3d.SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+  d3d.SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_CURRENT);
+  d3d.SetRenderState(D3DRS_TEXTUREFACTOR, ((64 << 24) | 0x00ffffff) >>> 0);
+  d3d.SetTextureStageState(1, D3DTSS_ALPHAARG1, D3DTA_TFACTOR);
+  d3d.SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+  d3d.setBlendMode(2);
+  clearTo(RED);
+  drawQuad(quad(-0.5, 0.5, 0.5, -0.5, { color: WHITE }));
+  checkRGB('stage-1 alpha SELECTARG1(TFACTOR) is the global fade', px(0, 0), 255, 64, 64, 6);
+  d3d.setStage1Op(0);
+  d3d.setBlendMode(0);
+}
+
+// applyMaterial: the flag-word decoder
+{
+  d3d.resetLayerState();
+  const mat = { texture0: null, texture1: null, flags: 0x8000 | 0x0010, alphaRef: 0x40 };
+  d3d.applyMaterial(mat);
+  check('applyMaterial 0x8000 sets TEXTUREFACTOR = (alphaRef<<24)|0xFFFFFF',
+    d3d.GetRenderState(D3DRS_TEXTUREFACTOR) === (((0x40 << 24) | 0x00ffffff) >>> 0),
+    '0x' + (d3d.GetRenderState(D3DRS_TEXTUREFACTOR) >>> 0).toString(16));
+  check('applyMaterial 0x0010 sets CULLMODE = NONE',
+    d3d.GetRenderState(D3DRS_CULLMODE) === D3DCULL_NONE);
+  check('applyMaterial 0x8000 routes stage-1 alpha to TFACTOR/SELECTARG1',
+    d3d.GetTextureStageState(1, D3DTSS_ALPHAARG1) === D3DTA_TFACTOR &&
+    d3d.GetTextureStageState(1, D3DTSS_ALPHAOP) === D3DTOP_SELECTARG1);
+  d3d.unapplyMaterial(mat);
+  check('unapplyMaterial restores stage-1 alpha to TEXTURE/MODULATE',
+    d3d.GetTextureStageState(1, D3DTSS_ALPHAARG1) === D3DTA_TEXTURE &&
+    d3d.GetTextureStageState(1, D3DTSS_ALPHAOP) === D3DTOP_MODULATE);
+
+  const m2 = { flags: 0x0080 | 0x0001, alphaRef: 0 };
+  d3d.applyMaterial(m2);
+  check('applyMaterial 0x0080 = ZWRITE off + ZFUNC ALWAYS',
+    d3d.GetRenderState(D3DRS_ZWRITEENABLE) === 0 && d3d.GetRenderState(D3DRS_ZFUNC) === 8);
+  check('applyMaterial 0x0001 = additive blend',
+    d3d.GetRenderState(D3DRS_DESTBLEND) === D3DBLEND_ONE);
+  d3d.unapplyMaterial(m2);
+
+  const m3 = { flags: 0x4000, alphaRef: 0 };
+  d3d.applyMaterial(m3);
+  check('applyMaterial 0x4000 = alpha blend that still writes Z',
+    d3d.GetRenderState(D3DRS_DESTBLEND) === D3DBLEND_INVSRCALPHA &&
+    d3d.GetRenderState(D3DRS_ZWRITEENABLE) === 1 &&
+    d3d.GetRenderState(D3DRS_ZFUNC) === D3DCMP_LESSEQUAL);
+  d3d.unapplyMaterial(m3);
+
+  const m4 = { flags: 0x1000 | 0x0800, alphaRef: 0 };
+  d3d.setLighting(1, D3DCOLOR_ARGB(255, 32, 32, 32));
+  d3d.setFog(1, BLACK, 5, 9);
+  d3d.applyMaterial(m4);
+  check('applyMaterial 0x1000 forces lighting off',
+    d3d.GetRenderState(D3DRS_LIGHTING) === 0);
+  check('applyMaterial 0x0800 forces fog off', d3d.GetRenderState(D3DRS_FOGENABLE) === 0);
+  d3d.unapplyMaterial(m4);
+  check('unapplyMaterial restores lighting + ambient',
+    d3d.GetRenderState(D3DRS_LIGHTING) === 1 &&
+    d3d.GetRenderState(D3DRS_AMBIENT) === D3DCOLOR_ARGB(255, 32, 32, 32));
+  check('unapplyMaterial restores fog', d3d.GetRenderState(D3DRS_FOGENABLE) === 1 &&
+    d3d.GetRenderState(D3DRS_FOGEND) === 9);
+  d3d.setFog(0);
+  d3d.setLighting(0, 0xffffffff);
+  d3d.resetLayerState();
+}
+
+// resetLayerState / reset2D
+d3d.resetLayerState();
+check('resetLayerState = the FUN_0040184c baseline',
+  d3d.GetRenderState(D3DRS_CULLMODE) === D3DCULL_NONE &&
+  d3d.GetRenderState(D3DRS_ALPHABLENDENABLE) === 0 &&
+  d3d.GetRenderState(D3DRS_ZWRITEENABLE) === 1 &&
+  d3d.GetRenderState(D3DRS_ZFUNC) === D3DCMP_LESSEQUAL &&
+  d3d.GetRenderState(D3DRS_FOGENABLE) === 0 &&
+  d3d.GetRenderState(D3DRS_LIGHTING) === 0 &&
+  d3d.GetTextureStageState(1, D3DTSS_COLOROP) === D3DTOP_DISABLE &&
+  d3d.alphaRefDefault === 0x80);
+d3d.SetTransform(D3DTS_PROJECTION, D3DMatrix.scaling(2, 2, 2));
+d3d.resetLayerState();
+check('resetLayerState does NOT reset PROJECTION', d3d.GetTransform(D3DTS_PROJECTION).m[0] === 2);
+d3d.reset2D();
+check('reset2D resets VIEW, PROJECTION and WORLD to identity',
+  d3d.GetTransform(D3DTS_PROJECTION).m[0] === 1 &&
+  d3d.GetTransform(D3DTS_VIEW).m[0] === 1 &&
+  d3d.GetTransform(D3DTS_WORLD).m[0] === 1);
+
+// ======================================================================= 12
+// buildMipsD3D8Box — the byte-identity guard for ?quality=original.
+// =========================================================================
+{
+  const src = new Uint32Array([
+    D3DCOLOR_ARGB(255, 1, 2, 3), D3DCOLOR_ARGB(255, 4, 5, 6),
+    D3DCOLOR_ARGB(255, 7, 8, 9), D3DCOLOR_ARGB(255, 10, 11, 12)]);
+  const lv = buildMipsD3D8Box(src, 2, 2);
+  check('buildMipsD3D8Box: 2x2 -> 2 levels', lv.length === 2 &&
+    lv[1].width === 1 && lv[1].height === 1);
+  const got = lv[1].data[0] >>> 0;
+  const want = D3DCOLOR_ARGB(255, (1 + 4 + 7 + 10) >> 2, (2 + 5 + 8 + 11) >> 2, (3 + 6 + 9 + 12) >> 2);
+  check('buildMipsD3D8Box reproduces the integer >>2 average exactly',
+    got === want, `got 0x${got.toString(16)} want 0x${want.toString(16)}`);
+  // truncation, not rounding: (0+0+0+3)>>2 == 0
+  const t = buildMipsD3D8Box(new Uint32Array([
+    D3DCOLOR_ARGB(0, 0, 0, 0), D3DCOLOR_ARGB(0, 0, 0, 0),
+    D3DCOLOR_ARGB(0, 0, 0, 0), D3DCOLOR_ARGB(0, 0, 0, 3)]), 2, 2);
+  check('buildMipsD3D8Box truncates (>>2), it does not round',
+    (t[1].data[0] >>> 0) === 0, '0x' + (t[1].data[0] >>> 0).toString(16));
+  const chain8 = buildMipsD3D8Box(new Uint32Array(64), 8, 8);
+  check('buildMipsD3D8Box: 8x8 -> 4 levels (full chain, Levels = 0)', chain8.length === 4);
+  const chain2 = buildMipsD3D8Box(new Uint32Array(64), 8, 8, 2);
+  check('buildMipsD3D8Box honours an explicit level count', chain2.length === 2);
+  // a mipped texture really gets a chain
+  const mipTex = d3d.createTexture(new Uint32Array(64).fill(WHITE), 8, 8, { levels: 0 });
+  check('createTexture({levels: 0}) builds the full chain', mipTex.levels === 4 && mipTex.hasMips);
+  const oneTex = d3d.createTexture(new Uint32Array(64).fill(WHITE), 8, 8, { levels: 1 });
+  check('createTexture({levels: 1}) is single-level', oneTex.levels === 1 && !oneTex.hasMips);
+}
+
+// ======================================================================= 13
+// Render targets.
+// =========================================================================
+{
+  const rt = d3d.createRenderTargetTexture(256, 256, true);
+  check('createRenderTargetTexture is level-1 and flagged flipV',
+    rt.levels === 1 && rt.flipV === true && rt.isRenderTarget === true);
+  d3d.SetRenderTarget(rt, d3d.depthSurface);
+  check('SetRenderTarget resizes the viewport to the target',
+    d3d.GetViewport().width === 256 && d3d.GetViewport().height === 256);
+  untextured();
+  identityTransforms();
+  d3d.setCullMode(0);
+  d3d.setBlendMode(0);
+  clearTo(BLUE);
+  drawQuad(quad(-1, 1, 1, 0, { color: RED, z: 0.5 }));      // TOP half of the RT
+  // depth still works at 256x256
+  drawQuad(quad(-1, 0, 1, -1, { color: WHITE, z: 0.2 }));
+  drawQuad(quad(-1, 0, 1, -1, { color: BLACK, z: 0.9 }));   // behind: rejected
+  const rtBottom = d3d.readPixel(128, 200);
+  check('depth buffer works at the 256x256 render-target size',
+    rtBottom[0] > 200 && rtBottom[1] > 200, `rgb=${rtBottom[0]},${rtBottom[1]},${rtBottom[2]}`);
+
+  // a second, different RT size must get its own depth renderbuffer
+  const rt2 = d3d.createRenderTargetTexture(128, 128, false);
+  d3d.SetRenderTarget(rt2, d3d.depthSurface);
+  clearTo(BLUE);
+  drawQuad(quad(-1, 1, 1, -1, { color: WHITE, z: 0.2 }));
+  drawQuad(quad(-1, 1, 1, -1, { color: RED, z: 0.9 }));     // behind: rejected
+  const rt2c = d3d.readPixel(64, 64);
+  check('depth buffer works at a SECOND render-target size (128x128)',
+    rt2c[0] > 200 && rt2c[1] > 200 && rt2c[2] > 200, `rgb=${rt2c[0]},${rt2c[1]},${rt2c[2]}`);
+
+  // back to the backbuffer, sample the first RT
+  d3d.SetRenderTarget(null, d3d.depthSurface);
+  check('SetRenderTarget(null) restores the backbuffer viewport',
+    d3d.GetViewport().width === W && d3d.GetViewport().height === H);
+  clearTo(BLACK);
+  selectTex0();
+  d3d.SetTexture(0, rt);
+  d3d.SetTextureStageState(0, D3DTSS_MAGFILTER, D3DTEXF_LINEAR);
+  d3d.SetTextureStageState(0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
+  d3d.SetTextureStageState(0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
+  drawQuad(quad(-1, 1, 1, -1, { uv: [0.05, 0.05, 0.95, 0.95] }));
+  const top = px(0, 0.7), bot = px(0, -0.7);
+  checkRGB('render target samples back the right way up (v flip handled)', top, 255, 0, 0, 10);
+  check('...and the RT bottom half is the white quad',
+    bot[0] > 200 && bot[1] > 200 && bot[2] > 200, `rgb=${bot[0]},${bot[1]},${bot[2]}`);
+  throws('SetRenderTarget rejects a content texture',
+    () => d3d.SetRenderTarget(texA, d3d.depthSurface), 'createRenderTargetTexture');
+  d3d.SetRenderTarget(null, d3d.depthSurface);
+}
+
+// ======================================================================= 14
+// readbackRect — the lens-flare software occlusion query.
+// =========================================================================
+{
+  untextured();
+  identityTransforms();
+  d3d.setBlendMode(0);
+  clearTo(D3DCOLOR_ARGB(255, 10, 20, 30));
+  drawQuad(quad(-1, 1, 0, -1, { color: D3DCOLOR_ARGB(255, 200, 100, 50) }));
+  const rb = d3d.readbackRect(400, 200, 4, 4);      // right half: the clear colour
+  check('readbackRect returns a Uint32Array(16)',
+    rb instanceof Uint32Array && rb.length === 16, `${rb.length}`);
+  const c0 = rb[0] >>> 0;
+  check('readbackRect packs 0xAARRGGBB',
+    ((c0 >>> 16) & 255) === 10 && ((c0 >>> 8) & 255) === 20 && (c0 & 255) === 30,
+    '0x' + c0.toString(16));
+  const rb2 = d3d.readbackRect(100, 200, 4, 4);     // left half: the quad
+  check('readbackRect reads the covered half as the drawn colour',
+    ((rb2[0] >>> 16) & 255) === 200, '0x' + (rb2[0] >>> 0).toString(16));
+}
+
+// ======================================================================= 15
+// Present does not assert !inScene, and the frame tail works.
+// =========================================================================
+check('still inScene (the original presents inside BeginScene/EndScene)', d3d.inScene === true);
+try {
+  d3d.presentAndRestoreBackbuffer(D3DCOLOR_ARGB(255, 5, 6, 7));
+  check('presentAndRestoreBackbuffer inside a scene does not throw', true);
+} catch (e) {
+  check('presentAndRestoreBackbuffer inside a scene does not throw', false, e.message);
+}
+check('...and leaves a fresh scene open', d3d.inScene === true);
+checkRGB('...having cleared to the requested colour', px(0, 0), 5, 6, 7);
+
+// ======================================================================= 16
+// A composite frame + a clean error state.
+// =========================================================================
+{
+  d3d.resetLayerState();
+  d3d.SetTransform(D3DTS_PROJECTION,
+    D3DMatrix.perspectiveFovDegLH(60, W / H, 1.0, 1000.0));
+  d3d.SetTransform(D3DTS_VIEW, D3DMatrix.lookAtLH([0, 0, -6], [0, 0, 0], [0, 1, 0]));
+  d3d.SetTransform(D3DTS_WORLD, D3DMatrix.rotationY(0.7));
+  clearTo(D3DCOLOR_ARGB(255, 8, 8, 24));
+  d3d.setCullMode(0);
+  selectTex0();
+  d3d.SetTexture(0, texOrient);
+  d3d.SetTextureStageState(0, D3DTSS_ADDRESSU, D3DTADDRESS_WRAP);
+  d3d.SetTextureStageState(0, D3DTSS_ADDRESSV, D3DTADDRESS_WRAP);
+  drawQuad(quad(-2, 2, 2, -2, { color: WHITE, z: 0, uv: [0, 0, 3, 3] }));
+  d3d.reset2D();
+  untextured();
+  d3d.setBlendMode(2);
+  drawQuad(quad(-0.9, -0.6, -0.2, -0.9, { color: D3DCOLOR_ARGB(200, 255, 200, 64), z: 0.1 }));
+  d3d.EndScene();
+  check('final gl.getError() === 0', gl.getError() === 0, '0x' + gl.getError().toString(16));
+  const all = new Uint8Array(W * H * 4);
+  gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, all);
+  const seen = new Set();
+  let nonBg = 0;
+  for (let i = 0; i < all.length; i += 4) {
+    const key = (all[i] << 16) | (all[i + 1] << 8) | all[i + 2];
+    seen.add(key);
+    if (key !== ((8 << 16) | (8 << 8) | 24)) nonBg++;
+  }
+  check('composite frame has many distinct colours', seen.size > 20, `${seen.size} colours`);
+  check('composite frame has substantial coverage', nonBg > 20000, `${nonBg} px`);
+}
+
+finish();
+
+function finish() {
+  const failed = results.filter((r) => !r.pass);
+  window.__results = results;
+  window.__pass = failed.length === 0;
+  window.__done = true;
+  document.getElementById('log').innerHTML = results.map((r) =>
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span>  ${r.name}` +
+    (r.detail ? `   [${r.detail}]` : '')).join('\n') +
+    `\n\n${results.length - failed.length}/${results.length} passed`;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,308 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Sonnet — restoration review</title>
+<!--
+  A scrubbing review tool for the whole 461 s timeline.
+
+  It reads the sweep's PRE-RENDERED frame pairs rather than rendering live, because
+  live rendering cannot be scrubbed: warming up to a late position replays the whole
+  script and takes seconds (see re/PERFORMANCE.md — warmTo is 97-99% of a render call).
+  Pre-rendered pairs make every position instant.
+
+  Serve the repo and open:
+      http://127.0.0.1:8777/web/tools/review.html
+  Regenerate the frames it reads with:
+      node web/test/sweep.mjs
+-->
+<style>
+  :root {
+    --bg: #12141a; --panel: #191c24; --line: #2b3040; --ink: #dfe4ee;
+    --dim: #8b93a7; --accent: #7fd7a7; --warn: #fdda62; --bad: #e2725b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line);
+           display: flex; gap: 20px; align-items: baseline; flex-wrap: wrap; }
+  h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .04em; }
+  .dim { color: var(--dim); }
+  main { display: grid; grid-template-columns: 1fr 340px; gap: 16px; padding: 16px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+
+  /* ---- viewer ---- */
+  #stage { position: relative; background: #000; border: 1px solid var(--line);
+           aspect-ratio: 4/3; overflow: hidden; }
+  #stage img { position: absolute; inset: 0; width: 100%; height: 100%;
+               image-rendering: pixelated; }
+  #ref { opacity: 0; }
+  #stage.showRef #ref { opacity: 1; }
+  #stage.diff #ours { mix-blend-mode: difference; }
+  #stage.diff #ref { opacity: 1; }
+  #stage.split #ref { clip-path: inset(0 0 0 var(--split)); opacity: 1; }
+  #stage.split #ours { clip-path: inset(0 calc(100% - var(--split)) 0 0); }
+  #splitLine { position: absolute; top: 0; bottom: 0; width: 1px;
+               background: var(--accent); left: var(--split); display: none; }
+  #stage.split #splitLine { display: block; }
+  #badge { position: absolute; left: 8px; top: 8px; padding: 2px 8px; border-radius: 3px;
+           background: #000a; font-size: 11px; letter-spacing: .06em; }
+
+  /* ---- timeline ---- */
+  #tl { margin-top: 12px; }
+  #chart { width: 100%; height: 90px; display: block; background: var(--panel);
+           border: 1px solid var(--line); cursor: crosshair; }
+  #scrub { width: 100%; margin: 8px 0 0; }
+  .row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  kbd { background: #262b38; border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 3px; padding: 0 5px; font-size: 11px; }
+
+  /* ---- notes ---- */
+  aside { background: var(--panel); border: 1px solid var(--line); padding: 12px;
+          display: flex; flex-direction: column; gap: 10px; max-height: 86vh; }
+  select, textarea, button, input { font: inherit; color: var(--ink);
+      background: #10131a; border: 1px solid var(--line); border-radius: 3px; padding: 6px; }
+  textarea { resize: vertical; min-height: 62px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: #10131a; font-weight: 600; border: 0; }
+  #notes { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .note { border: 1px solid var(--line); border-left: 3px solid var(--warn);
+          padding: 6px 8px; font-size: 12px; }
+  .note b { color: var(--warn); font-weight: 600; }
+  .note .meta { color: var(--dim); font-size: 11px; }
+  .note button { padding: 0 5px; font-size: 11px; float: right; }
+  .stat { display: flex; justify-content: space-between; gap: 10px; }
+  .stat span:last-child { color: var(--dim); }
+</style>
+
+<header>
+  <h1>SONNET — restoration review</h1>
+  <span class="dim" id="provenance">loading…</span>
+</header>
+
+<main>
+  <section>
+    <div id="stage" class="split" style="--split:50%">
+      <img id="ours" alt="port"><img id="ref" alt="reference"><div id="splitLine"></div>
+      <div id="badge"></div>
+    </div>
+
+    <div id="tl">
+      <canvas id="chart"></canvas>
+      <input id="scrub" type="range" min="0" value="0" step="1">
+      <div class="row dim" style="margin-top:6px">
+        <span><kbd>←</kbd><kbd>→</kbd> step</span>
+        <span><kbd>⇧</kbd>+arrows ×10</span>
+        <span><kbd>space</kbd> hold = reference</span>
+        <span><kbd>1</kbd> split <kbd>2</kbd> A/B <kbd>3</kbd> difference</span>
+        <span><kbd>w</kbd> jump to worst unreviewed</span>
+        <span><kbd>n</kbd> focus note</span>
+      </div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="stat"><span id="posLabel">—</span><span id="sceneLabel"></span></div>
+    <div class="stat"><span>RMSE</span><span id="rmseLabel">—</span></div>
+    <div class="stat"><span>luminance ours / ref</span><span id="lumLabel">—</span></div>
+
+    <select id="cat">
+      <option value="missing">missing — something the original draws is absent</option>
+      <option value="wrong-shape">wrong shape / geometry</option>
+      <option value="wrong-colour">wrong colour / brightness</option>
+      <option value="wrong-timing">wrong timing — right thing, wrong moment</option>
+      <option value="missing-motion">static — should be animating</option>
+      <option value="camera">camera framing</option>
+      <option value="text">text / typography</option>
+      <option value="extra">we draw something the original does not</option>
+      <option value="ok">looks right (note it so it is not re-reviewed)</option>
+    </select>
+    <textarea id="noteText" placeholder="what is wrong at this position…"></textarea>
+    <button class="primary" id="add">Add note at this position</button>
+
+    <div class="row">
+      <button id="exportMd">Export markdown</button>
+      <button id="exportJson">Export JSON</button>
+      <button id="clear">Clear all</button>
+    </div>
+    <div class="dim" id="count"></div>
+    <div id="notes"></div>
+  </aside>
+</main>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const FRAMES = '../../work/verify/frames/';
+const KEY = 'sonnet-review-notes-v1';
+
+// ---------------------------------------------------------------- data
+const res = await fetch('../../work/verify/results.json').then(r => r.json());
+const S = res.samplesDetail.slice().sort((a, b) => a.posNum - b.posNum);
+$('#provenance').textContent =
+  `${S.length} samples · quality=${res.quality} · ${res.generated || ''} · frames from verify/frames/`;
+$('#scrub').max = S.length - 1;
+
+let notes = JSON.parse(localStorage.getItem(KEY) || '[]');
+let i = 0, mode = 'split';
+
+// ---------------------------------------------------------------- chart
+const chart = $('#chart'), cx = chart.getContext('2d');
+function drawChart() {
+  const w = chart.width = chart.clientWidth * devicePixelRatio;
+  const h = chart.height = 90 * devicePixelRatio;
+  cx.clearRect(0, 0, w, h);
+  const max = Math.max(...S.map(s => s.rmse)) || 1;
+
+  // scene bands, so it is obvious which object owns a stretch of the timeline
+  let prev = null, x0 = 0;
+  S.forEach((s, k) => {
+    if (s.obj !== prev) {
+      if (prev !== null) {
+        cx.fillStyle = (prev % 2) ? '#ffffff06' : '#ffffff0e';
+        cx.fillRect(x0, 0, k / S.length * w - x0, h);
+      }
+      prev = s.obj; x0 = k / S.length * w;
+    }
+  });
+  cx.fillStyle = (prev % 2) ? '#ffffff06' : '#ffffff0e';
+  cx.fillRect(x0, 0, w - x0, h);
+
+  // rmse curve
+  cx.beginPath();
+  S.forEach((s, k) => {
+    const x = k / (S.length - 1) * w, y = h - (s.rmse / max) * (h - 6) - 3;
+    k ? cx.lineTo(x, y) : cx.moveTo(x, y);
+  });
+  cx.strokeStyle = '#7fd7a7'; cx.lineWidth = 1.2 * devicePixelRatio; cx.stroke();
+
+  // note markers
+  for (const n of notes) {
+    const k = S.findIndex(s => s.pos === n.pos);
+    if (k < 0) continue;
+    const x = k / (S.length - 1) * w;
+    cx.fillStyle = n.cat === 'ok' ? '#7fd7a7' : '#fdda62';
+    cx.fillRect(x - devicePixelRatio, 0, 2 * devicePixelRatio, 8 * devicePixelRatio);
+  }
+
+  // cursor
+  const cxp = i / (S.length - 1) * w;
+  cx.strokeStyle = '#e2725b'; cx.lineWidth = devicePixelRatio;
+  cx.beginPath(); cx.moveTo(cxp, 0); cx.lineTo(cxp, h); cx.stroke();
+}
+
+// ---------------------------------------------------------------- view
+function show() {
+  const s = S[i];
+  $('#ours').src = `${FRAMES}ours_${s.pos}.png`;
+  $('#ref').src  = `${FRAMES}ref_${s.pos}.png`;
+  const mm = Math.floor(s.seconds / 60), ss = (s.seconds % 60).toFixed(1).padStart(4, '0');
+  $('#posLabel').textContent = `${s.pos}  ${mm}:${ss}`;
+  $('#sceneLabel').textContent = `obj ${s.obj} · ${s.scene}`;
+  $('#rmseLabel').textContent = `${s.rmse.toFixed(1)}   (${s.psnr.toFixed(1)} dB)`;
+  $('#lumLabel').textContent = `${s.meanLumOurs} / ${s.meanLumRef}`;
+  $('#badge').textContent = mode === 'split' ? 'ours | reference'
+                          : mode === 'diff' ? 'difference' : 'A/B — hold space';
+  $('#scrub').value = i;
+  drawChart();
+  renderNotes();
+}
+function setMode(m) {
+  mode = m;
+  $('#stage').className = m === 'split' ? 'split' : (m === 'diff' ? 'diff' : '');
+  show();
+}
+
+// ---------------------------------------------------------------- notes
+function renderNotes() {
+  const here = notes.filter(n => n.pos === S[i].pos);
+  const rest = notes.filter(n => n.pos !== S[i].pos)
+                    .sort((a, b) => a.posNum - b.posNum);
+  $('#count').textContent = `${notes.length} note${notes.length === 1 ? '' : 's'}` +
+    (here.length ? ` · ${here.length} at this position` : '');
+  $('#notes').innerHTML = '';
+  for (const n of [...here, ...rest]) {
+    const el = document.createElement('div');
+    el.className = 'note';
+    el.style.borderLeftColor = n.cat === 'ok' ? 'var(--accent)' : 'var(--warn)';
+    el.innerHTML = `<button data-id="${n.id}">×</button>` +
+      `<b>${n.cat}</b> <span class="meta">${n.pos} · obj ${n.obj}</span><br>` +
+      `${n.text.replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}`;
+    el.onclick = (e) => {
+      if (e.target.tagName === 'BUTTON') {
+        notes = notes.filter(x => x.id !== +e.target.dataset.id); save();
+      } else { i = S.findIndex(s => s.pos === n.pos); show(); }
+    };
+    $('#notes').append(el);
+  }
+}
+const save = () => { localStorage.setItem(KEY, JSON.stringify(notes)); show(); };
+
+$('#add').onclick = () => {
+  const text = $('#noteText').value.trim();
+  if (!text) return $('#noteText').focus();
+  const s = S[i];
+  notes.push({ id: Date.now(), pos: s.pos, posNum: s.posNum, seconds: s.seconds,
+               obj: s.obj, scene: s.scene, rmse: s.rmse, cat: $('#cat').value, text });
+  $('#noteText').value = '';
+  save();
+};
+$('#clear').onclick = () => { if (confirm('Delete all notes?')) { notes = []; save(); } };
+
+function download(name, body, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([body], { type }));
+  a.download = name; a.click();
+}
+$('#exportJson').onclick = () =>
+  download('sonnet-review.json', JSON.stringify(notes, null, 1), 'application/json');
+$('#exportMd').onclick = () => {
+  const by = {};
+  for (const n of notes.filter(n => n.cat !== 'ok')) (by[n.obj] ??= []).push(n);
+  let md = '# Sonnet — review notes\n\n';
+  md += `${notes.length} notes over ${S.length} sampled positions.\n\n`;
+  for (const obj of Object.keys(by).sort((a, b) => a - b)) {
+    md += `## object ${obj} — ${by[obj][0].scene}\n\n`;
+    for (const n of by[obj].sort((a, b) => a.posNum - b.posNum))
+      md += `- **${n.pos}** (${(n.seconds / 60 | 0)}:${(n.seconds % 60).toFixed(1).padStart(4, '0')},` +
+            ` RMSE ${n.rmse.toFixed(1)}) — *${n.cat}* — ${n.text}\n`;
+    md += '\n';
+  }
+  download('sonnet-review.md', md, 'text/markdown');
+};
+
+// ---------------------------------------------------------------- input
+$('#scrub').oninput = (e) => { i = +e.target.value; show(); };
+chart.onclick = (e) => {
+  i = Math.round(e.offsetX / chart.clientWidth * (S.length - 1));
+  i = Math.max(0, Math.min(S.length - 1, i)); show();
+};
+$('#stage').onmousemove = (e) => {
+  if (mode !== 'split') return;
+  $('#stage').style.setProperty('--split', (e.offsetX / $('#stage').clientWidth * 100) + '%');
+};
+addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+    if (e.key === 'Escape') e.target.blur();
+    return;
+  }
+  const step = e.shiftKey ? 10 : 1;
+  if (e.key === 'ArrowRight') { i = Math.min(S.length - 1, i + step); show(); }
+  else if (e.key === 'ArrowLeft') { i = Math.max(0, i - step); show(); }
+  else if (e.key === ' ') { e.preventDefault(); $('#stage').classList.add('showRef'); }
+  else if (e.key === '1') setMode('split');
+  else if (e.key === '2') setMode('ab');
+  else if (e.key === '3') setMode('diff');
+  else if (e.key === 'n') { e.preventDefault(); $('#noteText').focus(); }
+  else if (e.key === 'w') {
+    // jump to the worst position that has no note yet — the review work-list
+    const seen = new Set(notes.map(n => n.pos));
+    let best = -1, bestV = -1;
+    S.forEach((s, k) => { if (!seen.has(s.pos) && s.rmse > bestV) { bestV = s.rmse; best = k; } });
+    if (best >= 0) { i = best; show(); }
+  }
+});
+addEventListener('keyup', (e) => {
+  if (e.key === ' ') $('#stage').classList.remove('showRef');
+});
+addEventListener('resize', drawChart);
+
+setMode('split');
+</script>

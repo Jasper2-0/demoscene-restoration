@@ -1,0 +1,36 @@
+{
+ "target": "spline",
+ "case": "res50",
+ "fn_va": "0x4058a6",
+ "call": {
+  "convention": "fastcall",
+  "loader": "0x405a29",
+  "resource": 50,
+  "data_va": "0x41819e"
+ },
+ "fpcw": "0x27f",
+ "seed_before": null,
+ "seed_after": null,
+ "image": {
+  "path": "unpacked/sonnet_img.bin",
+  "sha256": "66dea2fd173e0b81de5be7f54d7d611bed50be75e5b00ec4f907f26b8e037770"
+ },
+ "emulator": {
+  "unicorn": "2.1.4",
+  "host": "darwin-arm64",
+  "note": "x87 arithmetic softfloat-80 honouring FPCW; transcendentals via host libm double"
+ },
+ "dumps": [
+  {
+   "name": "samples",
+   "file": "samples.bin",
+   "size": 1820,
+   "sha256": "7a01b37bdc95ae73cf352c49bf0c9bb249bf4b0b61667179febfb7dc20a01958"
+  }
+ ],
+ "rand_writes": 0,
+ "keyCount": 3,
+ "duration": 256.0,
+ "samples": 65,
+ "record": "f32 x7: t, eye.xyz, target.xyz"
+}

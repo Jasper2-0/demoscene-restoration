@@ -1,0 +1,19 @@
+{
+ "target": "cloudsky",
+ "scene": 3,
+ "node_va": "0x1d215000",
+ "verts": 32,
+ "stride": 44,
+ "colours": {
+  "0xdfffffff": 8,
+  "0xbfffffff": 8,
+  "0x9fffffff": 8,
+  "0xffffffff": 4,
+  "0x7fffffff": 4
+ },
+ "y_range": [
+  204.0,
+  232.0
+ ],
+ "image_sha256": "66dea2fd173e0b81de5be7f54d7d611bed50be75e5b00ec4f907f26b8e037770"
+}
