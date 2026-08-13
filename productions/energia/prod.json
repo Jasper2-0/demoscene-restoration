@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "slug": "energia",
+  "title": "Energia",
+  "group": "Sunflower",
+  "kind": "restoration",
+  "platform": "Windows",
+  "releaseDate": "2001-08-04",
+  "party": {
+    "name": null,
+    "compo": null,
+    "ranking": null
+  },
+  "ids": {
+    "demozoo": 9842,
+    "pouet": 3290
+  },
+  "links": {
+    "demozoo": "https://demozoo.org/productions/9842/",
+    "pouet": "https://www.pouet.net/prod.php?which=3290",
+    "youtube": "https://www.youtube.com/watch?v=JJ3TVjBjat4"
+  },
+  "credits": [
+    {
+      "name": "Saffron",
+      "role": "Graphics"
+    },
+    {
+      "name": "Unreal",
+      "role": "Code"
+    },
+    {
+      "name": "Orion",
+      "role": "Other"
+    },
+    {
+      "name": "Yolk",
+      "role": "Music"
+    },
+    {
+      "name": "Yoghurt",
+      "role": "Code"
+    },
+    {
+      "name": "Louie",
+      "role": "Graphics"
+    }
+  ],
+  "originals": [
+    {
+      "path": "originals/sunflower/energia_fixed.zip",
+      "urls": [
+        "https://files.scene.org/get/demos/groups/sunflower/energia_fixed.zip"
+      ],
+      "sha256": "e4deae3ddce6951edeb98bc9beee39df6eec916df59b98b77e2eb221b71ac352",
+      "bytes": 6189775,
+      "note": "fixed release (on disk)"
+    },
+    {
+      "path": "originals/sunflower/energia_by_sunflower.zip",
+      "urls": [
+        "https://files.scene.org/get/parties/2001/assembly01/demo/energia_by_sunflower.zip"
+      ],
+      "sha256": "ba3869a0681834fa01406e76cd9c4f2540001dafaf490d85b5cc7803ca701598",
+      "bytes": 16678916,
+      "note": "party version, Assembly 2001"
+    }
+  ],
+  "captures": [
+    {
+      "youtube": "JJ3TVjBjat4",
+      "path": "productions/energia/work/reference/energia_ref.mkv",
+      "format": "bestvideo+bestaudio",
+      "sha256": null,
+      "alignmentOffsetMs": null,
+      "note": "soundtrack must be waveform-aligned to the original 261.459 s MP3; capture not kept on disk by policy"
+    }
+  ],
+  "status": {
+    "web": "engineering",
+    "pagesRepo": null
+  }
+}

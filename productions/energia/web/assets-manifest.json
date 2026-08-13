@@ -1,0 +1,350 @@
+{
+  "demo": "Energia",
+  "assets": [
+    {
+      "path": "ADDICT1.jpg",
+      "size": 4953,
+      "sha256": "46acfd3fa52b314c53cf02c770a88e1b2cf16e0127678feaa210897b1259f5db"
+    },
+    {
+      "path": "ADDICT1.raw",
+      "size": 65536,
+      "sha256": "cdf7acbd9b44225f31b7e4f5586d4b715663764e1f5b7f8378b153e819dab7fa"
+    },
+    {
+      "path": "back_gradient.jpg",
+      "size": 9322,
+      "sha256": "8976421424bf2f0ba0772966a615ebeab1651f087353517b42ea4f2de9f27db4"
+    },
+    {
+      "path": "back_gradient2.jpg",
+      "size": 8915,
+      "sha256": "3fa2f5a0a7ed8850cd52cb1e04877d1a3c3ab164d5d9a291188f485ba287b2cc"
+    },
+    {
+      "path": "black32.jpg",
+      "size": 5986,
+      "sha256": "5a357e1b5abf4c9abf1a20b4582fbff3f0a477b330ba38177a5faa3be744a95b"
+    },
+    {
+      "path": "black64.jpg",
+      "size": 7303,
+      "sha256": "e7b45481d74080df12f4909a003613711d8300d745fbbe3e001d6cbbff91be1b"
+    },
+    {
+      "path": "D1_1.jpg",
+      "size": 30700,
+      "sha256": "1ce659bfcd71a954ed26b141ca4b4b01d0b7665a8aba6006ccf6055109a7863a"
+    },
+    {
+      "path": "D1_2.jpg",
+      "size": 43910,
+      "sha256": "ffa130c22a9112cba7d0d4d88e5845a5ec01c30b53775cd34322fb2aaffd9149"
+    },
+    {
+      "path": "D1_3.jpg",
+      "size": 68437,
+      "sha256": "2ef5122650a94a176143c8d83fcf233d29809ed94611a9624ebee7cf8d2760be"
+    },
+    {
+      "path": "D2_1.jpg",
+      "size": 64715,
+      "sha256": "50f7449a95691e61f0fdb00e189b70ee6d1253c39e2cef4c84a841a071a21a5f"
+    },
+    {
+      "path": "D2_2.jpg",
+      "size": 71227,
+      "sha256": "952047f5202d3581eae0f37ef70671edba3f0486303980477801b8850f02382f"
+    },
+    {
+      "path": "D2_3.jpg",
+      "size": 66251,
+      "sha256": "ad25abcda7d096dab5652a18443576a6ecc0384deec0c983d738d8d9e0eeaad0"
+    },
+    {
+      "path": "D2_3inv.jpg",
+      "size": 70067,
+      "sha256": "ee29ac46b9721491c860039f4d2370a70f9aadbcf85f406d0c5323d9a3e0797e"
+    },
+    {
+      "path": "D3_3.jpg",
+      "size": 40207,
+      "sha256": "8f78f46d169ee76ec05eb3f22107bda0c16d1541ea630625393be19e6570feee"
+    },
+    {
+      "path": "D4_1.jpg",
+      "size": 54440,
+      "sha256": "583a1268c4a81287ff21d1853f7ac5134a0eae89907b53cfdbfc79185f4136ae"
+    },
+    {
+      "path": "D4_2.jpg",
+      "size": 59208,
+      "sha256": "ee417c78252388a8fcf7a98d3294b245ad5f1a4b4d7d6d84f9d05b4590d07ebb"
+    },
+    {
+      "path": "D4_22.jpg",
+      "size": 66165,
+      "sha256": "541e3a646499048bb020641fdbc083ae431d9079a8ea72a7b68dcbaca6ed6755"
+    },
+    {
+      "path": "D4_3.jpg",
+      "size": 76680,
+      "sha256": "7659c78815550dc0d62facd9d5311203c80accf8146742af3e2fc918e5d6b072"
+    },
+    {
+      "path": "D4_4.jpg",
+      "size": 68026,
+      "sha256": "e2f32d3360a75214e82afdb116665a13894d3c5bbdf64fae5e22b0ead464a3d7"
+    },
+    {
+      "path": "D5_2.jpg",
+      "size": 20639,
+      "sha256": "b51d57e6dcdc91879d5d92b1d6458a6fea46ecd0059bf1ef1a382d14a331ac4e"
+    },
+    {
+      "path": "D5_6.jpg",
+      "size": 41541,
+      "sha256": "486bee5bac9678d73497fc0527b54f4760e96bf09d6471ecd1e2e945cc840b29"
+    },
+    {
+      "path": "D5_7.jpg",
+      "size": 27989,
+      "sha256": "dc9bc358f19d54d440e1e42c145d0e719f42f07727d7a64a6040a22e84240ada"
+    },
+    {
+      "path": "DISP2.jpg",
+      "size": 3389,
+      "sha256": "1a64e1d7fb514e3bb5e86bb4850201f82fba70a568f9942a44ebcb3174648fbb"
+    },
+    {
+      "path": "DISP2.raw",
+      "size": 65536,
+      "sha256": "c6d17b5229d1afe88310008749d087375efcc62a4ccc2bab196211a138544fc7"
+    },
+    {
+      "path": "dot.jpg",
+      "size": 7712,
+      "sha256": "41a9c274ba09a3f05c12b5ec5a6e5d996aac1de4c4214e81c4f5ebf1fc1e36b6"
+    },
+    {
+      "path": "dust.jpg",
+      "size": 7898,
+      "sha256": "d84beda331fb45dc7a4a0aeaeba65918b2a14cbb5cde5f0183075d057168a6f9"
+    },
+    {
+      "path": "energia.mp3",
+      "size": 4183345,
+      "sha256": "7ed88221de1812ce80c12b1b216e0a299fbbdaa71b3345ca03162964c9c9d22e"
+    },
+    {
+      "path": "Env_AllColors.jpg",
+      "size": 7641,
+      "sha256": "1387eda2153a3d89cfd49a19f96ba45b8cd0e69865c56a9076b7ff8671d02334"
+    },
+    {
+      "path": "Env_Yellow.jpg",
+      "size": 8121,
+      "sha256": "7619a5ee0c1333f963eaea4dc98ba092d546156b56ec281d15c6a1f64ec69926"
+    },
+    {
+      "path": "envwater.jpg",
+      "size": 17545,
+      "sha256": "d8bcf56ac8bff35f3595a0b9b44c43d9d39b7dc2c25ffe56048fbb72455179a3"
+    },
+    {
+      "path": "fajna.jpg",
+      "size": 4953,
+      "sha256": "46acfd3fa52b314c53cf02c770a88e1b2cf16e0127678feaa210897b1259f5db"
+    },
+    {
+      "path": "FLARE02.jpg",
+      "size": 5027,
+      "sha256": "c27435389dce34be210e17ada2b6e3de5ddcce498bc564054d6ee159e0c4d166"
+    },
+    {
+      "path": "FLARE03.jpg",
+      "size": 5163,
+      "sha256": "51bdbaa821cc94e0f481d4e6cc31b03180aff411b291f418a38d107e262eae46"
+    },
+    {
+      "path": "flare1.jpg",
+      "size": 7898,
+      "sha256": "d84beda331fb45dc7a4a0aeaeba65918b2a14cbb5cde5f0183075d057168a6f9"
+    },
+    {
+      "path": "freak.exp",
+      "size": 124230,
+      "sha256": "1bdf0a68016064fa1df7811dabe1a188c95769037426713755816ae7029c29a4"
+    },
+    {
+      "path": "gra.jpg",
+      "size": 8902,
+      "sha256": "1e51ed16b5b3e44c94f8eca13f6469874199e83c933141067db4433b5a406322"
+    },
+    {
+      "path": "j-envi1.jpg",
+      "size": 8577,
+      "sha256": "708dcfaf72e802b6c41817df0dc8b2d1091cf3c1d869aa5e26f35bdb3ef79989"
+    },
+    {
+      "path": "J-envi2.jpg",
+      "size": 8577,
+      "sha256": "708dcfaf72e802b6c41817df0dc8b2d1091cf3c1d869aa5e26f35bdb3ef79989"
+    },
+    {
+      "path": "kalju3512.jpg",
+      "size": 49152,
+      "sha256": "b7d78d42feb4dc35f63d04a7691efbcc58c7e1991a86c17f58d9e482dff64bda"
+    },
+    {
+      "path": "Kalju4.jpg",
+      "size": 22226,
+      "sha256": "86b2e2e73fd60583352322045a213dd2968444c4750d8ae6a0769d51b87af312"
+    },
+    {
+      "path": "krap2.exp",
+      "size": 1000356,
+      "sha256": "2bba96c0e85d778d823fc3e67ca7147aea6c581ebed83a954ad44f0639a2b994"
+    },
+    {
+      "path": "kurwa.exp",
+      "size": 155998,
+      "sha256": "72139a2150820d78b8b5dd8f59dce6de4401dd05fb47e6976ad2a14dade1e092"
+    },
+    {
+      "path": "kurwa2_.exp",
+      "size": 154334,
+      "sha256": "9114c089a2d77b8a843f68fe84e7f4b35fcde16de22668a76fe6e0eb00cb2a01"
+    },
+    {
+      "path": "kurwa2.exp",
+      "size": 62498,
+      "sha256": "83543d769a2fccb8e958f6d89457199d4e6523a8ee9bdcab1193e8c3f6234fd1"
+    },
+    {
+      "path": "nowheretorun.exp",
+      "size": 125546,
+      "sha256": "447522a1849f30355febfcb3bfa917b4b734f11d12a96603c3c818d579f4689b"
+    },
+    {
+      "path": "s.raw",
+      "size": 196608,
+      "sha256": "7ac52552996301c2f3b7933b67b87ee3e940418c82de6619143a90484c35ea29"
+    },
+    {
+      "path": "sb.raw",
+      "size": 196608,
+      "sha256": "3fed6bd6e5cbd601d03c56d14f1d9727bf2128d82cf30b265b3d3596516baf6d"
+    },
+    {
+      "path": "sc.jpg",
+      "size": 47056,
+      "sha256": "5f1eae0823db0e85e160ac870a23fd2436c1ba2bdbd3636dbf02beb563ae62bf"
+    },
+    {
+      "path": "sc2.jpg",
+      "size": 51147,
+      "sha256": "3ab316b8e00a26386b2e473e84e3be703f18776da9b2b55d6ac6517231ae74f4"
+    },
+    {
+      "path": "scene6.EXP",
+      "size": 140278,
+      "sha256": "b372eacf3e7b4068fafd10763486d9e5202c2a5ab0e2cb0678852eace95daa89"
+    },
+    {
+      "path": "shit.jpg",
+      "size": 9761,
+      "sha256": "86fb8905165282089b5c3151ccb43ab40cc8deb56e7244d2e04267e85a4b2823"
+    },
+    {
+      "path": "shit.raw",
+      "size": 12,
+      "sha256": "84d387def9825dabcd445f8f2b89097300180b1272b52a0df32ff5b7fa271dec"
+    },
+    {
+      "path": "skymap.jpg",
+      "size": 5658,
+      "sha256": "fd78fc710d18b7caf3feede43e7408815edba3f90921487f5b58631faa8a0f45"
+    },
+    {
+      "path": "sotku2.jpg",
+      "size": 32039,
+      "sha256": "a360e64a42e63f739955cb548c08562d9a0b4ee80792497574d020f3b1cf39f8"
+    },
+    {
+      "path": "Spots.jpg",
+      "size": 7044,
+      "sha256": "a812b536b583b423748bc95b4241c0b4976c7707c14e24cb5d9a816e9a55868e"
+    },
+    {
+      "path": "square.jpg",
+      "size": 10345,
+      "sha256": "2ce8ab8b00c0f17bfe86b87eebf166e21ca27bd480a24620b679b52704205bef"
+    },
+    {
+      "path": "sunftext.jpg",
+      "size": 22751,
+      "sha256": "060535e419c7ed63e0a13a7e00ff58d512ed5680560f70d91d074ff2adf1f021"
+    },
+    {
+      "path": "TheLight.jpg",
+      "size": 22038,
+      "sha256": "103dc29cae2d98634e025f93cc8e831f39bdc49ba812273ee68274c731e47f22"
+    },
+    {
+      "path": "twirlB.jpg",
+      "size": 20662,
+      "sha256": "36fe5e85e5dbb6a7ca4b82babcc04476cd897aeeb71e6989c4175d7b75f10324"
+    },
+    {
+      "path": "twirlB.raw",
+      "size": 65536,
+      "sha256": "52fe9aeaccff6e0b592ca78649dace0b86f97c989e5d0b4522eceb815a73b0e3"
+    },
+    {
+      "path": "twirlB2.jpg",
+      "size": 41627,
+      "sha256": "0abed0a82f036611fc1c31f47e2a1a8a8419148ca1d3ef74802416eaa1734254"
+    },
+    {
+      "path": "water2.jpg",
+      "size": 5536,
+      "sha256": "4b65f187ecafc1d12a6ff109b45b84680d03941f1ecb1863d9c69b93e67ad60b"
+    },
+    {
+      "path": "Water23.jpg",
+      "size": 107902,
+      "sha256": "d0a40b020133d3df05e95cfd19ddaead7e0d276900188737524604aaa92520d8"
+    },
+    {
+      "path": "wave1.raw",
+      "size": 65536,
+      "sha256": "bdcfc39ed45ff190f55bf9b65400b559232fcb5941e9a800d8b1f929dea7fc39"
+    },
+    {
+      "path": "yellow.jpg",
+      "size": 96280,
+      "sha256": "f37f9cb6eec5c437466385fa1acb86c7e3e19b68804207058794631edb3d0483"
+    },
+    {
+      "path": "yellowshit.jpg",
+      "size": 50415,
+      "sha256": "804fa3df53fa0554ed9dd5ee7e02c69f1cdbe8fceb902a735f10328ed7eaa759"
+    },
+    {
+      "path": "yellowshit3blue.jpg",
+      "size": 49152,
+      "sha256": "b7d78d42feb4dc35f63d04a7691efbcc58c7e1991a86c17f58d9e482dff64bda"
+    },
+    {
+      "path": "yellowshit4.raw",
+      "size": 65536,
+      "sha256": "84dd1252bc0787847a565439c0653b5a3ea99408366ab3c65bbb05a84e197f90"
+    },
+    {
+      "path": "yellowshitred.jpg",
+      "size": 27031,
+      "sha256": "202fc1499caa8efea550faa91027162804fb554189882f2e6c1bae6c5e7ef2f9"
+    }
+  ]
+}
