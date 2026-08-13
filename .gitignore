@@ -56,3 +56,7 @@ productions/sonnet/work/baked/tex/*
 !productions/sonnet/work/baked/tex_2x
 productions/sonnet/work/baked/tex_2x/*
 !productions/sonnet/work/baked/tex_2x/11.png
+
+# -- local agent config (machine-specific absolute paths) -------------------
+.claude/
+.codex/
