@@ -65,6 +65,21 @@ disassembly listing (same function markers as the decomp export), and
 x87 instructions have no floating-point counterpart in the C. A DROPPED flag
 means un-ported until the asm has been read.
 
+**The audit gates porting; it is not a report to consult after something
+looks wrong.** Before implementing any numeric behaviour, find the function
+that *produces* it and check it against the audit. Doing this in the wrong
+order costs a full debugging round and, worse, tends to produce an empirical
+fit that looks close enough to get committed and built upon. This happened on
+Lapsus: texture coordinates were implemented from LightWave's *documented*
+projection rules — an outside assumption, never the engine — and when the
+backdrop did not match, the response was to fit a pivot to one frame rather
+than to ask which function generated the coordinates at all. It was flagged.
+
+The failure is subtle because the missing step is not "ignore a warning" but
+"never locate the producing code": you cannot check a flag on a function you
+have not identified. So the question to ask before porting a behaviour is
+*which VA computes this?* — and only then, *is it trustworthy?*
+
 `ndisasm -b 32` plus hand-tracking the x87 stack recovers the real expression.
 Numeric constants are read straight out of `.rdata`/`.data`
 (`struct.unpack_from('<f', image, addr - 0x400000)`), and MSVC's
