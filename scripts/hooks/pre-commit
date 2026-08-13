@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Guard for a public repo built from copyrighted source material:
+#  - no staged file over 10 MB (a push with one in history is unrecoverable
+#    without a rewrite, and this repo's big files are all regenerable);
+#  - no staged PE/MS-DOS executable ("MZ" header) — the original binaries
+#    must never enter history, only their manifests do.
+# Bypass for a consciously-decided exception: git commit --no-verify.
+set -euo pipefail
+
+max=$((10 * 1024 * 1024))
+fail=0
+
+while IFS= read -r -d '' f; do
+  [ -f "$f" ] || continue
+  size=$(wc -c < "$f")
+  if [ "$size" -gt "$max" ]; then
+    echo "pre-commit: refusing $f ($((size / 1024 / 1024)) MB > 10 MB)" >&2
+    fail=1
+  fi
+  if [ "$(head -c 2 "$f" 2>/dev/null)" = "MZ" ]; then
+    echo "pre-commit: refusing $f (PE/MS-DOS executable header)" >&2
+    fail=1
+  fi
+done < <(git diff --cached --name-only --diff-filter=AM -z)
+
+exit "$fail"
