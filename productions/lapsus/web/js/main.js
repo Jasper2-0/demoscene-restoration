@@ -33,7 +33,7 @@ import { parseLWS, evalEnvelope, MORPH_EPSILON } from '../../work/js/lws.mjs';
 import { parseLWO } from '../../work/js/lwo.mjs';
 import { decodeTGA } from '../../work/js/tga.mjs';
 import { parseHair, buildStrands, simulate, shadeNormals, toLineVerts, msvcRand } from '../../work/js/hair.mjs';
-import { parseParticles, simulateSystem, frameOf, billboard } from '../../work/js/particles.mjs';
+import { parseParticles, createSystem, stepSystem, frameOf, billboard } from '../../work/js/particles.mjs';
 
 const ROOT = new URL('../../', import.meta.url).href;
 const DATA = ROOT + 'work/unpacked/lapsus_dat/data/';
@@ -1154,6 +1154,18 @@ const bgVao = gl.createVertexArray();
   // has TWO `Hair_furball` nulls, and they are supposed to be two different
   // random tufts, not one drawn twice.
   const hairRand = msvcRand();
+  // Part_Pehko's prototype system is built in Part_Pehko::create from the
+  // literal "data/particles/tauno/tauno.txt" (0x4075b5), BEFORE any frame
+  // runs, so it is loaded here rather than after the hair loop: its clones
+  // have to advance on the hair's own clock, not in a later pass.
+  let parP = null;
+  const parSystems = [];
+  if (hairSuppressed) {
+    try {
+      const t = await (await fetch(DATA + 'particles/tauno/tauno.txt')).text();
+      if (t && !/not found/i.test(t)) parP = parseParticles(t);
+    } catch {}
+  }
   for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
     const name = nullObj.name.replace(/^Hair_/, '');
     let txt;
@@ -1174,11 +1186,26 @@ const bgVao = gl.createVertexArray();
     // verify/hairdt.mjs can MEASURE that frame rate against the capture instead
     // of leaving 1/60 as an unexamined assumption.
     const hairDt = Number(qs.get('hairdt')) || 1 / 60;
-    const strands = simulate(buildStrands(h, hairRand), matAt, h.gravity, T, hairDt);
     // One system per node, over ALL nodes — the engine's loop is
     // `for node in strand[+0x18..0x1c]` with no skip, so `HairCount 8` x
     // `NodesPerHair 10` is 80 systems, not 72. Node 0 is the anchor, which
     // the simulation never moves, so its world position is the root itself.
+    // They are stepped INSIDE the hair loop because Part_Pehko::vf2 writes
+    // ps.position from the live node and updates the system in the same
+    // frame — the emitters trace the path the nodes travel, and running them
+    // afterwards over the final pose emits everything from a standing start.
+    const onStep = (parP && hairSuppressed)
+      ? (t, sts, rt) => {
+          let k = 0;
+          for (const st of sts)
+            for (let i = 0; i < st.nodes.length; i++) {
+              parSystems[k] ??= createSystem(parP);
+              stepSystem(parSystems[k++], parP, i === 0 ? rt : st.nodes[i].pos,
+                hairDt, hairRand);
+            }
+        }
+      : null;
+    const strands = simulate(buildStrands(h, hairRand), matAt, h.gravity, T, hairDt, onStep);
     if (hairSuppressed) {
       for (const st of strands)
         for (let i = 0; i < st.nodes.length; i++)
@@ -1272,20 +1299,18 @@ const bgVao = gl.createVertexArray();
     }
   }
 
-  // ---- particles. Part_Pehko clones one system per hair node; the emitter
-  // positions are therefore the simulated hair nodes, which is why this runs
-  // after the hair above.
-  if (hairNodes.length) {
-    let ptxt = null;
-    try { ptxt = await (await fetch(DATA + 'particles/tauno/tauno.txt')).text(); } catch {}
-    if (ptxt && !/not found/i.test(ptxt)) {
-      const pp = parseParticles(ptxt);
-      const rand = msvcRand();
+  // ---- particles. Part_Pehko clones one system per hair node. The systems
+  // were already advanced above, in lockstep with the hair, because each one
+  // is re-anchored to its node every frame before being updated — so all that
+  // is left here is to collect and draw whatever is alive at time T.
+  {
+    const pp = parP;
+    if (pp && parSystems.length) {
       // camera forward axis in world space, for the billboard basis
       const camZ = [camWorld[8], camWorld[9], camWorld[10]];
       const byFrame = new Map();
-      for (const node of hairNodes) {
-        for (const q of simulateSystem(pp, node, T, 1 / 60, rand)) {
+      for (const sys of parSystems) {
+        for (const q of sys.live) {
           const f = frameOf(q, pp, 40);
           if (!byFrame.has(f)) byFrame.set(f, []);
           byFrame.get(f).push(q);

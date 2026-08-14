@@ -135,7 +135,7 @@ export function stepHair(strands, root, gravity, dt) {
  * contradiction is what exposed the bug: a dt sweep produced identical frames
  * to four decimal places, which is not a property the real integrator has.
  */
-export function simulate(strands, frame, gravity, time, dt = 1 / 60) {
+export function simulate(strands, frame, gravity, time, dt = 1 / 60, onStep = null) {
   const matAt = typeof frame === 'function' ? frame : null;
   const fixed = matAt ? null : frame;
   const steps = Math.max(0, Math.round(time / dt));
@@ -157,6 +157,12 @@ export function simulate(strands, frame, gravity, time, dt = 1 / 60) {
       }
     }
     stepHair(strands, root, gravity, dt);
+    // Anything anchored to the hair has to advance INSIDE this loop, on the
+    // same clock. Part_Pehko's particle systems are the case that matters:
+    // its per-frame body writes each system's position from the live node and
+    // then updates the system, all within one frame, so they cannot be run as
+    // a second pass over the final pose.
+    if (onStep) onStep(t, strands, root, dt);
   }
   return strands;
 }
