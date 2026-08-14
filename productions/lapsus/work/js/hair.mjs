@@ -144,6 +144,43 @@ export function stepHair(strands, root, gravity, dt) {
  * contradiction is what exposed the bug: a dt sweep produced identical frames
  * to four decimal places, which is not a property the real integrator has.
  */
+/**
+ * Integrate from `t0` to `t1`. `simulate` is this with t0 = 0, kept because
+ * that is what a single-frame render wants; a PLAYER wants to advance the
+ * state it already has. The integrator is explicit and dt-dependent, so the
+ * state at t1 is the whole history — there is no closed form to jump to, and
+ * re-running the history every frame is quadratic in part length (krediili is
+ * 1000 strands, so at t=8s that is ~480k steps per frame).
+ *
+ * The step grid is anchored at ZERO, not at t0, so advancing 0->1->2 lands on
+ * exactly the same steps as going 0->2 in one call and the player and the
+ * frame renderer cannot diverge.
+ */
+export function simulateSpan(strands, frame, gravity, t0, t1, dt = 1 / 60, onStep = null) {
+  const matAt = typeof frame === 'function' ? frame : null;
+  const fixed = matAt ? null : frame;
+  const first = Math.floor(t0 / dt + 1e-9), last = Math.floor(t1 / dt + 1e-9);
+  for (let k = first; k < last; k++) {
+    const t = Math.min(t1, (k + 1) * dt);
+    let root = fixed;
+    if (matAt) {
+      const M = matAt(t);
+      root = [M[12], M[13], M[14]];
+      for (const st of strands) {
+        const d = st.baseDir ?? (st.baseDir = st.dir.slice());
+        st.dir = [
+          M[0] * d[0] + M[4] * d[1] + M[8] * d[2],
+          M[1] * d[0] + M[5] * d[1] + M[9] * d[2],
+          M[2] * d[0] + M[6] * d[1] + M[10] * d[2],
+        ];
+      }
+    }
+    stepHair(strands, root, gravity, dt);
+    if (onStep) onStep(t, strands, root, dt);
+  }
+  return strands;
+}
+
 export function simulate(strands, frame, gravity, time, dt = 1 / 60, onStep = null) {
   const matAt = typeof frame === 'function' ? frame : null;
   const fixed = matAt ? null : frame;

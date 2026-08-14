@@ -32,7 +32,7 @@ addEventListener('error', (e) => {
 import { parseLWS, evalEnvelope, MORPH_EPSILON } from '../../work/js/lws.mjs';
 import { parseLWO } from '../../work/js/lwo.mjs';
 import { decodeTGA } from '../../work/js/tga.mjs';
-import { parseHair, buildStrands, simulate, shadeNormals, toLineVerts, msvcRand } from '../../work/js/hair.mjs';
+import { parseHair, buildStrands, simulateSpan, shadeNormals, toLineVerts, msvcRand } from '../../work/js/hair.mjs';
 import { parseParticles, createSystem, stepSystem, frameOf, billboard } from '../../work/js/particles.mjs';
 
 const ROOT = new URL('../../', import.meta.url).href;
@@ -844,773 +844,969 @@ gl.linkProgram(bgProg);
 const bgVao = gl.createVertexArray();
 
 (async () => {
-  // Part_Empt has NO .lws at all — it is pure 2D and its content is its own
-  // stamping routine — so a missing scene file is legitimate here, not an
-  // error. Everything downstream reads empty lists and skips.
-  let scene = { objects: [], lights: [], cameras: [], fog: {}, backdrop: {}, unhandled: [] };
-  {
-    const res = await fetch(DATA + SCENE + '.lws');
-    if (res.ok) scene = parseLWS(await res.text());
-    else if (!/^empt$/i.test(SCENE)) throw new Error(`no scene ${SCENE}.lws`);
-  }
-  const drawables = [];
-  for (const obj of scene.objects) {
-    if (!obj.file) continue;                              // null objects: transform only
-    // Object paths come in three shapes, exactly like the texture refs:
-    // archive-relative ("data/lwo/x.lwo", 84 of them), a BARE FILENAME with no
-    // directory at all (49), and absolute paths from a third artist's machine
-    // ("H:Lapsus/viherio/lwo/x.lwo", 18). Every .lwo lives in one directory,
-    // so resolve by basename. 136 of the 151 references resolve; the 15 that
-    // do not belong entirely to kieku/mela/sittis — the three scenes the
-    // engine never schedules.
-    const url = ROOT + 'work/unpacked/lapsus_dat/data/lwo/'
-      + obj.file.replace(/\\/g, '/').split('/').pop();
-    const lwo = parseLWO(new Uint8Array(await (await fetch(url)).arrayBuffer()));
-    // surface name -> { texture, color, unlit }
-    const mats = new Map();
-    for (const s of lwo.surfaces) {
-      // NOT filtered on ENAB: the engine never compares that chunk id
-      // anywhere in .text, so a "disabled" layer is still drawn by the
-      // original. No shipped BLOK has ENAB=0, so this is latent here — but
-      // honouring a field the engine ignores is a deviation waiting to
-      // happen. See LWO_INVENTORY.md, "the engine's real vocabulary".
-      const texOf = async (b) => {
-        const c = b ? lwo.clips.find((c) => c.index === b.imageIndex) : null;
-        if (!c?.file) return null;
-        try { return await loadTexture(c.file); } catch { return null; }
-      };
-      const blk = s.blocks.find((b) => b.channel === 'COLR') ?? s.blocks[0];
-      const bDiff = s.blocks.find((b) => b.channel === 'DIFF') ?? null;
-      const bLumi = s.blocks.find((b) => b.channel === 'LUMI') ?? null;
-      const bTran = s.blocks.find((b) => b.channel === 'TRAN') ?? null;
-      // The surface's texture MASK (RENDER.md §4.5) is built from which of the
-      // eight name slots are non-empty; bit 0x80 is the reflection image and is
-      // cleared unless reflectivity > 0.95. `mask 0x80` — reflection and
-      // NOTHING else — is 26 of the archive's 73 surfaces, and the engine
-      // handles it at 0x42bd1e as ONE texture on UNIT 0 with sphere-map texgen:
-      //   setTexCount(mat, 1)          @0x42be1c -> mat[+0x3c] = 1
-      //   setTexture(mat, 0, refl)     @0x42be30 -> mat[+0x40] = tex
-      //   setTexGen(mat, 0, 1)         @0x42be3f -> mat[+0x4c] = SPHERE_MAP
-      // Unit 0's env mode is always GL_MODULATE, so the reflection MULTIPLIES
-      // the lit colour. Treating it as unit 1 / GL_ADD (which is only right for
-      // mask 0x81, i.e. WITH a colour texture) turns every all-metal object
-      // into a white silhouette: base white + a full-brightness env texel.
-      const reflTex = (s.reflection ?? 0) > 0.95 && s.reflectionImage
-        ? await texOf({ imageIndex: s.reflectionImage }) : null;
-      // The mask is built from which NAME SLOTS are non-empty, so what decides
-      // 0x80 against 0x81 is whether a colour texture actually RESOLVES — not
-      // whether a BLOK chunk happens to be present. Three of the archive's
-      // BLOKs are EMPTY: no CHAN, no IMAG, no PROJ. HigherBeingMM.lwo surface
-      // 0 is one of them, and counting it as a colour texture flipped that
-      // surface from 0x80 to 0x81, which moves its RIMG from unit 0
-      // GL_MODULATE to unit 1 GL_ADD. Modulating by the reflection darkens the
-      // figure's cloak to about a fifth of its lit colour; adding it unscaled
-      // turns the cloak into bright iridescent chrome. The capture has it
-      // nearly black.
-      const colrTex = await texOf(blk);
-      const mask80 = !!reflTex && !colrTex;
-      const tex = mask80 ? reflTex : colrTex;
-      // unit 1 is DIFF (modulate) when present, else LUMI (add). With all
-      // three, LUMI moves to the additive second pass instead.
-      const tex1 = await texOf(bDiff ?? bLumi);
-      const texPass1 = (bDiff && bLumi) ? await texOf(bLumi) : null;
-      // Diffuse colour, per RENDER.md §4.5: with NO colour texture the
-      // material is surfaceColour x diffuseLevel, but WITH one it is a
-      // neutral grey diffuseLevel in all three channels — the texture
-      // supplies the colour and the surface colour is not multiplied in.
-      // Folding pene's 0.78 surface grey into its textured surfaces was
-      // darkening them by 22%.
-      const dl = s.diffuse ?? 1;
-      const sc = s.color ?? [1, 1, 1];
-      const blk0 = s.blocks.find((b) => b.channel === 'COLR');
-      const matColor = blk0 ? [dl, dl, dl] : [sc[0]*dl, sc[1]*dl, sc[2]*dl];
-      mats.set(s.name, {
-        tex, tex1, texPass1, tex1Add: !bDiff && !!bLumi, color: matColor,
-        texGen0: mask80,
-        // RENDER.md §8: luminosity > 0.95 is drawn unlit via glColor4f
-        unlit: (s.luminosity ?? 0) > 0.95,
-        diffuse: s.diffuse ?? 1,
-        // Blend mode, per RENDER.md §4.5's surface rules:
-        //   ADTR > 0.95          -> mode 1, additive     (+ depth mode 2)
-        //   TRAN > 0 (or a TTEX) -> mode 3, alpha        (+ depth mode 2)
-        //   otherwise            -> mode 0, no blending  (depth mode 3)
-        // Depth mode 2 is no-write + LEQUAL, mode 3 is write + LEQUAL.
-        // A FULLY transparent surface is a glow sprite, not an invisible one.
-        // RENDER.md §4.5's rule is "> 0.95 => blend mode 1 (additive)", and
-        // krediili's credit sprites carry TRAN ~= 1.0 with LUMI = 1: treating
-        // that as alpha = 1 - TRAN made them alpha ~= 0 and the whole part
-        // rendered black, where the capture shows a bright plume.
-        // RENDER.md §4.5: transparency > 0 **or a TTEX present** gives blend
-        // mode 3 and depth mode 2. The TTEX arm was missing, so the two
-        // TRAN-block surfaces in the archive (dezz.lwo is one — flu2's title
-        // overlay) were classified opaque and sorted with the opaque group.
-        //
-        // The transparency IMAGE itself is correctly not loaded: FUN_0042cf90
-        // forwards (surface, &colourName, &alphaName, filterMode) to
-        // TextureManager::get and "the alpha name is always the empty temp",
-        // so a surface never gets a separate alpha image — only Pictures do,
-        // through drawPicture's explicit alpha argument. A TTEX therefore
-        // changes the surface's BLEND CLASS and nothing else, and
-        // material[+0x38] is forced to 0 when one is present, so the surface
-        // is alpha-blended at alpha 1.
-        blendMode: (s.additiveTransparency ?? 0) > 0.95 ? 1
-                 : (s.transparency ?? 0) > 0.95 ? 1
-                 : ((s.transparency ?? 0) > 0 || bTran) ? 3 : 0,
-        // LWO TRAN is transparency, so alpha is its complement — except with a
-        // TTEX, where material[+0x38] = 0 and the surface is opaque.
-        alpha: bTran ? 1
-             : (s.transparency ?? 0) > 0.95 ? 1 : 1 - (s.transparency ?? 0),
-        twoSided: (s.sides ?? 1) === 3,
-        refl: s.reflection ?? 0,
-        // Specular gate, read at 0x42ca0f-0x42ca62:
-        //   lit AND (specularity > 0 OR surface[+0x48] != 0) AND |colour| > 0
-        // an OR, not the AND printed in RENDER.md §4.5 — the JZ at 0x42ca29
-        // SKIPS the [EBP+0x48] test when specularity passes. It makes no
-        // difference to the shipped data (+0x48 is the SPEC envelope
-        // reference and is null for every surface in the archive) but the
-        // note was wrong and is corrected in NOTES.md §14.
-        //
-        // Shininess is 2^(GLOS*10 + 2). The material builder's store at
-        // 0x42caa6 is a bare FLD/FSTP of surface[+0x30] with no multiply, so
-        // the conversion is not there — it is in the SURF parser, at the
-        // moment GLOS is read (0x426dcd-0x426de8):
-        //     FLD   double ptr [0x0045a3a8]   ; 2.0
-        //     FLD   float  ptr [ESP + 0x38]   ; raw GLOS from the file
-        //     FMUL  float  ptr [0x0045a580]   ; 10.0
-        //     FADD  float  ptr [0x0045a3c4]   ; 2.0
-        //     CALL  0x00430bc0                ; pow
-        //     FSTP  float ptr [EDI + 0x30]
-        // The three constants read 2.0 / 10.0 / 2.0 out of the binary, and
-        // 0x45ad34 / 0x45accc / 0x45a30c nearby read 0.95 / 255.0 / 0.0
-        // exactly as the notes predict, which is the check that the offsets
-        // are being read correctly. This is LightWave's own glossiness curve.
-        //
-        // The x128 that stood here was flagged as an assumption and was a
-        // decent numerical approximation of this curve over the shipped range
-        // — which is why replacing it with the raw GLOS (the material store
-        // taken at face value) made things much worse, not better.
-        //
-        // Stored UNCLAMPED. OpenGL 1.x accepts GL_SHININESS only in [0,128];
-        // outside that it raises GL_INVALID_VALUE and leaves the material's
-        // PREVIOUS value in place. 9 of the archive's 27 GLOS-bearing surfaces
-        // map above 128 (GLOS > 0.5), so on those the engine does not get a
-        // big exponent, it gets whatever the LAST surface to set one
-        // successfully left behind. That is reproduced in the draw loop —
-        // clamping here would have been a different picture entirely, since a
-        // clamp gives 128 where GL gives the neighbour's value.
-        spec: ((s.color ?? [1,1,1]).some((c) => c > 0) ? (s.specular ?? 0) : 0),
-        shine: Math.pow(2, (s.glossiness ?? 0.2) * 10 + 2),
-        // Mask bit 0x80 (sphere-map texgen) is cleared unless reflectivity
-        // > 0.95 (RENDER.md §4), so a dim reflection is not a faint one — it
-        // is no reflection at all. This slot is the ADDITIVE unit-1 sphere map
-        // of mask 0x81 only: when the reflection is the surface's *sole*
-        // texture (mask 0x80) it belongs on unit 0 and is handled above.
-        envTex: await (async () => {
-          if (mask80) return null;
-          if ((s.reflection ?? 0) <= 0.95) return null;
-          const c = s.reflectionImage ? lwo.clips.find((c) => c.index === s.reflectionImage) : null;
+  // ONE PART, fully prepared: its scene, its geometry and textures, its own
+  // hair/particle/rand state, and a renderAt that draws it at a local time.
+  // Built as a factory so the player can hold all 21 at once and switch on
+  // the schedule, while the verification harness still asks for exactly one.
+  async function makePart(SCENE) {
+    // Part_Empt has NO .lws at all — it is pure 2D and its content is its own
+    // stamping routine — so a missing scene file is legitimate here, not an
+    // error. Everything downstream reads empty lists and skips.
+    let scene = { objects: [], lights: [], cameras: [], fog: {}, backdrop: {}, unhandled: [] };
+    {
+      const res = await fetch(DATA + SCENE + '.lws');
+      if (res.ok) scene = parseLWS(await res.text());
+      else if (!/^empt$/i.test(SCENE)) throw new Error(`no scene ${SCENE}.lws`);
+    }
+    const drawables = [];
+    for (const obj of scene.objects) {
+      if (!obj.file) continue;                              // null objects: transform only
+      // Object paths come in three shapes, exactly like the texture refs:
+      // archive-relative ("data/lwo/x.lwo", 84 of them), a BARE FILENAME with no
+      // directory at all (49), and absolute paths from a third artist's machine
+      // ("H:Lapsus/viherio/lwo/x.lwo", 18). Every .lwo lives in one directory,
+      // so resolve by basename. 136 of the 151 references resolve; the 15 that
+      // do not belong entirely to kieku/mela/sittis — the three scenes the
+      // engine never schedules.
+      const url = ROOT + 'work/unpacked/lapsus_dat/data/lwo/'
+        + obj.file.replace(/\\/g, '/').split('/').pop();
+      const lwo = parseLWO(new Uint8Array(await (await fetch(url)).arrayBuffer()));
+      // surface name -> { texture, color, unlit }
+      const mats = new Map();
+      for (const s of lwo.surfaces) {
+        // NOT filtered on ENAB: the engine never compares that chunk id
+        // anywhere in .text, so a "disabled" layer is still drawn by the
+        // original. No shipped BLOK has ENAB=0, so this is latent here — but
+        // honouring a field the engine ignores is a deviation waiting to
+        // happen. See LWO_INVENTORY.md, "the engine's real vocabulary".
+        const texOf = async (b) => {
+          const c = b ? lwo.clips.find((c) => c.index === b.imageIndex) : null;
           if (!c?.file) return null;
           try { return await loadTexture(c.file); } catch { return null; }
-        })(),
-      });
+        };
+        const blk = s.blocks.find((b) => b.channel === 'COLR') ?? s.blocks[0];
+        const bDiff = s.blocks.find((b) => b.channel === 'DIFF') ?? null;
+        const bLumi = s.blocks.find((b) => b.channel === 'LUMI') ?? null;
+        const bTran = s.blocks.find((b) => b.channel === 'TRAN') ?? null;
+        // The surface's texture MASK (RENDER.md §4.5) is built from which of the
+        // eight name slots are non-empty; bit 0x80 is the reflection image and is
+        // cleared unless reflectivity > 0.95. `mask 0x80` — reflection and
+        // NOTHING else — is 26 of the archive's 73 surfaces, and the engine
+        // handles it at 0x42bd1e as ONE texture on UNIT 0 with sphere-map texgen:
+        //   setTexCount(mat, 1)          @0x42be1c -> mat[+0x3c] = 1
+        //   setTexture(mat, 0, refl)     @0x42be30 -> mat[+0x40] = tex
+        //   setTexGen(mat, 0, 1)         @0x42be3f -> mat[+0x4c] = SPHERE_MAP
+        // Unit 0's env mode is always GL_MODULATE, so the reflection MULTIPLIES
+        // the lit colour. Treating it as unit 1 / GL_ADD (which is only right for
+        // mask 0x81, i.e. WITH a colour texture) turns every all-metal object
+        // into a white silhouette: base white + a full-brightness env texel.
+        const reflTex = (s.reflection ?? 0) > 0.95 && s.reflectionImage
+          ? await texOf({ imageIndex: s.reflectionImage }) : null;
+        // The mask is built from which NAME SLOTS are non-empty, so what decides
+        // 0x80 against 0x81 is whether a colour texture actually RESOLVES — not
+        // whether a BLOK chunk happens to be present. Three of the archive's
+        // BLOKs are EMPTY: no CHAN, no IMAG, no PROJ. HigherBeingMM.lwo surface
+        // 0 is one of them, and counting it as a colour texture flipped that
+        // surface from 0x80 to 0x81, which moves its RIMG from unit 0
+        // GL_MODULATE to unit 1 GL_ADD. Modulating by the reflection darkens the
+        // figure's cloak to about a fifth of its lit colour; adding it unscaled
+        // turns the cloak into bright iridescent chrome. The capture has it
+        // nearly black.
+        const colrTex = await texOf(blk);
+        const mask80 = !!reflTex && !colrTex;
+        const tex = mask80 ? reflTex : colrTex;
+        // unit 1 is DIFF (modulate) when present, else LUMI (add). With all
+        // three, LUMI moves to the additive second pass instead.
+        const tex1 = await texOf(bDiff ?? bLumi);
+        const texPass1 = (bDiff && bLumi) ? await texOf(bLumi) : null;
+        // Diffuse colour, per RENDER.md §4.5: with NO colour texture the
+        // material is surfaceColour x diffuseLevel, but WITH one it is a
+        // neutral grey diffuseLevel in all three channels — the texture
+        // supplies the colour and the surface colour is not multiplied in.
+        // Folding pene's 0.78 surface grey into its textured surfaces was
+        // darkening them by 22%.
+        const dl = s.diffuse ?? 1;
+        const sc = s.color ?? [1, 1, 1];
+        const blk0 = s.blocks.find((b) => b.channel === 'COLR');
+        const matColor = blk0 ? [dl, dl, dl] : [sc[0]*dl, sc[1]*dl, sc[2]*dl];
+        mats.set(s.name, {
+          tex, tex1, texPass1, tex1Add: !bDiff && !!bLumi, color: matColor,
+          texGen0: mask80,
+          // RENDER.md §8: luminosity > 0.95 is drawn unlit via glColor4f
+          unlit: (s.luminosity ?? 0) > 0.95,
+          diffuse: s.diffuse ?? 1,
+          // Blend mode, per RENDER.md §4.5's surface rules:
+          //   ADTR > 0.95          -> mode 1, additive     (+ depth mode 2)
+          //   TRAN > 0 (or a TTEX) -> mode 3, alpha        (+ depth mode 2)
+          //   otherwise            -> mode 0, no blending  (depth mode 3)
+          // Depth mode 2 is no-write + LEQUAL, mode 3 is write + LEQUAL.
+          // A FULLY transparent surface is a glow sprite, not an invisible one.
+          // RENDER.md §4.5's rule is "> 0.95 => blend mode 1 (additive)", and
+          // krediili's credit sprites carry TRAN ~= 1.0 with LUMI = 1: treating
+          // that as alpha = 1 - TRAN made them alpha ~= 0 and the whole part
+          // rendered black, where the capture shows a bright plume.
+          // RENDER.md §4.5: transparency > 0 **or a TTEX present** gives blend
+          // mode 3 and depth mode 2. The TTEX arm was missing, so the two
+          // TRAN-block surfaces in the archive (dezz.lwo is one — flu2's title
+          // overlay) were classified opaque and sorted with the opaque group.
+          //
+          // The transparency IMAGE itself is correctly not loaded: FUN_0042cf90
+          // forwards (surface, &colourName, &alphaName, filterMode) to
+          // TextureManager::get and "the alpha name is always the empty temp",
+          // so a surface never gets a separate alpha image — only Pictures do,
+          // through drawPicture's explicit alpha argument. A TTEX therefore
+          // changes the surface's BLEND CLASS and nothing else, and
+          // material[+0x38] is forced to 0 when one is present, so the surface
+          // is alpha-blended at alpha 1.
+          blendMode: (s.additiveTransparency ?? 0) > 0.95 ? 1
+                   : (s.transparency ?? 0) > 0.95 ? 1
+                   : ((s.transparency ?? 0) > 0 || bTran) ? 3 : 0,
+          // LWO TRAN is transparency, so alpha is its complement — except with a
+          // TTEX, where material[+0x38] = 0 and the surface is opaque.
+          alpha: bTran ? 1
+               : (s.transparency ?? 0) > 0.95 ? 1 : 1 - (s.transparency ?? 0),
+          twoSided: (s.sides ?? 1) === 3,
+          refl: s.reflection ?? 0,
+          // Specular gate, read at 0x42ca0f-0x42ca62:
+          //   lit AND (specularity > 0 OR surface[+0x48] != 0) AND |colour| > 0
+          // an OR, not the AND printed in RENDER.md §4.5 — the JZ at 0x42ca29
+          // SKIPS the [EBP+0x48] test when specularity passes. It makes no
+          // difference to the shipped data (+0x48 is the SPEC envelope
+          // reference and is null for every surface in the archive) but the
+          // note was wrong and is corrected in NOTES.md §14.
+          //
+          // Shininess is 2^(GLOS*10 + 2). The material builder's store at
+          // 0x42caa6 is a bare FLD/FSTP of surface[+0x30] with no multiply, so
+          // the conversion is not there — it is in the SURF parser, at the
+          // moment GLOS is read (0x426dcd-0x426de8):
+          //     FLD   double ptr [0x0045a3a8]   ; 2.0
+          //     FLD   float  ptr [ESP + 0x38]   ; raw GLOS from the file
+          //     FMUL  float  ptr [0x0045a580]   ; 10.0
+          //     FADD  float  ptr [0x0045a3c4]   ; 2.0
+          //     CALL  0x00430bc0                ; pow
+          //     FSTP  float ptr [EDI + 0x30]
+          // The three constants read 2.0 / 10.0 / 2.0 out of the binary, and
+          // 0x45ad34 / 0x45accc / 0x45a30c nearby read 0.95 / 255.0 / 0.0
+          // exactly as the notes predict, which is the check that the offsets
+          // are being read correctly. This is LightWave's own glossiness curve.
+          //
+          // The x128 that stood here was flagged as an assumption and was a
+          // decent numerical approximation of this curve over the shipped range
+          // — which is why replacing it with the raw GLOS (the material store
+          // taken at face value) made things much worse, not better.
+          //
+          // Stored UNCLAMPED. OpenGL 1.x accepts GL_SHININESS only in [0,128];
+          // outside that it raises GL_INVALID_VALUE and leaves the material's
+          // PREVIOUS value in place. 9 of the archive's 27 GLOS-bearing surfaces
+          // map above 128 (GLOS > 0.5), so on those the engine does not get a
+          // big exponent, it gets whatever the LAST surface to set one
+          // successfully left behind. That is reproduced in the draw loop —
+          // clamping here would have been a different picture entirely, since a
+          // clamp gives 128 where GL gives the neighbour's value.
+          spec: ((s.color ?? [1,1,1]).some((c) => c > 0) ? (s.specular ?? 0) : 0),
+          shine: Math.pow(2, (s.glossiness ?? 0.2) * 10 + 2),
+          // Mask bit 0x80 (sphere-map texgen) is cleared unless reflectivity
+          // > 0.95 (RENDER.md §4), so a dim reflection is not a faint one — it
+          // is no reflection at all. This slot is the ADDITIVE unit-1 sphere map
+          // of mask 0x81 only: when the reflection is the surface's *sole*
+          // texture (mask 0x80) it belongs on unit 0 and is handled above.
+          envTex: await (async () => {
+            if (mask80) return null;
+            if ((s.reflection ?? 0) <= 0.95) return null;
+            const c = s.reflectionImage ? lwo.clips.find((c) => c.index === s.reflectionImage) : null;
+            if (!c?.file) return null;
+            try { return await loadTexture(c.file); } catch { return null; }
+          })(),
+        });
+      }
+      for (const layer of lwo.layers) {
+        if (!layer.points || !layer.polygons.length) continue;
+        drawables.push({ item: obj, mesh: meshFromLayer(layer, lwo), mats });
+      }
     }
-    for (const layer of lwo.layers) {
-      if (!layer.points || !layer.polygons.length) continue;
-      drawables.push({ item: obj, mesh: meshFromLayer(layer, lwo), mats });
+
+    // PERSISTENT SIMULATION STATE. The hair and the particle systems are
+    // explicit dt-dependent integrators (RENDER.md §11.1/§11.2.3), so their
+    // state at time T is the whole history up to T — there is no closed form
+    // to jump to. The frame renderer could afford to re-run that history from
+    // rest on every call because it renders one instant and stops; a player at
+    // 60fps cannot (krediili is 1000 strands, and at t=8s that is ~480k
+    // integration steps PER FRAME).
+    //
+    // So the state lives here, across calls, and renderAt only ever advances
+    // it. If it is asked for a time BEFORE where it stands — which is exactly
+    // what the verification harness does when it seeks — it rebuilds from rest,
+    // so both callers get the same answer and only the player gets the speed.
+    let sim = null;
+    let textured = 0, hairLines = 0, particleCount = 0, camIndex = 0, zoomAt = 0, fovX = 0;
+    let probeInfo = null;
+    const emptRand = msvcRand();
+    let emptTex = null, emptAlphaTex = null;
+    if (/^empt$/i.test(SCENE)) {
+      const PICS = 'work/unpacked/lapsus_dat/data/pics/';
+      try { emptTex = await loadTexture('design1.tga', PICS); } catch {}
+      try { emptAlphaTex = await loadTexture('design1_a.tga', PICS); } catch {}
     }
-  }
 
-  let textured = 0, hairLines = 0, particleCount = 0, camIndex = 0, zoomAt = 0, fovX = 0;
-  let probeInfo = null;
-  const emptRand = msvcRand();
-  let emptTex = null, emptAlphaTex = null;
-  if (/^empt$/i.test(SCENE)) {
-    const PICS = 'work/unpacked/lapsus_dat/data/pics/';
-    try { emptTex = await loadTexture('design1.tga', PICS); } catch {}
-    try { emptAlphaTex = await loadTexture('design1_a.tga', PICS); } catch {}
-  }
+    // ONE FRAME of the demo, at time `T`. Feedback parts call this repeatedly
+    // without clearing so the buffer accumulates, which is what the original
+    // gets for free from the swap chain (RENDER.md §12): Silli clears depth
+    // only and lays a 20% black quad, Pehko clears nothing and uses 5%, Empt
+    // clears exactly once in the whole process, and Viherio's strobe gates the
+    // CLEAR rather than the draw. No FBO is needed — the default framebuffer
+    // persists across draw calls within a page load.
+    const FEEDBACK = { silli: 0.20, pehko: 0.05, empt: 0.10 };
+    const fbAlpha = FEEDBACK[SCENE] ?? null;
+    let useAcc = false;
+    const renderAt = async (T, clearColour) => {
 
-  // ONE FRAME of the demo, at time `T`. Feedback parts call this repeatedly
-  // without clearing so the buffer accumulates, which is what the original
-  // gets for free from the swap chain (RENDER.md §12): Silli clears depth
-  // only and lays a 20% black quad, Pehko clears nothing and uses 5%, Empt
-  // clears exactly once in the whole process, and Viherio's strobe gates the
-  // CLEAR rather than the draw. No FBO is needed — the default framebuffer
-  // persists across draw calls within a page load.
-  const FEEDBACK = { silli: 0.20, pehko: 0.05, empt: 0.10 };
-  const fbAlpha = FEEDBACK[SCENE] ?? null;
-  let useAcc = false;
-  const renderAt = async (T, clearColour) => {
-
-  // ---- per-part camera / fog overrides (RENDER.md §7).
-  // Part_HigherBiing cuts between THREE cameras and rewrites the scene fog
-  // range per shot; everything else uses camera 0 unaltered. Without this the
-  // part renders from the wrong viewpoint for most of its 14s and scores a
-  // NEGATIVE correlation — it is not a subtle error.
-  // Per-part camera perturbation (RENDER.md §12). Applied AFTER the scene
-  // tick, as the engine does. Syrjakyla deliberately gets nothing: its
-  // oscillator is dead code that nothing reads, so it renders as generic.
-  let camShift = [0, 0, 0], camOverwriteZ = null;
-  if (/^paleksi$/i.test(SCENE)) {
-    // env = pow(1 - phase/P, 5), tripled during the FIRST period only
-    const P = 1.1924489795918367;
-    const phase = T % P;
-    let env = Math.pow(1 - phase / P, 5);
-    if (T < P) env *= 3;
-    camShift[0] = 0.5 * (env * Math.sin(40 * phase));
-  } else if (/^turska$/i.test(SCENE)) {
-    // Period 0.8863520408163266s, kick v=50/x=2, damped. The direction vector
-    // is never initialised in the engine, so this collapses to a pure Z dolly
-    // — reproduce the collapse, not the intent.
-    const P = 0.8863520408163266;
-    const phase = T % P;
-    camOverwriteZ = 2 * Math.pow(Math.max(0, 1 - phase / P), 3);
-  }
-
-  camIndex = Number(qs.get('cam') ?? -1);
-  if (camIndex < 0) {
-    camIndex = 0;
-    if (/^higherbiing$/i.test(SCENE)) {
-      if (T >= 10.6) { camIndex = 2; scene.fog.minDist = 9.5;  scene.fog.maxDist = 18.0; }
-      else if (T >= 4.5) { camIndex = 1; scene.fog.minDist = 15.0; scene.fog.maxDist = 30.0; }
-      else { camIndex = 0; scene.fog.minDist = 7.5;  scene.fog.maxDist = 13.0; }
-      scene.fog.type = scene.fog.type ?? 1;
+    // ---- per-part camera / fog overrides (RENDER.md §7).
+    // Part_HigherBiing cuts between THREE cameras and rewrites the scene fog
+    // range per shot; everything else uses camera 0 unaltered. Without this the
+    // part renders from the wrong viewpoint for most of its 14s and scores a
+    // NEGATIVE correlation — it is not a subtle error.
+    // Per-part camera perturbation (RENDER.md §12). Applied AFTER the scene
+    // tick, as the engine does. Syrjakyla deliberately gets nothing: its
+    // oscillator is dead code that nothing reads, so it renders as generic.
+    let camShift = [0, 0, 0], camOverwriteZ = null;
+    if (/^paleksi$/i.test(SCENE)) {
+      // env = pow(1 - phase/P, 5), tripled during the FIRST period only
+      const P = 1.1924489795918367;
+      const phase = T % P;
+      let env = Math.pow(1 - phase / P, 5);
+      if (T < P) env *= 3;
+      camShift[0] = 0.5 * (env * Math.sin(40 * phase));
+    } else if (/^turska$/i.test(SCENE)) {
+      // Period 0.8863520408163266s, kick v=50/x=2, damped. The direction vector
+      // is never initialised in the engine, so this collapses to a pure Z dolly
+      // — reproduce the collapse, not the intent.
+      const P = 0.8863520408163266;
+      const phase = T % P;
+      camOverwriteZ = 2 * Math.pow(Math.max(0, 1 - phase / P), 3);
     }
-  }
-  const cam = scene.cameras[Math.min(camIndex, scene.cameras.length - 1)];
-  const zoom = cam?.motion?.length >= 9 ? null : cam?.zoom ?? 3.2;
-  // ZoomFactor may be a static header value or an envelope; prefer the envelope
-  zoomAt = cam?.zoomEnvelope ? evalEnvelope(cam.zoomEnvelope, T) : (cam?.zoom ?? 3.2);
 
-  fovX = 2 * Math.atan(1 / zoomAt);
-  const right = Math.tan(fovX / 2) * NEAR;
-  const top = Math.tan(0.375 * fovX) * NEAR;   // fovY = 0.75*fovX AS AN ANGLE
-  const proj = M.frustum(-right, right, -top, top, NEAR, FAR);
+    camIndex = Number(qs.get('cam') ?? -1);
+    if (camIndex < 0) {
+      camIndex = 0;
+      if (/^higherbiing$/i.test(SCENE)) {
+        if (T >= 10.6) { camIndex = 2; scene.fog.minDist = 9.5;  scene.fog.maxDist = 18.0; }
+        else if (T >= 4.5) { camIndex = 1; scene.fog.minDist = 15.0; scene.fog.maxDist = 30.0; }
+        else { camIndex = 0; scene.fog.minDist = 7.5;  scene.fog.maxDist = 13.0; }
+        scene.fog.type = scene.fog.type ?? 1;
+      }
+    }
+    const cam = scene.cameras[Math.min(camIndex, scene.cameras.length - 1)];
+    const zoom = cam?.motion?.length >= 9 ? null : cam?.zoom ?? 3.2;
+    // ZoomFactor may be a static header value or an envelope; prefer the envelope
+    zoomAt = cam?.zoomEnvelope ? evalEnvelope(cam.zoomEnvelope, T) : (cam?.zoom ?? 3.2);
 
-  let camWorld = cam ? worldMatrix(cam, T) : M.ident();
-  if (camShift[0] || camShift[1] || camShift[2] || camOverwriteZ != null) {
-    camWorld = new Float32Array(camWorld);
-    camWorld[12] += camShift[0]; camWorld[13] += camShift[1]; camWorld[14] += camShift[2];
-    if (camOverwriteZ != null) camWorld[14] += camOverwriteZ;
-  }
-  const view = M.mul(M.scale(1, 1, -1), M.invRigid(camWorld));
+    fovX = 2 * Math.atan(1 / zoomAt);
+    const right = Math.tan(fovX / 2) * NEAR;
+    const top = Math.tan(0.375 * fovX) * NEAR;   // fovY = 0.75*fovX AS AN ANGLE
+    const proj = M.frustum(-right, right, -top, top, NEAR, FAR);
 
-  const bg = scene.backdrop?.color ?? [0, 0, 0];
-  gl.clearColor(bg[0] ?? 0, bg[1] ?? 0, bg[2] ?? 0, 1);
-  gl.enable(gl.DEPTH_TEST);
-  gl.depthFunc(gl.LEQUAL);
-  gl.enable(gl.CULL_FACE);
-  gl.cullFace(gl.BACK);
-  gl.frontFace(gl.CW);                        // paired with the Scale(1,1,-1)
-  gl.viewport(0, 0, canvas.width, canvas.height);
-  // Feedback parts do not clear colour: Silli clears DEPTH ONLY and lays a
-  // 20% black quad (a black FadeIn at 0.8 — RENDER.md §12 corrects §7's 30%);
-  // Pehko clears nothing and uses 5%; Part_Empt clears exactly once in the
-  // whole process. A single-frame renderer has no history to accumulate, so
-  // it clears anyway and stamps the quad — the trail itself needs a
-  // ping-pong FBO and a real frame loop.
-  // Silli clears DEPTH only; Pehko and Empt clear nothing once running.
-  if (clearColour) gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  else gl.clear(gl.DEPTH_BUFFER_BIT);
-  // ---- backdrop image, before the 3D and with depth disabled
-  let bgTex = null;
-  if (scene.backdropImage) {
-    // loadTexture resolves by basename, so the three path shapes in the
-    // assets all land in the same place — no probing, no spurious 404s.
-    try { bgTex = await loadTexture(scene.backdropImage); } catch { bgTex = null; }
-  }
-  if (bgTex) {
-    gl.useProgram(bgProg);
-    gl.bindVertexArray(bgVao);
-    gl.disable(gl.DEPTH_TEST);
-    gl.disable(gl.CULL_FACE);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, bgTex);
-    gl.uniform1i(gl.getUniformLocation(bgProg, 'uTex'), 0);
-    const [tw, th] = texSize.get(bgTex) ?? [canvas.width, canvas.height];
-    gl.uniform2f(gl.getUniformLocation(bgProg, 'uFit'),
-      Math.min(1, canvas.width / tw), Math.min(1, canvas.height / th));
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    let camWorld = cam ? worldMatrix(cam, T) : M.ident();
+    if (camShift[0] || camShift[1] || camShift[2] || camOverwriteZ != null) {
+      camWorld = new Float32Array(camWorld);
+      camWorld[12] += camShift[0]; camWorld[13] += camShift[1]; camWorld[14] += camShift[2];
+      if (camOverwriteZ != null) camWorld[14] += camOverwriteZ;
+    }
+    const view = M.mul(M.scale(1, 1, -1), M.invRigid(camWorld));
+
+    const bg = scene.backdrop?.color ?? [0, 0, 0];
+    gl.clearColor(bg[0] ?? 0, bg[1] ?? 0, bg[2] ?? 0, 1);
     gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
     gl.enable(gl.CULL_FACE);
-    gl.useProgram(prog);
-  }
-
-  if (fbAlpha != null && !useAcc) drawFade('in', 3, 1 - fbAlpha);
-
-  gl.uniformMatrix4fv(uProj, false, proj);
-  gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
-  gl.uniform1i(uEnv, 2);
-  gl.uniform1i(gl.getUniformLocation(prog, 'uTex1'), 1);
-  // ---- LW_MorphMixer displacement, before anything reads the geometry.
-  // Weight = the MorfForm envelope sampled at localTime, and a target is
-  // dropped entirely unless |w| > 0.01 (FUN_0041be60 @0x41beb4 against
-  // +/-_DAT_0045acdc). Five scenes use it; silli is the one where it dominates.
-  for (const d of drawables) {
-    if (!d.mesh.applyMorph) continue;
-    const active = (d.item.morphs ?? [])
-      .map((m) => ({ name: m.name, w: evalEnvelope(m.envelope, T) }))
-      .filter((m) => Math.abs(m.w) > MORPH_EPSILON);
-    d.mesh.applyMorph(active);
-  }
-
-  // ---- lights. LightType 0 is a DISTANT light: direction only, taken from
-  // the item's world +Z and negated to point toward the light (RENDER.md 8).
-  // Light-model ambient = scene ambient colour x intensity; pene sets
-  // AmbientIntensity 0, so there is no ambient floor at all.
-  const lightDirs = [], lightCols = [];
-  for (const L of scene.lights.slice(0, 8)) {
-    const w = worldMatrix(L, T);
-    const dW = [-w[8], -w[9], -w[10]];                  // -(world +Z)
-    const d = [                                          // into eye space
-      view[0]*dW[0] + view[4]*dW[1] + view[8]*dW[2],
-      view[1]*dW[0] + view[5]*dW[1] + view[9]*dW[2],
-      view[2]*dW[0] + view[6]*dW[1] + view[10]*dW[2]];
-    const len = Math.hypot(...d) || 1;
-    lightDirs.push(d[0]/len, d[1]/len, d[2]/len);
-    const c = L.color ?? [1, 1, 1], I = L.intensity ?? 1;
-    lightCols.push(c[0]*I, c[1]*I, c[2]*I);
-  }
-  gl.uniform1i(uNumLights, scene.lights.slice(0, 8).length);
-  if (lightDirs.length) {
-    gl.uniform3fv(uLightDir, new Float32Array(lightDirs));
-    gl.uniform3fv(uLightColor, new Float32Array(lightCols));
-  }
-  const ambI = scene.ambientIntensity ?? 0, ambC = scene.ambientColor ?? [1, 1, 1];
-  gl.uniform3f(uAmbient, ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
-
-  // Fog: enabled only for FogType 1. Colour comes from BackdropColor when the
-  // BackdropFog flag is set, else FogColor (RENDER.md §4).
-  const fogOn = (scene.fog?.type ?? 0) === 1;
-  gl.uniform1i(uFogOn, fogOn ? 1 : 0);
-  if (fogOn) {
-    const fc = scene.backdrop?.fog ? (scene.backdrop.color ?? [0,0,0]) : (scene.fog.color ?? [0,0,0]);
-    gl.uniform3f(uFogColor, fc[0], fc[1], fc[2]);
-    gl.uniform2f(uFogRange, scene.fog.minDist ?? 0, scene.fog.maxDist ?? 100);
-  }
-  // ---- opaque first, then blended (RENDER.md 8 draw order)
-  textured = 0;
-  // Depth sort: key is the camera-space Z of each object's bounding-sphere
-  // centre, ASCENDING (nearest first). The opaque pass walks forward and the
-  // blended pass BACKWARD (far->near). It is per-OBJECT, not per-triangle, so
-  // the original's transparency ordering is imperfect — reproduce it rather
-  // than improve on it (RENDER.md §4 steps 5-8).
-  const objs = drawables.map((d) => {
-    const mv = M.mul(view, worldMatrix(d.item, T));
-    const c = d.mesh.centre;
-    return { d, mv, z: mv[2]*c[0] + mv[6]*c[1] + mv[10]*c[2] + mv[14] };
-  }).sort((a, b) => a.z - b.z);
-
-  const passes = [];
-  for (const o of objs) for (const part of o.d.mesh.parts) {
-    const mat = o.d.mats.get(part.surfName)
-      ?? { tex: null, color: [0.72,0.74,0.78], unlit: false, diffuse: 1, alpha: 1,
-           twoSided: false, refl: 0, envTex: null, blendMode: 0 };
-    passes.push({ o, part, mat });
-  }
-  for (const blended of (DRAW_OBJECTS ? [false, true] : [])) {
-    for (const { o, part, mat } of (blended ? [...passes].reverse() : passes)) {
-      const d = o.d;
-      if (((mat.blendMode ?? 0) !== 0) !== blended) continue;
-      gl.uniformMatrix4fv(uMV, false, o.mv);
-      if (blended) {
-        gl.enable(gl.BLEND);
-        if (mat.blendMode === 1) gl.blendFunc(gl.ONE, gl.ONE);              // additive
-        else if (mat.blendMode === 2) gl.blendFunc(gl.DST_COLOR, gl.ZERO);  // multiplicative
-        else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);            // alpha
-        gl.depthMask(false);                                   // depth mode 2
-      } else { gl.disable(gl.BLEND); gl.depthMask(true); }     // depth mode 3
-      if (mat.twoSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
-      gl.uniform3f(uColor, mat.color[0], mat.color[1], mat.color[2]);
-      gl.uniform1i(uHasTex, mat.tex ? 1 : 0);
-      gl.uniform1i(uUnlit, mat.unlit ? 1 : 0);
-      gl.uniform1i(uTwoSided, mat.twoSided ? 1 : 0);
-      gl.uniform1f(uDiffuse, mat.diffuse ?? 1);
-      gl.uniform1f(uAlpha, mat.alpha ?? 1);
-      gl.uniform1i(uHasEnv, mat.envTex ? 1 : 0);
-      gl.uniform1f(uRefl, mat.refl ?? 0);
-      gl.uniform1f(uSpec, mat.spec ?? 0);
-      // THE REFERENCE HARDWARE CLAMPED. Settled by measurement, so the
-      // reasoning is recorded here rather than left as a standing doubt.
-      //
-      // The engine really does hand GL an out-of-range exponent. The call is
-      // glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, material[+0x34]) at
-      // 0x40c19b-0x40c1a0, and FUN_0040c060 writes it on EVERY material —
-      // both branches end at the same call site (0x40c196):
-      //
-      //   material[+0x69] set   -> 0x40c192: shininess = material[+0x34]
-      //   material[+0x69] clear -> 0x40c1d9: PUSH 1.0f; JMP 0x40c196
-      //
-      // 9 of the archive's 27 GLOS-bearing surfaces map above 128. By the
-      // OpenGL spec that is GL_INVALID_VALUE, the state is left untouched,
-      // and the surface silently inherits the previous exponent — usually
-      // the 1.0 that the last non-specular surface wrote.
-      //
-      // That model was implemented in full, with the persistent state, the
-      // draw-order carry and the 1.0 reset, and MEASURED against the capture:
-      //
-      //   clamp to 128     syrjakyla 0.754  hedi 0.714  turska 0.937  flu2 0.648
-      //   reject-and-carry syrjakyla 0.379  hedi 0.453  turska 0.806  flu2 0.620
-      //
-      // Four independent parts, all worse, by large margins. The capture is
-      // the source of truth and it says the driver these frames were rendered
-      // on clamped into range instead of rejecting — which is what plenty of
-      // 2000-era GL drivers did with this exact call. Clamping is therefore
-      // not an approximation of the engine's behaviour, it IS the observed
-      // behaviour; the spec is the external document that loses.
-      //
-      // Because every surface's exponent then takes effect on its own, none
-      // of the persistent-state machinery is needed and it is gone.
-      gl.uniform1f(uShine, Math.min(128, mat.shine ?? 16));
-      gl.uniform1i(uHasTex1, mat.tex1 ? 1 : 0);
-      gl.uniform1i(uTex1Add, mat.tex1Add ? 1 : 0);
-      gl.uniform1i(uPass1, 0);
-      gl.uniform1i(uTexGen0, mat.texGen0 ? 1 : 0);
+    gl.cullFace(gl.BACK);
+    gl.frontFace(gl.CW);                        // paired with the Scale(1,1,-1)
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    // Feedback parts do not clear colour: Silli clears DEPTH ONLY and lays a
+    // 20% black quad (a black FadeIn at 0.8 — RENDER.md §12 corrects §7's 30%);
+    // Pehko clears nothing and uses 5%; Part_Empt clears exactly once in the
+    // whole process. A single-frame renderer has no history to accumulate, so
+    // it clears anyway and stamps the quad — the trail itself needs a
+    // ping-pong FBO and a real frame loop.
+    // Silli clears DEPTH only; Pehko and Empt clear nothing once running.
+    if (clearColour) gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    else gl.clear(gl.DEPTH_BUFFER_BIT);
+    // ---- backdrop image, before the 3D and with depth disabled
+    let bgTex = null;
+    if (scene.backdropImage) {
+      // loadTexture resolves by basename, so the three path shapes in the
+      // assets all land in the same place — no probing, no spurious 404s.
+      try { bgTex = await loadTexture(scene.backdropImage); } catch { bgTex = null; }
+    }
+    if (bgTex) {
+      gl.useProgram(bgProg);
+      gl.bindVertexArray(bgVao);
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.CULL_FACE);
       gl.activeTexture(gl.TEXTURE0);
-      if (mat.tex) { gl.bindTexture(gl.TEXTURE_2D, mat.tex); textured++; }
-      if (mat.tex1) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.tex1); }
-      if (mat.envTex) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, mat.envTex); }
-      gl.bindVertexArray(part.vao);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.ib);
-      gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
-      // mask 7: second, additive pass carrying only the LUMI texture
-      if (mat.texPass1 && !NOPASS1) {
-        gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-        gl.depthMask(true);                       // pass 1 WRITES depth
-        gl.uniform1i(uPass1, 1);
-        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.texPass1);
-        gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
-        gl.uniform1i(uPass1, 0);
-        if (!blended) { gl.disable(gl.BLEND); gl.depthMask(true); }
-      }
-    }
-  }
-  gl.disable(gl.BLEND); gl.depthMask(true);
-  // ---- hair. `AddNullObject Hair_<name>` binds that null to
-  // data/hairs/<name>.txt; every strand shares ONE root, the null's world
-  // origin, so the animated nulls drive the hair purely by parenting.
-  //
-  // Part_Pehko sets the global `DAT_004a900c = 1` around its frame
-  // (RENDER.md §11.2.2), which suppresses Scene::render's hair pass entirely.
-  // The simulation still RUNS — Scene::update ticks it and Pehko reads the
-  // node positions to place its particle systems — but nothing is drawn. So
-  // this is a draw suppression, not a skip: the strands must still be stepped.
-  const hairSuppressed = /^pehko$/i.test(SCENE);
-  const hairNodes = [];        // emitter positions for the particle systems
-  // ONE rand() stream across every hair mesh in the scene, in creation order.
-  // The engine never calls srand, so the CRT's initial seed of 1 stands and
-  // each HairMesh ctor continues the sequence the previous one left off at —
-  // it does not restart. Giving each mesh its own generator made every mesh
-  // built from the same file identical, which matters most in hairball: it
-  // has TWO `Hair_furball` nulls, and they are supposed to be two different
-  // random tufts, not one drawn twice.
-  const hairRand = msvcRand();
-  // Part_Pehko's prototype system is built in Part_Pehko::create from the
-  // literal "data/particles/tauno/tauno.txt" (0x4075b5), BEFORE any frame
-  // runs, so it is loaded here rather than after the hair loop: its clones
-  // have to advance on the hair's own clock, not in a later pass.
-  let parP = null;
-  const parSystems = [];
-  if (hairSuppressed) {
-    try {
-      const t = await (await fetch(DATA + 'particles/tauno/tauno.txt')).text();
-      if (t && !/not found/i.test(t)) parP = parseParticles(t);
-    } catch {}
-  }
-  for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
-    const name = nullObj.name.replace(/^Hair_/, '');
-    let txt;
-    try { txt = await (await fetch(DATA + 'hairs/' + name + '.txt')).text(); } catch { continue; }
-    if (!txt || /^\s*$/.test(txt) || /not found/i.test(txt)) continue;
-    const h = parseHair(txt);
-    if (!h.hairCount || !h.nodesPerHair) continue;
-    // The hair null is ANIMATED, so the simulation has to follow it through
-    // time rather than pin it where it ends up. worldMatrix is re-evaluated at
-    // every step, exactly as HairMesh::update re-derives it each frame.
-    const matAt = (t) => worldMatrix(nullObj, t);
-    const w = worldMatrix(nullObj, T);
-    const root = [w[12], w[13], w[14]];
-    // The step size is the one thing about the hair that cannot be read out of
-    // the binary: the engine steps with the real elapsed QPC time, so the shape
-    // is a function of the frame rate the demo happened to run at (§11.1 — same
-    // dt same image, different dt visibly different hair). ?hairdt= exists so
-    // verify/hairdt.mjs can MEASURE that frame rate against the capture instead
-    // of leaving 1/60 as an unexamined assumption.
-    const hairDt = Number(qs.get('hairdt')) || 1 / 60;
-    // One system per node, over ALL nodes — the engine's loop is
-    // `for node in strand[+0x18..0x1c]` with no skip, so `HairCount 8` x
-    // `NodesPerHair 10` is 80 systems, not 72. Node 0 is the anchor, which
-    // the simulation never moves, so its world position is the root itself.
-    // They are stepped INSIDE the hair loop because Part_Pehko::vf2 writes
-    // ps.position from the live node and updates the system in the same
-    // frame — the emitters trace the path the nodes travel, and running them
-    // afterwards over the final pose emits everything from a standing start.
-    const onStep = (parP && hairSuppressed)
-      ? (t, sts, rt) => {
-          let k = 0;
-          for (const st of sts)
-            for (let i = 0; i < st.nodes.length; i++) {
-              parSystems[k] ??= createSystem(parP);
-              stepSystem(parSystems[k++], parP, i === 0 ? rt : st.nodes[i].pos,
-                hairDt, hairRand);
-            }
-        }
-      : null;
-    const strands = simulate(buildStrands(h, hairRand), matAt, h.gravity, T, hairDt, onStep);
-    if (hairSuppressed) {
-      for (const st of strands)
-        for (let i = 0; i < st.nodes.length; i++)
-          hairNodes.push(i === 0 ? root : st.nodes[i].pos);
-      continue;                                  // DAT_004a900c = 1: no draw
-    }
-    // Shading normals need the FIRST light's world position (Scene::update
-    // 0x4151be assigns hair[+0x108] = *scene[+0x48] unconditionally), and they
-    // change every frame because they point at the light.
-    const L0 = scene.lights[0];
-    const lw = L0 ? worldMatrix(L0, T) : null;
-    shadeNormals(strands, root, lw ? [lw[12], lw[13], lw[14]] : [0, 0, 0]);
-    const verts = toLineVerts(strands, root);
-    hairLines += verts.length / (10 * 6);        // 6 verts x 10 floats per segment
-
-    gl.useProgram(hairProg);
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    const vb = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vb);
-    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
-    const S = 10 * 4;                            // stride: 10 floats
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
-    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 12);
-    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, S, 24);
-    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, S, 36);
-    const hu = (n) => gl.getUniformLocation(hairProg, n);
-    gl.uniformMatrix4fv(hu('uMV'), false, view);
-    gl.uniformMatrix4fv(hu('uProj'), false, proj);
-    gl.uniform2f(hu('uViewport'), canvas.width, canvas.height);
-    gl.uniform1f(hu('uLineWidth'), 3.0);         // glLineWidth(3.0f) @0x424173
-    gl.uniform3f(hu('uHairColor'),
-      h.diffuseColor[0] / 255, h.diffuseColor[1] / 255, h.diffuseColor[2] / 255);
-    gl.uniform3f(hu('uHairSpec'),
-      h.specularColor[0] / 255, h.specularColor[1] / 255, h.specularColor[2] / 255);
-    gl.uniform1f(hu('uShine'), Math.min(128, h.specularExponent));
-    // EXACTLY ONE light, the scene's first, and the hair material's own
-    // ambient is the (255,255,255) default so the light-model ambient passes
-    // through undimmed.
-    gl.uniform3f(hu('uAmbient'), ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
-    gl.uniform3fv(hu('uLightDir'), new Float32Array(lightDirs.slice(0, 3).length
-      ? lightDirs.slice(0, 3) : [0, 0, 1]));
-    gl.uniform3fv(hu('uLightColor'), new Float32Array(lightCols.slice(0, 3).length
-      ? lightCols.slice(0, 3) : [1, 1, 1]));
-    gl.uniform1i(hu('uFogOn'), scene.fog?.type ? 1 : 0);
-    if (scene.fog?.type) {
-      const fc = scene.fog.color ?? [0, 0, 0];
-      gl.uniform3f(hu('uFogColor'), fc[0], fc[1], fc[2]);
-      gl.uniform2f(hu('uFogRange'), scene.fog.minDist ?? 0, scene.fog.maxDist ?? 100);
-    }
-    gl.disable(gl.CULL_FACE);                    // material noCull = 1
-    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);   // Additive 1
-    gl.depthMask(true);                          // depth mode 3: test + write
-    // Wide lines are expanded to triangles in HAIR_VS — see toLineVerts. A
-    // gl.lineWidth(3) call here would be silently clamped to 1.
-    gl.drawArrays(gl.TRIANGLES, 0, verts.length / 10);
-    gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
-    gl.useProgram(prog);
-  }
-  // ---- Part_Empt: no LW::Scene at all — its content IS this stamping
-  // routine (RENDER.md §12.1). Three mutually exclusive phases whose timers
-  // run in sequence and sum to 1.3 + 8.0 + 3.7 = 13.0s, exactly its slot.
-  // `rand01` draws from the shared MSVC stream. All coordinates are in the
-  // virtual 640x480 space and are TRUNCATED, and note phase C's y uses a
-  // MINUS (screen y grows downward).
-  if (/^empt$/i.test(SCENE) && emptTex) {
-    const r01 = () => emptRand() * (1 / 32767);
-    const stamp = (x, y, op) =>
-      drawPicture(emptTex, emptAlphaTex, Math.trunc(x), Math.trunc(y), 256, 256, op);
-    if (T < 1.3) {                                    // phase A
-      drawFade('in', 3, 1 - 0.1);                     // black veil at alpha 0.1
-      const X = 8 * T - 8, A = X * X;
-      const N = Math.max(1, Math.trunc((X - 2.0) * 3.0));
-      for (let i = 0; i < N; i++)
-        stamp((r01() - 0.5) * A + 50.0, (r01() - 0.5) * A + 180.0, r01());
-    } else if (T < 9.3) {                             // phase B
-      drawFade('in', 3, 1 - 0.1);
-      const J = 5.759998321533203;                    // = X^2 at t0 = 1.3
-      stamp((r01() - 0.5) * J + 50.0, (r01() - 0.5) * J + 180.0, r01());
-    } else {                                          // phase C
-      const d = T - 9.3;
-      drawFade('in', 3, 1 - (0.9 - 0.05 * d));        // veil deepens with d
-      const Y = 8 * d + 2.4, A2 = 1.5 * Y * Y;
-      const N = Math.max(1, Math.trunc(28 * d + 1.4));
-      for (let i = 0; i < N; i++) {
-        const ang = 0.7853981852531433 + 2.094395160675049 * (r01() - 0.5);
-        const rr = (r01() - 0.1) * A2;
-        stamp(50.0 + rr * Math.cos(ang), 180.0 - rr * Math.sin(ang), r01());
-      }
-    }
-  }
-  // ---- particles. Part_Pehko clones one system per hair node. The systems
-  // were already advanced above, in lockstep with the hair, because each one
-  // is re-anchored to its node every frame before being updated — so all that
-  // is left here is to collect and draw whatever is alive at time T.
-  {
-    const pp = parP;
-    if (pp && parSystems.length) {
-      // camera forward axis in world space, for the billboard basis
-      const camZ = [camWorld[8], camWorld[9], camWorld[10]];
-      const byFrame = new Map();
-      for (const sys of parSystems) {
-        for (const q of sys.live) {
-          const f = frameOf(q, pp, 40);
-          if (!byFrame.has(f)) byFrame.set(f, []);
-          byFrame.get(f).push(q);
-          particleCount++;
-        }
-      }
-      gl.useProgram(parProg);
-      gl.uniformMatrix4fv(gl.getUniformLocation(parProg, 'uMV'), false, view);
-      gl.uniformMatrix4fv(gl.getUniformLocation(parProg, 'uProj'), false, proj);
-      gl.uniform1i(gl.getUniformLocation(parProg, 'uTex'), 0);
-      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-      // CULLING STAYS ON. The particle material is built at 0x40cb69-0x40cbe5
-      // with FUN_0040bef0's defaults for everything it does not set, and
-      // `noCull` defaults to 0 — so the sprites are culled against
-      // glFrontFace(GL_CW) like everything else (§11.2). The billboard basis
-      // is A = R x C, B = A x C with R = (sin zRot, cos zRot, 0), so the
-      // quad's winding flips with the particle's random, freely-spinning
-      // zRotation: the engine discards roughly half of its own sprites.
-      // Disabling culling here doubled the per-frame additive contribution,
-      // which on a part whose fader is only 5% is amplified 20x into a
-      // visible floor over the whole frame (NOTES.md §15.2).
-      gl.depthMask(false);
-      gl.activeTexture(gl.TEXTURE0);
-      for (const [f, list] of byFrame) {
-        let tex = null;
-        try {
-          tex = await loadTexture(`epes${String(f).padStart(3, '0')}.jpg`,
-                                  'work/unpacked/lapsus_dat/data/particles/tauno/');
-        } catch { continue; }
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        const pos = [], uv = [], al = [];
-        const [tsw] = texSize.get(tex) ?? [32, 32];
-        const e0 = 0.5 / tsw, e1 = 1 - 0.5 / tsw;
-        for (const q of list) {
-          const c = billboard(q, camZ);
-          // HALF-TEXEL INSET, per §11.2.4: the engine spans (W-1)/TW from a
-          // +0.5/TW origin, i.e. texel centre 0 to texel centre W-1, cropping
-          // the outermost half-texel of the tile. Sampling the full [0,1]
-          // instead lands exactly on the tile boundary, where bilinear
-          // filtering blends in the WRAPPED opposite edge — a faint halo
-          // around every one of 800 sprites, additively accumulated.
-          const uvs = [[e0,e1],[e1,e1],[e1,e0],[e0,e0]];
-          const cc = [q.r * q.alpha, q.g * q.alpha, q.b * q.alpha];
-          for (const i of [0,1,2, 0,2,3]) {          // quad -> 2 triangles
-            pos.push(...c[i]); uv.push(...uvs[i]); al.push(...cc);
-          }
-        }
-        const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
-        const put = (loc, data, size) => { const b = gl.createBuffer();
-          gl.bindBuffer(gl.ARRAY_BUFFER, b);
-          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
-          gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0); };
-        put(0, pos, 3); put(1, uv, 2); put(2, al, 3);
-        gl.drawArrays(gl.TRIANGLES, 0, pos.length / 3);
-      }
-      gl.disable(gl.BLEND); gl.depthMask(true);
+      gl.bindTexture(gl.TEXTURE_2D, bgTex);
+      gl.uniform1i(gl.getUniformLocation(bgProg, 'uTex'), 0);
+      const [tw, th] = texSize.get(bgTex) ?? [canvas.width, canvas.height];
+      gl.uniform2f(gl.getUniformLocation(bgProg, 'uFit'),
+        Math.min(1, canvas.width / tw), Math.min(1, canvas.height / th));
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.enable(gl.DEPTH_TEST);
+      gl.enable(gl.CULL_FACE);
       gl.useProgram(prog);
     }
-  }
 
-  // ?probe=1 reports the geometry that decides how big things land on screen:
-  // where the camera is, how far the emitters spread in WORLD units, and what
-  // fraction of the frame that spread subtends. Reading scale off pixels is
-  // guesswork — this is the quantity itself, and it separates "the cloud is
-  // the wrong size" from "the camera is in the wrong place".
-  if (qs.get('probe') && hairNodes.length) {
-    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-    for (const p of hairNodes) for (let i = 0; i < 3; i++) {
-      lo[i] = Math.min(lo[i], p[i]); hi[i] = Math.max(hi[i], p[i]);
+    if (fbAlpha != null && !useAcc) drawFade('in', 3, 1 - fbAlpha);
+
+    gl.uniformMatrix4fv(uProj, false, proj);
+    gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
+    gl.uniform1i(uEnv, 2);
+    gl.uniform1i(gl.getUniformLocation(prog, 'uTex1'), 1);
+    // ---- LW_MorphMixer displacement, before anything reads the geometry.
+    // Weight = the MorfForm envelope sampled at localTime, and a target is
+    // dropped entirely unless |w| > 0.01 (FUN_0041be60 @0x41beb4 against
+    // +/-_DAT_0045acdc). Five scenes use it; silli is the one where it dominates.
+    for (const d of drawables) {
+      if (!d.mesh.applyMorph) continue;
+      const active = (d.item.morphs ?? [])
+        .map((m) => ({ name: m.name, w: evalEnvelope(m.envelope, T) }))
+        .filter((m) => Math.abs(m.w) > MORPH_EPSILON);
+      d.mesh.applyMorph(active);
     }
-    const mid = lo.map((v, i) => (v + hi[i]) / 2);
-    const cam = [camWorld[12], camWorld[13], camWorld[14]];
-    const dist = Math.hypot(cam[0] - mid[0], cam[1] - mid[1], cam[2] - mid[2]);
-    const span = Math.max(...hi.map((v, i) => v - lo[i]));
-    probeInfo = {
-      emitters: hairNodes.length,
-      extent: hi.map((v, i) => +(v - lo[i]).toFixed(2)),
-      centre: mid.map((v) => +v.toFixed(2)),
-      camera: cam.map((v) => +v.toFixed(2)),
-      distance: +dist.toFixed(2),
-      frameFraction: +(2 * Math.atan(span / 2 / dist) / fovX).toFixed(3),
+
+    // ---- lights. LightType 0 is a DISTANT light: direction only, taken from
+    // the item's world +Z and negated to point toward the light (RENDER.md 8).
+    // Light-model ambient = scene ambient colour x intensity; pene sets
+    // AmbientIntensity 0, so there is no ambient floor at all.
+    const lightDirs = [], lightCols = [];
+    for (const L of scene.lights.slice(0, 8)) {
+      const w = worldMatrix(L, T);
+      const dW = [-w[8], -w[9], -w[10]];                  // -(world +Z)
+      const d = [                                          // into eye space
+        view[0]*dW[0] + view[4]*dW[1] + view[8]*dW[2],
+        view[1]*dW[0] + view[5]*dW[1] + view[9]*dW[2],
+        view[2]*dW[0] + view[6]*dW[1] + view[10]*dW[2]];
+      const len = Math.hypot(...d) || 1;
+      lightDirs.push(d[0]/len, d[1]/len, d[2]/len);
+      const c = L.color ?? [1, 1, 1], I = L.intensity ?? 1;
+      lightCols.push(c[0]*I, c[1]*I, c[2]*I);
+    }
+    gl.uniform1i(uNumLights, scene.lights.slice(0, 8).length);
+    if (lightDirs.length) {
+      gl.uniform3fv(uLightDir, new Float32Array(lightDirs));
+      gl.uniform3fv(uLightColor, new Float32Array(lightCols));
+    }
+    const ambI = scene.ambientIntensity ?? 0, ambC = scene.ambientColor ?? [1, 1, 1];
+    gl.uniform3f(uAmbient, ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
+
+    // Fog: enabled only for FogType 1. Colour comes from BackdropColor when the
+    // BackdropFog flag is set, else FogColor (RENDER.md §4).
+    const fogOn = (scene.fog?.type ?? 0) === 1;
+    gl.uniform1i(uFogOn, fogOn ? 1 : 0);
+    if (fogOn) {
+      const fc = scene.backdrop?.fog ? (scene.backdrop.color ?? [0,0,0]) : (scene.fog.color ?? [0,0,0]);
+      gl.uniform3f(uFogColor, fc[0], fc[1], fc[2]);
+      gl.uniform2f(uFogRange, scene.fog.minDist ?? 0, scene.fog.maxDist ?? 100);
+    }
+    // ---- opaque first, then blended (RENDER.md 8 draw order)
+    textured = 0;
+    // Depth sort: key is the camera-space Z of each object's bounding-sphere
+    // centre, ASCENDING (nearest first). The opaque pass walks forward and the
+    // blended pass BACKWARD (far->near). It is per-OBJECT, not per-triangle, so
+    // the original's transparency ordering is imperfect — reproduce it rather
+    // than improve on it (RENDER.md §4 steps 5-8).
+    const objs = drawables.map((d) => {
+      const mv = M.mul(view, worldMatrix(d.item, T));
+      const c = d.mesh.centre;
+      return { d, mv, z: mv[2]*c[0] + mv[6]*c[1] + mv[10]*c[2] + mv[14] };
+    }).sort((a, b) => a.z - b.z);
+
+    const passes = [];
+    for (const o of objs) for (const part of o.d.mesh.parts) {
+      const mat = o.d.mats.get(part.surfName)
+        ?? { tex: null, color: [0.72,0.74,0.78], unlit: false, diffuse: 1, alpha: 1,
+             twoSided: false, refl: 0, envTex: null, blendMode: 0 };
+      passes.push({ o, part, mat });
+    }
+    for (const blended of (DRAW_OBJECTS ? [false, true] : [])) {
+      for (const { o, part, mat } of (blended ? [...passes].reverse() : passes)) {
+        const d = o.d;
+        if (((mat.blendMode ?? 0) !== 0) !== blended) continue;
+        gl.uniformMatrix4fv(uMV, false, o.mv);
+        if (blended) {
+          gl.enable(gl.BLEND);
+          if (mat.blendMode === 1) gl.blendFunc(gl.ONE, gl.ONE);              // additive
+          else if (mat.blendMode === 2) gl.blendFunc(gl.DST_COLOR, gl.ZERO);  // multiplicative
+          else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);            // alpha
+          gl.depthMask(false);                                   // depth mode 2
+        } else { gl.disable(gl.BLEND); gl.depthMask(true); }     // depth mode 3
+        if (mat.twoSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
+        gl.uniform3f(uColor, mat.color[0], mat.color[1], mat.color[2]);
+        gl.uniform1i(uHasTex, mat.tex ? 1 : 0);
+        gl.uniform1i(uUnlit, mat.unlit ? 1 : 0);
+        gl.uniform1i(uTwoSided, mat.twoSided ? 1 : 0);
+        gl.uniform1f(uDiffuse, mat.diffuse ?? 1);
+        gl.uniform1f(uAlpha, mat.alpha ?? 1);
+        gl.uniform1i(uHasEnv, mat.envTex ? 1 : 0);
+        gl.uniform1f(uRefl, mat.refl ?? 0);
+        gl.uniform1f(uSpec, mat.spec ?? 0);
+        // THE REFERENCE HARDWARE CLAMPED. Settled by measurement, so the
+        // reasoning is recorded here rather than left as a standing doubt.
+        //
+        // The engine really does hand GL an out-of-range exponent. The call is
+        // glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, material[+0x34]) at
+        // 0x40c19b-0x40c1a0, and FUN_0040c060 writes it on EVERY material —
+        // both branches end at the same call site (0x40c196):
+        //
+        //   material[+0x69] set   -> 0x40c192: shininess = material[+0x34]
+        //   material[+0x69] clear -> 0x40c1d9: PUSH 1.0f; JMP 0x40c196
+        //
+        // 9 of the archive's 27 GLOS-bearing surfaces map above 128. By the
+        // OpenGL spec that is GL_INVALID_VALUE, the state is left untouched,
+        // and the surface silently inherits the previous exponent — usually
+        // the 1.0 that the last non-specular surface wrote.
+        //
+        // That model was implemented in full, with the persistent state, the
+        // draw-order carry and the 1.0 reset, and MEASURED against the capture:
+        //
+        //   clamp to 128     syrjakyla 0.754  hedi 0.714  turska 0.937  flu2 0.648
+        //   reject-and-carry syrjakyla 0.379  hedi 0.453  turska 0.806  flu2 0.620
+        //
+        // Four independent parts, all worse, by large margins. The capture is
+        // the source of truth and it says the driver these frames were rendered
+        // on clamped into range instead of rejecting — which is what plenty of
+        // 2000-era GL drivers did with this exact call. Clamping is therefore
+        // not an approximation of the engine's behaviour, it IS the observed
+        // behaviour; the spec is the external document that loses.
+        //
+        // Because every surface's exponent then takes effect on its own, none
+        // of the persistent-state machinery is needed and it is gone.
+        gl.uniform1f(uShine, Math.min(128, mat.shine ?? 16));
+        gl.uniform1i(uHasTex1, mat.tex1 ? 1 : 0);
+        gl.uniform1i(uTex1Add, mat.tex1Add ? 1 : 0);
+        gl.uniform1i(uPass1, 0);
+        gl.uniform1i(uTexGen0, mat.texGen0 ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE0);
+        if (mat.tex) { gl.bindTexture(gl.TEXTURE_2D, mat.tex); textured++; }
+        if (mat.tex1) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.tex1); }
+        if (mat.envTex) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, mat.envTex); }
+        gl.bindVertexArray(part.vao);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.ib);
+        gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
+        // mask 7: second, additive pass carrying only the LUMI texture
+        if (mat.texPass1 && !NOPASS1) {
+          gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+          gl.depthMask(true);                       // pass 1 WRITES depth
+          gl.uniform1i(uPass1, 1);
+          gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.texPass1);
+          gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
+          gl.uniform1i(uPass1, 0);
+          if (!blended) { gl.disable(gl.BLEND); gl.depthMask(true); }
+        }
+      }
+    }
+    gl.disable(gl.BLEND); gl.depthMask(true);
+    // ---- hair. `AddNullObject Hair_<name>` binds that null to
+    // data/hairs/<name>.txt; every strand shares ONE root, the null's world
+    // origin, so the animated nulls drive the hair purely by parenting.
+    //
+    // Part_Pehko sets the global `DAT_004a900c = 1` around its frame
+    // (RENDER.md §11.2.2), which suppresses Scene::render's hair pass entirely.
+    // The simulation still RUNS — Scene::update ticks it and Pehko reads the
+    // node positions to place its particle systems — but nothing is drawn. So
+    // this is a draw suppression, not a skip: the strands must still be stepped.
+    const hairSuppressed = /^pehko$/i.test(SCENE);
+    const hairNodes = [];        // emitter positions for the particle systems
+    // ONE rand() stream across every hair mesh in the scene, in creation order.
+    // The engine never calls srand, so the CRT's initial seed of 1 stands and
+    // each HairMesh ctor continues the sequence the previous one left off at —
+    // it does not restart. Giving each mesh its own generator made every mesh
+    // built from the same file identical, which matters most in hairball: it
+    // has TWO `Hair_furball` nulls, and they are supposed to be two different
+    // random tufts, not one drawn twice.
+    // ONE rand() stream per rebuild, shared by hair construction and every
+    // particle emission, because the engine never calls srand.
+    // Rebuild from rest when asked for a time at or before where the state
+    // stands (a seek, or the first frame); otherwise advance to T.
+    const HAIR_DT = Number(qs.get('hairdt')) || 1 / 60;
+    if (!sim || T < sim.t - 1e-9) sim = { t: 0, rand: msvcRand(), strands: new Map(), systems: [] };
+    const simFrom = sim.t, simTo = Math.max(T, sim.t);
+    const hairRand = sim.rand;
+    // Part_Pehko's prototype system is built in Part_Pehko::create from the
+    // literal "data/particles/tauno/tauno.txt" (0x4075b5), BEFORE any frame
+    // runs, so it is loaded here rather than after the hair loop: its clones
+    // have to advance on the hair's own clock, not in a later pass.
+    let parP = null;
+    const parSystems = sim.systems;
+    if (hairSuppressed) {
+      try {
+        const t = await (await fetch(DATA + 'particles/tauno/tauno.txt')).text();
+        if (t && !/not found/i.test(t)) parP = parseParticles(t);
+      } catch {}
+    }
+    for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
+      const name = nullObj.name.replace(/^Hair_/, '');
+      let txt;
+      try { txt = await (await fetch(DATA + 'hairs/' + name + '.txt')).text(); } catch { continue; }
+      if (!txt || /^\s*$/.test(txt) || /not found/i.test(txt)) continue;
+      const h = parseHair(txt);
+      if (!h.hairCount || !h.nodesPerHair) continue;
+      // The hair null is ANIMATED, so the simulation has to follow it through
+      // time rather than pin it where it ends up. worldMatrix is re-evaluated at
+      // every step, exactly as HairMesh::update re-derives it each frame.
+      const matAt = (t) => worldMatrix(nullObj, t);
+      const w = worldMatrix(nullObj, T);
+      const root = [w[12], w[13], w[14]];
+      // The step size is the one thing about the hair that cannot be read out of
+      // the binary: the engine steps with the real elapsed QPC time, so the shape
+      // is a function of the frame rate the demo happened to run at (§11.1 — same
+      // dt same image, different dt visibly different hair). ?hairdt= exists so
+      // verify/hairdt.mjs can MEASURE that frame rate against the capture instead
+      // of leaving 1/60 as an unexamined assumption.
+      const hairDt = HAIR_DT;
+      // One system per node, over ALL nodes — the engine's loop is
+      // `for node in strand[+0x18..0x1c]` with no skip, so `HairCount 8` x
+      // `NodesPerHair 10` is 80 systems, not 72. Node 0 is the anchor, which
+      // the simulation never moves, so its world position is the root itself.
+      // They are stepped INSIDE the hair loop because Part_Pehko::vf2 writes
+      // ps.position from the live node and updates the system in the same
+      // frame — the emitters trace the path the nodes travel, and running them
+      // afterwards over the final pose emits everything from a standing start.
+      const onStep = (parP && hairSuppressed)
+        ? (t, sts, rt) => {
+            let k = 0;
+            for (const st of sts)
+              for (let i = 0; i < st.nodes.length; i++) {
+                parSystems[k] ??= createSystem(parP);
+                stepSystem(parSystems[k++], parP, i === 0 ? rt : st.nodes[i].pos,
+                  hairDt, hairRand);
+              }
+          }
+        : null;
+      // ADVANCE the strands from where they stand to T, instead of rebuilding
+      // the whole history. `simulate` integrates a span, so the state carries
+      // and the cost per frame is the elapsed dt rather than the elapsed part.
+      let strands = sim.strands.get(nullObj);
+      if (!strands) sim.strands.set(nullObj, strands = buildStrands(h, hairRand));
+      simulateSpan(strands, matAt, h.gravity, simFrom, simTo, hairDt, onStep);
+      if (hairSuppressed) {
+        for (const st of strands)
+          for (let i = 0; i < st.nodes.length; i++)
+            hairNodes.push(i === 0 ? root : st.nodes[i].pos);
+        continue;                                  // DAT_004a900c = 1: no draw
+      }
+      // Shading normals need the FIRST light's world position (Scene::update
+      // 0x4151be assigns hair[+0x108] = *scene[+0x48] unconditionally), and they
+      // change every frame because they point at the light.
+      const L0 = scene.lights[0];
+      const lw = L0 ? worldMatrix(L0, T) : null;
+      shadeNormals(strands, root, lw ? [lw[12], lw[13], lw[14]] : [0, 0, 0]);
+      const verts = toLineVerts(strands, root);
+      hairLines += verts.length / (10 * 6);        // 6 verts x 10 floats per segment
+
+      gl.useProgram(hairProg);
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      const vb = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+      gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+      const S = 10 * 4;                            // stride: 10 floats
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 12);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, S, 24);
+      gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, S, 36);
+      const hu = (n) => gl.getUniformLocation(hairProg, n);
+      gl.uniformMatrix4fv(hu('uMV'), false, view);
+      gl.uniformMatrix4fv(hu('uProj'), false, proj);
+      gl.uniform2f(hu('uViewport'), canvas.width, canvas.height);
+      gl.uniform1f(hu('uLineWidth'), 3.0);         // glLineWidth(3.0f) @0x424173
+      gl.uniform3f(hu('uHairColor'),
+        h.diffuseColor[0] / 255, h.diffuseColor[1] / 255, h.diffuseColor[2] / 255);
+      gl.uniform3f(hu('uHairSpec'),
+        h.specularColor[0] / 255, h.specularColor[1] / 255, h.specularColor[2] / 255);
+      gl.uniform1f(hu('uShine'), Math.min(128, h.specularExponent));
+      // EXACTLY ONE light, the scene's first, and the hair material's own
+      // ambient is the (255,255,255) default so the light-model ambient passes
+      // through undimmed.
+      gl.uniform3f(hu('uAmbient'), ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
+      gl.uniform3fv(hu('uLightDir'), new Float32Array(lightDirs.slice(0, 3).length
+        ? lightDirs.slice(0, 3) : [0, 0, 1]));
+      gl.uniform3fv(hu('uLightColor'), new Float32Array(lightCols.slice(0, 3).length
+        ? lightCols.slice(0, 3) : [1, 1, 1]));
+      gl.uniform1i(hu('uFogOn'), scene.fog?.type ? 1 : 0);
+      if (scene.fog?.type) {
+        const fc = scene.fog.color ?? [0, 0, 0];
+        gl.uniform3f(hu('uFogColor'), fc[0], fc[1], fc[2]);
+        gl.uniform2f(hu('uFogRange'), scene.fog.minDist ?? 0, scene.fog.maxDist ?? 100);
+      }
+      gl.disable(gl.CULL_FACE);                    // material noCull = 1
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);   // Additive 1
+      gl.depthMask(true);                          // depth mode 3: test + write
+      // Wide lines are expanded to triangles in HAIR_VS — see toLineVerts. A
+      // gl.lineWidth(3) call here would be silently clamped to 1.
+      gl.drawArrays(gl.TRIANGLES, 0, verts.length / 10);
+      gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
+      gl.useProgram(prog);
+    }
+    sim.t = simTo;
+
+    // ---- Part_Empt: no LW::Scene at all — its content IS this stamping
+    // routine (RENDER.md §12.1). Three mutually exclusive phases whose timers
+    // run in sequence and sum to 1.3 + 8.0 + 3.7 = 13.0s, exactly its slot.
+    // `rand01` draws from the shared MSVC stream. All coordinates are in the
+    // virtual 640x480 space and are TRUNCATED, and note phase C's y uses a
+    // MINUS (screen y grows downward).
+    if (/^empt$/i.test(SCENE) && emptTex) {
+      const r01 = () => emptRand() * (1 / 32767);
+      const stamp = (x, y, op) =>
+        drawPicture(emptTex, emptAlphaTex, Math.trunc(x), Math.trunc(y), 256, 256, op);
+      if (T < 1.3) {                                    // phase A
+        drawFade('in', 3, 1 - 0.1);                     // black veil at alpha 0.1
+        const X = 8 * T - 8, A = X * X;
+        const N = Math.max(1, Math.trunc((X - 2.0) * 3.0));
+        for (let i = 0; i < N; i++)
+          stamp((r01() - 0.5) * A + 50.0, (r01() - 0.5) * A + 180.0, r01());
+      } else if (T < 9.3) {                             // phase B
+        drawFade('in', 3, 1 - 0.1);
+        const J = 5.759998321533203;                    // = X^2 at t0 = 1.3
+        stamp((r01() - 0.5) * J + 50.0, (r01() - 0.5) * J + 180.0, r01());
+      } else {                                          // phase C
+        const d = T - 9.3;
+        drawFade('in', 3, 1 - (0.9 - 0.05 * d));        // veil deepens with d
+        const Y = 8 * d + 2.4, A2 = 1.5 * Y * Y;
+        const N = Math.max(1, Math.trunc(28 * d + 1.4));
+        for (let i = 0; i < N; i++) {
+          const ang = 0.7853981852531433 + 2.094395160675049 * (r01() - 0.5);
+          const rr = (r01() - 0.1) * A2;
+          stamp(50.0 + rr * Math.cos(ang), 180.0 - rr * Math.sin(ang), r01());
+        }
+      }
+    }
+    // ---- particles. Part_Pehko clones one system per hair node. The systems
+    // were already advanced above, in lockstep with the hair, because each one
+    // is re-anchored to its node every frame before being updated — so all that
+    // is left here is to collect and draw whatever is alive at time T.
+    {
+      const pp = parP;
+      if (pp && parSystems.length) {
+        // camera forward axis in world space, for the billboard basis
+        const camZ = [camWorld[8], camWorld[9], camWorld[10]];
+        const byFrame = new Map();
+        for (const sys of parSystems) {
+          for (const q of sys.live) {
+            const f = frameOf(q, pp, 40);
+            if (!byFrame.has(f)) byFrame.set(f, []);
+            byFrame.get(f).push(q);
+            particleCount++;
+          }
+        }
+        gl.useProgram(parProg);
+        gl.uniformMatrix4fv(gl.getUniformLocation(parProg, 'uMV'), false, view);
+        gl.uniformMatrix4fv(gl.getUniformLocation(parProg, 'uProj'), false, proj);
+        gl.uniform1i(gl.getUniformLocation(parProg, 'uTex'), 0);
+        gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+        // CULLING STAYS ON. The particle material is built at 0x40cb69-0x40cbe5
+        // with FUN_0040bef0's defaults for everything it does not set, and
+        // `noCull` defaults to 0 — so the sprites are culled against
+        // glFrontFace(GL_CW) like everything else (§11.2). The billboard basis
+        // is A = R x C, B = A x C with R = (sin zRot, cos zRot, 0), so the
+        // quad's winding flips with the particle's random, freely-spinning
+        // zRotation: the engine discards roughly half of its own sprites.
+        // Disabling culling here doubled the per-frame additive contribution,
+        // which on a part whose fader is only 5% is amplified 20x into a
+        // visible floor over the whole frame (NOTES.md §15.2).
+        gl.depthMask(false);
+        gl.activeTexture(gl.TEXTURE0);
+        for (const [f, list] of byFrame) {
+          let tex = null;
+          try {
+            tex = await loadTexture(`epes${String(f).padStart(3, '0')}.jpg`,
+                                    'work/unpacked/lapsus_dat/data/particles/tauno/');
+          } catch { continue; }
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          const pos = [], uv = [], al = [];
+          const [tsw] = texSize.get(tex) ?? [32, 32];
+          const e0 = 0.5 / tsw, e1 = 1 - 0.5 / tsw;
+          for (const q of list) {
+            const c = billboard(q, camZ);
+            // HALF-TEXEL INSET, per §11.2.4: the engine spans (W-1)/TW from a
+            // +0.5/TW origin, i.e. texel centre 0 to texel centre W-1, cropping
+            // the outermost half-texel of the tile. Sampling the full [0,1]
+            // instead lands exactly on the tile boundary, where bilinear
+            // filtering blends in the WRAPPED opposite edge — a faint halo
+            // around every one of 800 sprites, additively accumulated.
+            const uvs = [[e0,e1],[e1,e1],[e1,e0],[e0,e0]];
+            const cc = [q.r * q.alpha, q.g * q.alpha, q.b * q.alpha];
+            for (const i of [0,1,2, 0,2,3]) {          // quad -> 2 triangles
+              pos.push(...c[i]); uv.push(...uvs[i]); al.push(...cc);
+            }
+          }
+          const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+          const put = (loc, data, size) => { const b = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, b);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0); };
+          put(0, pos, 3); put(1, uv, 2); put(2, al, 3);
+          gl.drawArrays(gl.TRIANGLES, 0, pos.length / 3);
+        }
+        gl.disable(gl.BLEND); gl.depthMask(true);
+        gl.useProgram(prog);
+      }
+    }
+
+    // ?probe=1 reports the geometry that decides how big things land on screen:
+    // where the camera is, how far the emitters spread in WORLD units, and what
+    // fraction of the frame that spread subtends. Reading scale off pixels is
+    // guesswork — this is the quantity itself, and it separates "the cloud is
+    // the wrong size" from "the camera is in the wrong place".
+    if (qs.get('probe') && hairNodes.length) {
+      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      for (const p of hairNodes) for (let i = 0; i < 3; i++) {
+        lo[i] = Math.min(lo[i], p[i]); hi[i] = Math.max(hi[i], p[i]);
+      }
+      const mid = lo.map((v, i) => (v + hi[i]) / 2);
+      const cam = [camWorld[12], camWorld[13], camWorld[14]];
+      const dist = Math.hypot(cam[0] - mid[0], cam[1] - mid[1], cam[2] - mid[2]);
+      const span = Math.max(...hi.map((v, i) => v - lo[i]));
+      probeInfo = {
+        emitters: hairNodes.length,
+        extent: hi.map((v, i) => +(v - lo[i]).toFixed(2)),
+        centre: mid.map((v) => +v.toFixed(2)),
+        camera: cam.map((v) => +v.toFixed(2)),
+        distance: +dist.toFixed(2),
+        frameFraction: +(2 * Math.atan(span / 2 / dist) / fovX).toFixed(3),
+      };
+    }
+    };   // end renderAt
+
+    return {
+      name: SCENE, fbAlpha, renderAt,
+      setAcc: (v) => { useAcc = v; },
+      info: (T) => ({
+        probe: probeInfo,
+        scene: SCENE, t: T, camera: camIndex, objects: drawables.length,
+        triangles: drawables.reduce((a, d) => a + d.mesh.count / 3, 0),
+        texturedGroups: textured, hairLines, particleCount,
+        zoom: zoomAt, fovXdeg: fovX * 180 / Math.PI, near: NEAR,
+        glError: gl.getError(),
+      }),
     };
   }
-  };   // end renderAt
 
-  // Feedback parts replay a short window of frames so the trail exists; the
-  // window only needs to cover the decay (0.8^n for Silli reaches ~1% in ~20
-  // frames), not the whole part. Everything else renders exactly one frame.
-  // How long a trail lasts is NOT a free parameter — it follows from the black
-  // quad the part lays down each frame. A quad at alpha a leaves (1-a)^n of a
-  // frame after n more frames, so the trail is spent (under 1%) after
-  // ln(0.01)/ln(1-a) frames. All three parts were given a flat 0.5s, which
-  // contradicted the rule the comment above states, in both directions:
-  // Silli's 20% quad is done in 0.35s and was being over-replayed, while
-  // Pehko's 5% quad runs 1.50s and was being cut at a third of its length.
+
+  // ---- feedback replay, shared by the harness and the player.
+  //
+  // How long a trail lasts follows from the black quad the part lays down each
+  // frame: a quad at alpha a leaves (1-a)^n after n more frames, so the trail
+  // is spent (under 1%) after ln(0.01)/ln(1-a) frames.
   const fbWindow = (a) => Math.log(0.01) / Math.log(1 - a) / 60;
   const FB_WINDOW = { silli: fbWindow(0.20), pehko: fbWindow(0.05), empt: fbWindow(0.10) };
-  // Viherio is NOT continuous feedback: its strobe suppresses the clear only
+  // Viherio is NOT continuous feedback: its strobe suppresses the CLEAR only
   // inside 14 specific windows (table at 0x463c2c, every onset an exact
-  // multiple of 0.110794005s on a 64-unit cycle of 7.090816327s). Treating it
-  // as always-accumulating cost it 0.488 -> 0.155, so it renders normally
-  // until the table is implemented properly.
+  // multiple of 0.110794005s on a 64-unit cycle of 7.090816327s).
   const VIHERIO_ONSETS = [0, 0.886352062, 1.218734026, 1.551116109, 1.994292140,
     2.659056187, 2.991438150, 3.323820114, 3.766996145, 4.431760311, 4.764142036,
     5.096524239, 5.539700031, 6.426052094];
   const VIHERIO_CYCLE = 7.090816326530613;
-  // ?fb= overrides the replay window, so a feedback part can be rendered as a
-  // single frame (?fb=0) to separate "the per-frame content is wrong" from
-  // "the accumulation is wrong". Those are different bugs with different
-  // fixes and the composite image cannot tell them apart.
-  let win = qs.has('fb') ? Number(qs.get('fb')) : FB_WINDOW[SCENE];
-  if (/^viherio$/i.test(SCENE)) {
-    const phase = T % VIHERIO_CYCLE;
-    win = VIHERIO_ONSETS.some((e) => phase >= e && phase < e + 0.1) ? 0.12 : undefined;
-  }
-  if (win) {
-    const dt = 1 / 60, n = Math.max(1, Math.round(win / dt));
-    useAcc = fbAlpha != null;
-    if (useAcc) accInit();
-    for (let i = n; i >= 0; i--) {
-      const t = Math.max(0, T - i * dt);
-      if (useAcc) { accDecay(i === n ? 0 : 1 - fbAlpha); await renderAt(t, false); }
-      else await renderAt(t, i === n);
+  function fbWindowFor(name, T) {
+    // ?fb= overrides the window so a feedback part can be drawn as a single
+    // frame (?fb=0), separating "the per-frame content is wrong" from "the
+    // accumulation is wrong" — different bugs the composite cannot tell apart.
+    if (qs.has('fb')) return Number(qs.get('fb'));
+    if (/^viherio$/i.test(name)) {
+      const ph = T % VIHERIO_CYCLE;
+      return VIHERIO_ONSETS.some((e) => ph >= e && ph < e + 0.1) ? 0.12 : undefined;
     }
-    if (useAcc) { accBlit(); useAcc = false; }
-  } else {
-    await renderAt(T, true);
+    return FB_WINDOW[name];
+  }
+  /**
+   * Draw one frame of `part` at local time T. Feedback parts replay a decay
+   * window into the ping-pong accumulator, where the decay TRUNCATES — see the
+   * accumulator's note: blending in the default framebuffer rounds to nearest,
+   * and round(v*0.95) == v for every v <= 10, so faint pixels would never
+   * decay and additive dust would build a permanent floor.
+   */
+  async function replay(part, T, win) {
+    if (win) {
+      const dt = 1 / 60, n = Math.max(1, Math.round(win / dt));
+      const useAcc = part.fbAlpha != null;
+      part.setAcc(useAcc);
+      if (useAcc) accInit();
+      for (let i = n; i >= 0; i--) {
+        const t = Math.max(0, T - i * dt);
+        if (useAcc) { accDecay(i === n ? 0 : 1 - part.fbAlpha); await part.renderAt(t, false); }
+        else await part.renderAt(t, i === n);
+      }
+      if (useAcc) { accBlit(); part.setAcc(false); }
+    } else {
+      await part.renderAt(T, true);
+    }
   }
 
-  // Scheduled fade for this part, from ?fadein=/?fadeout= (kind:dur:mode[:rgb]).
-  // The sequencer computes the ramp as (t - start)/dur for a fade-in and
-  // (t - (start + dur - fadeOutDur))/fadeOutDur for a fade-out (ENGINE.md §4);
-  // the harness passes the already-resolved ramp so this renderer stays a
-  // single-frame tool.
-  const fadeIn = qs.get('fadein'), fadeOut = qs.get('fadeout');
-  if (fadeIn) { const [v, mode, r, g, b] = fadeIn.split(',').map(Number);
-    drawFade('in', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
-  if (fadeOut) { const [v, mode, r, g, b] = fadeOut.split(',').map(Number);
-    drawFade('out', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
-
-  gl.finish();
-
-  window.__lapsusInfo = {
-    probe: probeInfo,
-    scene: SCENE, t: T, camera: camIndex, objects: drawables.length,
-    triangles: drawables.reduce((a, d) => a + d.mesh.count / 3, 0),
-    texturedGroups: textured, hairLines, particleCount,
-    zoom: zoomAt, fovXdeg: fovX * 180 / Math.PI, near: NEAR,
-    glError: gl.getError(),
+  // ---- ENGINE.md §5: the shipped schedule. Two phases, one MP3 each, with a
+  // load between them. Durations are the binary's, not measured — the 9.531s
+  // run is exact and repeats.
+  const PHASE1 = [
+    ['startpart1', 0, 1],      ['empt', 1, 13],
+    ['flu2', 14, 9],           ['pene', 23, 8],
+    ['krediili', 31, 16],      ['silli', 47, 8],
+    ['syrjakyla', 55, 9.531],  ['paleksi', 64.531, 9.531],
+    ['pehko', 74.062, 9.531],  ['hulluolli', 83.593, 9.531],
+  ];
+  const PHASE2 = [
+    ['kuubiotekniikka', 0, 13.8], ['diskojea', 13.8, 8.5],
+    ['kartonki', 22.3, 7.4],      ['hairball', 29.7, 7],
+    ['higherbiing', 36.7, 14],    ['viherio', 50.7, 10.46],
+    ['morko', 61.16, 3.54],       ['turska', 64.7, 7.5],
+    ['rad_out', 72.2, 14],        ['kaivoalieni', 86.2, 13.5],
+    ['made', 99.7, 5.5],          ['hedi', 105.2, 3],
+  ];
+  // ENGINE.md §6 fade table: [kind, seconds, mode, r,g,b]. mode 3 is the black
+  // alpha fade, mode 1 the additive white flash.
+  const FADES = {
+    startpart1: { out: [1.0, 3] },
+    empt:       { out: [0.7, 3, 'random'] },
+    flu2:       { in: [2.0, 3], out: [2.0, 3] },
+    pene:       { in: [2.0, 3], out: [2.0, 3] },
+    krediili:   { in: [1.0, 3] },
+    silli:      { in: [2.0, 3], out: [2.0, 3] },
+    syrjakyla:  { in: [0.5, 1, 255, 255, 255], out: [2.0, 3] },
+    paleksi:    { in: [0.5, 1, 255, 255, 255], out: [2.0, 3] },
+    pehko:      { in: [1.0, 3], out: [1.0, 3] },
+    hulluolli:  { in: [1.0, 3] },
+    morko:      { in: [0.5, 1, 255, 255, 255] },
   };
+
+  const single = qs.has('scene') && qs.has('t');
+
+  if (single) {
+    // ---- verification path, unchanged: one part, one instant, then stop.
+    const part = await makePart(SCENE);
+    const win = fbWindowFor(SCENE, T);
+    await replay(part, T, win);
+    const fadeIn = qs.get('fadein'), fadeOut = qs.get('fadeout');
+    if (fadeIn) { const [v, mode, r, g, b] = fadeIn.split(',').map(Number);
+      drawFade('in', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
+    if (fadeOut) { const [v, mode, r, g, b] = fadeOut.split(',').map(Number);
+      drawFade('out', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
+    gl.finish();
+    window.__lapsusInfo = part.info(T);
+    window.__lapsusReady = true;
+    return;
+  }
+
+  // ---- PLAYER. The demo's clock IS the music: the engine resets its QPC
+  // reference immediately after FSOUND_PlaySound (ENGINE.md §7), so part time
+  // is measured from the start of the current track. Driving the loop from
+  // audio.currentTime rather than a wall clock means the visuals cannot drift
+  // against the soundtrack no matter how the frame rate varies — which is the
+  // one thing a viewer would notice.
+  const ui = document.getElementById('ui');
+  const setStatus = (s) => { if (ui) ui.textContent = s; };
+
+  setStatus('loading part 1…');
+  const parts = new Map();
+  const load = async (names) => {
+    for (const n of names) {
+      if (parts.has(n)) continue;
+      setStatus(`loading ${n}…`);
+      try { parts.set(n, await makePart(n)); }
+      catch (e) { console.warn('part failed:', n, e); parts.set(n, null); }
+    }
+  };
+  await load(PHASE1.map((p) => p[0]));
+
+  const audio = new Audio();
+  audio.preload = 'auto';
+  window.__lapsusAudio = audio;   // so a harness can seek the demo's clock
+  let phase = 1;
+  const track = (n) => DATA + 'mjuusik/' + n + '.mp3';
+
+  // Phase 2's scenes are loaded during the demo's own loading part — the gap
+  // between the two tracks is authentic, not a stall we are adding.
+  let phase2Loaded = null;
+
+  const startPhase = (n) => new Promise((res) => {
+    phase = n;
+    audio.src = track(n);
+    audio.currentTime = 0;
+    audio.play().then(res, res);
+  });
+
+  // A no-clear part in a REAL loop needs no replay window at all: the
+  // accumulator IS its history. `replay` exists because the frame renderer has
+  // no history and has to manufacture one; here the trail simply persists,
+  // which is both cheaper and what the original actually does.
+  let accOwner = null;
+  async function renderLive(part, T) {
+    if (part.fbAlpha != null) {
+      accInit();
+      // Starting a new feedback part begins from black — the previous part's
+      // image is not its trail.
+      accDecay(accOwner === part ? 1 - part.fbAlpha : 0);
+      accOwner = part;
+      part.setAcc(true);
+      await part.renderAt(T, false);
+      part.setAcc(false);
+      accBlit();
+    } else {
+      accOwner = null;
+      await part.renderAt(T, true);
+    }
+  }
+
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  let stopped = false;
+
+  async function frame() {
+    if (stopped) return;
+    const table = phase === 1 ? PHASE1 : PHASE2;
+    const t = audio.currentTime;
+    let cur = null, local = 0;
+    for (const [name, s, d] of table) {
+      if (t >= s && t < s + d) { cur = name; local = t - s; break; }
+    }
+    if (!cur) {
+      // past the end of this phase
+      if (phase === 1) {
+        setStatus('loading part 2…');
+        audio.pause();
+        await (phase2Loaded ??= load(PHASE2.map((p) => p[0])));
+        setStatus('');
+        await startPhase(2);
+      } else { setStatus('the end'); stopped = true; return; }
+      requestAnimationFrame(() => frame());
+      return;
+    }
+    window.__lapsusNow = { phase, t, part: cur, local };
+    const part = parts.get(cur);
+    if (part) {
+      await renderLive(part, local);
+      // scheduled fades, computed the way the sequencer does (ENGINE.md §4)
+      const e = table.find((x) => x[0] === cur);
+      const f = FADES[cur];
+      if (f?.in) { const [dur, mode, r, g, b] = f.in;
+        const v = clamp01(local / dur);
+        if (v < 1) drawFade('in', mode, v, [(r ?? 0) / 255, (g ?? 0) / 255, (b ?? 0) / 255]); }
+      if (f?.out) { const [dur, mode, r, g, b] = f.out;
+        const v = clamp01((local - (e[2] - dur)) / dur);
+        if (v > 0) drawFade('out', mode, v, [(r ?? 0) / 255, (g ?? 0) / 255, (b ?? 0) / 255]); }
+    }
+    requestAnimationFrame(() => frame());
+  }
+
+  // Autoplay needs a gesture in every current browser, so the first click
+  // starts the music and the clock together.
+  setStatus('click to start');
+  const begin = async () => {
+    document.removeEventListener('click', begin);
+    document.removeEventListener('keydown', begin);
+    setStatus('');
+    await startPhase(1);
+    frame();
+  };
+  document.addEventListener('click', begin);
+  document.addEventListener('keydown', begin);
   window.__lapsusReady = true;
+
 })().catch((e) => {
   window.__lapsusError = String(e.message ?? e);
   window.__lapsusReady = true;
