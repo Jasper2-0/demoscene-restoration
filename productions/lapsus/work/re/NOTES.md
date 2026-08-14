@@ -1293,7 +1293,7 @@ correlation, which weights quiet lead-in like the downbeat.
   its stamping draws from the shared MSVC stream, so anything that consumes a
   rand() before it shifts every stamp. Do not read small empt deltas as signal.
 
-### §15.3 `made` — ratash.jpg is drawn opaque and hides what is behind it
+### §15.3 RESOLVED — `made` and higherbiing's floor are MULTIPLICATIVE surfaces
 
 Spotted by eye in the capture: the `made` overlay reads wrong. Localised, and
 the defect is real, but the MECHANISM is not established and no fix should be
@@ -1338,3 +1338,43 @@ for a mask-1 surface: what does it pass as `alphaName` when there is no TTEX?
 The earlier finding that "the alpha name is always the empty temp" was already
 shown to be true of one site and false of another (§5.3 / mask 0x41 at
 0x42c943), so that question is open rather than answered.
+
+#### Resolution — blend mode 2, which the port never emitted
+
+Jasper: *"is ratash.jpg drawn with a multiply blend mode? that would have a
+similar visual result"*. It is, and RENDER.md §4.5 had the rule all along:
+
+    surface[+0x2d0] > 0.95  =>  blend mode 2 (multiplicative),
+                                glBlendFunc(GL_DST_COLOR, GL_ZERO)
+
+The port implemented the additive and alpha rules from that list and skipped
+this one, so `blendMode: 2` was reachable in the draw code and unreachable in
+the material builder. `+0x2d0` is CLRF, and **exactly two surfaces in the whole
+archive set it above 0.95**:
+
+    lat.lwo:bolloballo    CLRF=1  LUMI=1  COLR+DIFF   higherbiing's floor
+    ratash.lwo:ratash     CLRF=1  LUMI=1  COLR        made's overlay
+
+— which are the two surfaces picked out of the capture as visibly wrong, found
+independently of each other and of this rule. A multiply needs no alpha channel
+at all: white leaves the destination untouched and black darkens it, so
+black-on-white artwork reads as a cutout. That is why no `_a` companion exists
+for either, and why the search for one was looking for something that was never
+there.
+
+    part          r before -> after     RMSE before -> after
+    made           0.952  ->  0.971      29.9 -> 24.3
+    higherbiing    0.816  ->  0.930      66.9 -> 30.1
+
+Full gate 21/21, median r 0.874 -> 0.884. higherbiing's spread fell from 0.527
+to 0.147 and it is no longer flagged uneven.
+
+§4.5 gives depth mode 2 to the additive and alpha rules only; the
+multiplicative rule sets no depth mode, so mode 2 keeps writing depth. That is
+implemented and is the reason the earlier alpha experiment failed — it moved
+the quad into the no-depth-write blended pass and let the cog cover the
+starburst.
+
+The eliminations above stand and were not wasted: they are what established
+that the cutout could not come from an alpha channel, which is what made a
+blend-mode answer the only one left.

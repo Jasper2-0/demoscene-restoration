@@ -1038,7 +1038,20 @@ function accBlit() {
         // always multiplying keeps 32-bit TGAs that were never meant to be
         // cutouts from suddenly becoming them.
         alphaFromTex: !!tranClip,
-        blendMode: (s.additiveTransparency ?? 0) > 0.95 ? 1
+        // RENDER.md §4.5, in the order the SURF builder assigns them, so a
+        // later rule overrides an earlier one:
+        //   +0x3c  > 0.95            -> 1 additive
+        //   +0x38  > 0 or a TTEX     -> 3 alpha
+        //   +0x2d0 > 0.95            -> 2 MULTIPLICATIVE
+        // The last was never implemented. It is CLRF, and exactly two surfaces
+        // in the whole archive set it above 0.95 — lat.lwo's bolloballo and
+        // ratash.lwo's ratash, which are the two Jasper picked out of the
+        // capture as visibly wrong. Both are unlit white-and-black artwork,
+        // which is what a multiply is for: white leaves the destination alone
+        // and black darkens it, so the sheet reads as a cutout without ever
+        // needing an alpha channel.
+        blendMode: (s.colorFilter ?? 0) > 0.95 ? 2
+                   : (s.additiveTransparency ?? 0) > 0.95 ? 1
                    : (s.transparency ?? 0) > 0.95 ? 1
                    : ((s.transparency ?? 0) > 0 || bTran) ? 3 : 0,
           // LWO TRAN is transparency, so alpha is its complement — except with a
@@ -1341,7 +1354,9 @@ function accBlit() {
           if (mat.blendMode === 1) mgl.blendFunc(gl.ONE, gl.ONE);              // additive
           else if (mat.blendMode === 2) mgl.blendFunc(gl.DST_COLOR, gl.ZERO);  // multiplicative
           else mgl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);            // alpha
-          mgl.depthMask(false);                                  // depth mode 2
+          // §4.5 gives depth mode 2 to the additive and alpha rules ONLY; the
+          // multiplicative rule sets no depth mode, so it keeps writing depth.
+          mgl.depthMask(mat.blendMode === 2);
         } else { mgl.enableBlend(false); mgl.depthMask(true); }  // depth mode 3
         mgl.enableCullFace(!mat.twoSided);
 
