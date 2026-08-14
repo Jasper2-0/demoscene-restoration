@@ -1456,7 +1456,15 @@ function accBlit() {
     // Rebuild from rest when asked for a time at or before where the state
     // stands (a seek, or the first frame); otherwise advance to T.
     const HAIR_DT = Number(qs.get('hairdt')) || 1 / 60;
-    if (!sim || T < sim.t - 1e-9) sim = { t: 0, rand: msvcRand(), strands: new Map(), systems: [] };
+    // Rebuild from rest only on a REAL seek. The tolerance is the point: the
+    // old 1e-9 meant any backward step at all threw the simulation away, and
+    // the show clock used to jitter backwards by a millisecond or two between
+    // frames. Hairball rebuilt its hair from the rest pose on those frames and
+    // flickered at the frame rate. A seek is tens of milliseconds at least;
+    // sub-frame jitter never is, and simulateSpan already holds the state when
+    // the clock does not advance.
+    const SIM_SEEK = 0.1;
+    if (!sim || T < sim.t - SIM_SEEK) sim = { t: 0, rand: msvcRand(), strands: new Map(), systems: [] };
     const simFrom = sim.t, simTo = Math.max(T, sim.t);
     const hairRand = sim.rand;
     // Part_Pehko's prototype system is built in Part_Pehko::create from the
@@ -1793,6 +1801,11 @@ function accBlit() {
     ['krediili', 31, 16],      ['silli', 47, 8],
     ['syrjakyla', 55, 9.531],  ['paleksi', 64.531, 9.531],
     ['pehko', 74.062, 9.531],  ['hulluolli', 83.593, 9.531],
+    // ENGINE.md §5: the last phase-1 entry is Part_LoadPart2, which draws
+    // pics/loading2.jpg. Its scheduled 1.5s is not how long it is on screen —
+    // it STAYS current past its duration, and its index (0xc) is the phase-2
+    // trigger at localTime 2.5 (§4 tail).
+    ['loadpart2', 93.124, 1.5],
   ];
   const PHASE2 = [
     ['kuubiotekniikka', 0, 13.8], ['diskojea', 13.8, 8.5],
@@ -1818,6 +1831,31 @@ function accBlit() {
     morko:      { in: [0.5, 1, 255, 255, 255] },
   };
 
+  // ---- the loading screens (ENGINE.md §7). Two of the 27 parts are not
+  // scenes at all: Part_StartPart1 (index 25) and Part_LoadPart2 (index 12)
+  // are "clear + picture", drawing pics/loading.jpg and pics/loading2.jpg.
+  // Without them the demo has no boot screen and no mid-demo loader, which is
+  // a good part of what watching it actually feels like.
+  const PICDIR = 'work/unpacked/lapsus_dat/data/pics/';
+  const LOADING_PIC = { startpart1: 'loading.jpg', loadpart2: 'loading2.jpg' };
+  const pics = new Map();
+  const loadingPic = async (name) => {
+    const file = LOADING_PIC[name];
+    if (!file) return null;
+    if (!pics.has(file)) {
+      try { pics.set(file, await loadTexture(file, PICDIR)); }
+      catch (e) { console.warn('loading screen failed:', file, e); pics.set(file, null); }
+    }
+    return pics.get(file);
+  };
+  /** clear + picture, with the boot FadeIn (Demo+0x6c, mode 3, black) on top. */
+  function drawLoadingScreen(tex, fade = 1) {
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (tex) drawPicture(tex, 0, 0, 640, 480, 1);
+    if (fade < 1) drawFade('in', 3, fade);
+  }
+
   const ui = document.getElementById('ui');
   const setStatus = (s) => { if (ui) ui.textContent = s; };
   const parts = new Map();
@@ -1835,15 +1873,28 @@ function accBlit() {
   /** Draw the part's scheduled fades at local time `t`, the way the sequencer
    *  computes them (ENGINE.md §4): a fade-in ramps (t)/dur, a fade-out ramps
    *  (t - (dur - fadeDur))/fadeDur. */
+  // A fade entry is [duration, mode, ...rest]. `rest` is either an RGB triple
+  // in 0-255, or the marker 'random' for empt's RandomFadeOut. Reading the
+  // marker as the red channel gives 'random' / 255 = NaN, and a NaN colour
+  // clamps to 1 once it travels as a vertex attribute — empt's fade-out went
+  // RED, and because empt is a feedback part the ping-pong accumulator kept
+  // re-reading it, so the whole opening stained. The old hand-written fade
+  // shader wrote the NaN straight to the output and it happened not to show.
+  const fadeColour = (rest) => {
+    const [r, g, b] = rest.filter((x) => typeof x === 'number');
+    return [(r ?? 0) / 255, (g ?? 0) / 255, (b ?? 0) / 255];
+  };
   function applyFades(name, t, partDur) {
     const f = FADES[name];
     if (!f) return;
-    if (f.in) { const [dur, mode, r, g, b] = f.in;
+    if (f.in) { const [dur, mode, ...rest] = f.in;
       const v = clampF(t / dur);
-      if (v < 1) drawFade('in', mode, v, [(r ?? 0) / 255, (g ?? 0) / 255, (b ?? 0) / 255]); }
-    if (f.out && Number.isFinite(partDur)) { const [dur, mode, r, g, b] = f.out;
+      if (v < 1) drawFade('in', mode, v, fadeColour(rest)); }
+    if (f.out && Number.isFinite(partDur)) { const [dur, mode, ...rest] = f.out;
       const v = clampF((t - (partDur - dur)) / dur);
-      if (v > 0) drawFade('out', mode, v, [(r ?? 0) / 255, (g ?? 0) / 255, (b ?? 0) / 255]); }
+      // NB: the 'random' flicker itself (ENGINE.md §6's RandomFadeOut) is not
+      // implemented — this draws the plain black ramp that was drawn before.
+      if (v > 0) drawFade('out', mode, v, fadeColour(rest)); }
   }
 
   const single = qs.has('scene') && qs.has('t');
@@ -1948,8 +1999,9 @@ function accBlit() {
   // audio.currentTime rather than a wall clock means the visuals cannot drift
   // against the soundtrack no matter how the frame rate varies — which is the
   // one thing a viewer would notice.
+  const sceneParts = (table) => table.map((p) => p[0]).filter((n) => !LOADING_PIC[n]);
   setStatus('loading part 1…');
-  await load(PHASE1.map((p) => p[0]));
+  const phase1Loaded = load(sceneParts(PHASE1));
 
   const audio = new Audio();
   audio.preload = 'auto';
@@ -1961,10 +2013,38 @@ function accBlit() {
   // between the two tracks is authentic, not a stall we are adding.
   let phase2Loaded = null;
 
+  // ---- the show clock.
+  //
+  // The engine runs on a QPC wall clock RESET at FSOUND_PlaySound (ENGINE.md
+  // §7), so a wall clock is the faithful model. Reading audio.currentTime
+  // straight looks safer — the visuals cannot drift against the track — but it
+  // advances in steps at the audio callback rate rather than per frame, and
+  // between two requestAnimationFrame calls it can come back a millisecond or
+  // two. Anything carrying dt-dependent state reads that as a seek.
+  //
+  // So: a wall clock, re-anchored every time the audio position actually
+  // moves, and monotonic by construction. It cannot drift against the
+  // soundtrack, because the anchor is the soundtrack; and it cannot step
+  // backwards, because a step backwards is only honoured when it is far too
+  // large to be jitter — which is what a real seek looks like.
+  let anchorAudio = 0, anchorWall = 0, lastAudio = -1, shown = 0;
+  const resetClock = () => {
+    anchorAudio = 0; anchorWall = performance.now() / 1000; lastAudio = -1; shown = 0;
+  };
+  const showClock = () => {
+    const a = audio.currentTime, now = performance.now() / 1000;
+    if (a !== lastAudio) { lastAudio = a; anchorAudio = a; anchorWall = now; }
+    let t = anchorAudio + (now - anchorWall);
+    if (t < shown && shown - t < 0.25) t = shown;
+    return (shown = t);
+  };
+  window.__lapsusClock = showClock;
+
   const startPhase = (n) => new Promise((res) => {
     phase = n;
     audio.src = track(n);
     audio.currentTime = 0;
+    resetClock();
     audio.play().then(res, res);
   });
 
@@ -1993,31 +2073,50 @@ function accBlit() {
   const clamp01 = (x) => Math.max(0, Math.min(1, x));
   let stopped = false;
 
+  // The sequencer HOLDS its last entry rather than falling off the end
+  // (ENGINE.md §4): that is exactly why Part_LoadPart2 is on screen far longer
+  // than its scheduled 1.5s, and why phase 2 keeps hedi up from 108.2s until
+  // Demo::update quits at t > 112.0.
+  const entryAt = (table, t) => {
+    for (const [name, s, d] of table) if (t >= s && t < s + d) return [name, t - s, d];
+    const [name, s, d] = table[table.length - 1];
+    return t < table[0][1] ? [null, 0, 0] : [name, t - s, d];
+  };
+  let handingOver = false;
+
   async function frame() {
     if (stopped) return;
     const table = phase === 1 ? PHASE1 : PHASE2;
-    const t = audio.currentTime;
-    let cur = null, local = 0;
-    for (const [name, s, d] of table) {
-      if (t >= s && t < s + d) { cur = name; local = t - s; break; }
-    }
-    if (!cur) {
-      // past the end of this phase
-      if (phase === 1) {
-        setStatus('loading part 2…');
-        audio.pause();
-        await (phase2Loaded ??= load(PHASE2.map((p) => p[0])));
-        setStatus('');
-        await startPhase(2);
-      } else { setStatus('the end'); stopped = true; return; }
+    const t = showClock();
+    const [cur, local, dur] = entryAt(table, t);
+
+    // ENGINE.md §4 tail / §7 step 4: the phase-2 trigger is Part_LoadPart2
+    // reaching localTime 2.5 — NOT the end of the music. mp3#1 goes on
+    // playing over loading2.jpg for those 2.5s and right through the load,
+    // and is only stopped when mp3#2 starts. Pausing the track instead (which
+    // is what this did before) removed the one thing the loader sounds like.
+    if (phase === 1 && cur === 'loadpart2' && local >= 2.5 && !handingOver) {
+      handingOver = true;
+      drawLoadingScreen(await loadingPic('loadpart2'));
+      setStatus('');
+      await (phase2Loaded ??= load(sceneParts(PHASE2)));
+      await startPhase(2);
+      handingOver = false;
       requestAnimationFrame(() => frame());
       return;
     }
+    if (phase === 2 && t > 112.0) { setStatus('the end'); stopped = true; return; }
+
     window.__lapsusNow = { phase, t, part: cur, local };
-    const part = parts.get(cur);
-    if (part) {
-      await renderLive(part, local);
-      applyFades(cur, local, table.find((x) => x[0] === cur)[2]);
+    if (LOADING_PIC[cur]) {
+      drawLoadingScreen(await loadingPic(cur));
+      applyFades(cur, local, dur);
+    } else {
+      const part = parts.get(cur);
+      if (part) {
+        await renderLive(part, local);
+        applyFades(cur, local, dur);
+      }
     }
     requestAnimationFrame(() => frame());
   }
@@ -2025,10 +2124,39 @@ function accBlit() {
   // Autoplay needs a gesture in every current browser, so the first click
   // starts the music and the clock together.
   setStatus('click to start');
+  // ---- BOOT, phase 0 (ENGINE.md §4 and §7 step 1).
+  //
+  // With an empty schedule every frame is "clear, draw loading.jpg, fade with
+  // clamp0((t - 0.5) * 0.5)" — so the boot screen fades up from black between
+  // t=0.5 and t=2.5. On frame 2 the engine does Sleep(4000) and RESETS the
+  // timer, to let the video mode switch settle; those four seconds are black
+  // on screen, and they are the first thing anyone sees. Phase 1 begins when
+  // t > 3.0.
+  //
+  // The one deviation: loadPhase(1) is synchronous in the original and freezes
+  // the display on loading.jpg. Here the assets load concurrently with the
+  // boot screen, so the wait is spent rather than added to. The visible
+  // sequence — black, loading.jpg fading up, then the demo — is the same, and
+  // the boot screen still holds until the assets are actually there.
+  const BOOT_SLEEP = 4.0;      // Sleep(4000) on frame 2, then timer reset
+  const BOOT_END = 3.0;        // _DAT_0045a32c
   const begin = async () => {
     document.removeEventListener('click', begin);
     document.removeEventListener('keydown', begin);
     setStatus('');
+    const bootTex = await loadingPic('startpart1');
+    const t0 = performance.now() / 1000;
+    let ready = false;
+    phase1Loaded.then(() => { ready = true; });
+    await new Promise((done) => {
+      const boot = () => {
+        const bt = performance.now() / 1000 - t0 - BOOT_SLEEP;
+        drawLoadingScreen(bootTex, Math.max(0, (bt - 0.5) * 0.5));
+        if (bt > BOOT_END && ready) return done();
+        requestAnimationFrame(boot);
+      };
+      boot();
+    });
     await startPhase(1);
     frame();
   };
