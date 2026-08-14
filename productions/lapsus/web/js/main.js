@@ -593,6 +593,21 @@ async function decodePixels(url) {
  * `_a2` once. It comes from the DATA: a surface's TRAN block names the alpha
  * image, and the two hardcoded Picture pairs name theirs in .rdata.
  */
+// THE FRAME MUST BE ATOMIC. renderAt clears the colour buffer and then draws;
+// any `await` in between hands the main thread back with a BLANK canvas on it,
+// and the compositor is free to present exactly that. The result is a frame
+// that flickers between the picture and nothing.
+//
+// Hairball was the worst of it because it re-fetched and re-parsed its two
+// hair files on EVERY frame, so every hairball frame yielded twice right after
+// the clear. These caches exist so that after a part's first frame the whole
+// draw is synchronous — which is also what the engine does, since it loads
+// everything in loadPhase and a frame is pure drawing (ENGINE.md §7).
+const texReady = (file, dir = TEXDIR, alphaFile = null) =>
+  texCache.get(dir + file + (alphaFile ? '|' + alphaFile : '')) ?? null;
+const hairCache = new Map();      // name -> parsed hair, or null if absent
+let taunoProto;                   // undefined = not tried yet, null = absent
+
 async function loadTexture(file, dir = TEXDIR, alphaFile = null) {
   const key = dir + file + (alphaFile ? '|' + alphaFile : '');
   if (texCache.has(key)) return texCache.get(key);
@@ -1201,7 +1216,8 @@ function accBlit() {
     if (scene.backdropImage) {
       // loadTexture resolves by basename, so the three path shapes in the
       // assets all land in the same place — no probing, no spurious 404s.
-      try { bgTex = await loadTexture(scene.backdropImage); } catch { bgTex = null; }
+      bgTex = texReady(scene.backdropImage);
+      if (!bgTex) { try { bgTex = await loadTexture(scene.backdropImage); } catch { bgTex = null; } }
     }
     if (bgTex) {
       // uFit is (canvas / texture) per axis, so only the on-screen part of an
@@ -1474,18 +1490,26 @@ function accBlit() {
     let parP = null;
     const parSystems = sim.systems;
     if (hairSuppressed) {
-      try {
-        const t = await (await fetch(DATA + 'particles/tauno/tauno.txt')).text();
-        if (t && !/not found/i.test(t)) { parP = parseParticles(t); assets.add('particles/tauno/tauno.txt'); }
-      } catch {}
+      if (taunoProto === undefined) {
+        taunoProto = null;
+        try {
+          const t = await (await fetch(DATA + 'particles/tauno/tauno.txt')).text();
+          if (t && !/not found/i.test(t)) taunoProto = parseParticles(t);
+        } catch {}
+      }
+      if (taunoProto) { parP = taunoProto; assets.add('particles/tauno/tauno.txt'); }
     }
     for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
       const name = nullObj.name.replace(/^Hair_/, '');
-      let txt;
-      try { txt = await (await fetch(DATA + 'hairs/' + name + '.txt')).text(); } catch { continue; }
-      if (!txt || /^\s*$/.test(txt) || /not found/i.test(txt)) continue;
+      if (!hairCache.has(name)) {
+        let txt = null;
+        try { txt = await (await fetch(DATA + 'hairs/' + name + '.txt')).text(); } catch {}
+        hairCache.set(name, (!txt || /^\s*$/.test(txt) || /not found/i.test(txt))
+          ? null : parseHair(txt));
+      }
+      const h = hairCache.get(name);
+      if (!h) continue;
       assets.add('hairs/' + name + '.txt');
-      const h = parseHair(txt);
       if (!h.hairCount || !h.nodesPerHair) continue;
       // The hair null is ANIMATED, so the simulation has to follow it through
       // time rather than pin it where it ends up. worldMatrix is re-evaluated at
@@ -1653,11 +1677,10 @@ function accBlit() {
         gl.depthMask(false);
         gl.activeTexture(gl.TEXTURE0);
         for (const [f, list] of byFrame) {
-          let tex = null;
-          try {
-            tex = await loadTexture(`epes${String(f).padStart(3, '0')}.jpg`,
-                                    'work/unpacked/lapsus_dat/data/particles/tauno/');
-          } catch { continue; }
+          const epes = `epes${String(f).padStart(3, '0')}.jpg`;
+          const epesDir = 'work/unpacked/lapsus_dat/data/particles/tauno/';
+          let tex = texReady(epes, epesDir);
+          if (!tex) { try { tex = await loadTexture(epes, epesDir); } catch { continue; } }
           gl.bindTexture(gl.TEXTURE_2D, tex);
           const pos = [], uv = [], al = [];
           const [tsw] = texSize.get(tex) ?? [32, 32];
@@ -2027,16 +2050,29 @@ function accBlit() {
   // soundtrack, because the anchor is the soundtrack; and it cannot step
   // backwards, because a step backwards is only honoured when it is far too
   // large to be jitter — which is what a real seek looks like.
-  let anchorAudio = 0, anchorWall = 0, lastAudio = -1, shown = 0;
-  const resetClock = () => {
-    anchorAudio = 0; anchorWall = performance.now() / 1000; lastAudio = -1; shown = 0;
-  };
+  // It free-runs on the wall clock and is EASED toward the audio position
+  // rather than snapped to it. Snapping — even with a "never go backwards"
+  // clamp — converts the audio's jitter into stalls followed by jumps, and a
+  // fixed-dt simulation then integrates zero steps on one frame and two on the
+  // next. That is a shimmer you can see in the hair.
+  //
+  // Easing keeps it monotonic by construction: the correction is limited to
+  // half a frame, so the clock always moves forward by at least half the wall
+  // time, and it still cannot drift against the track because the error term
+  // never stops pulling it back. A gap too large to be jitter is a real seek
+  // and is taken at once.
+  const SEEK = 0.25;
+  let shown = 0, lastWall = 0;
+  const resetClock = () => { shown = 0; lastWall = performance.now() / 1000; };
   const showClock = () => {
-    const a = audio.currentTime, now = performance.now() / 1000;
-    if (a !== lastAudio) { lastAudio = a; anchorAudio = a; anchorWall = now; }
-    let t = anchorAudio + (now - anchorWall);
-    if (t < shown && shown - t < 0.25) t = shown;
-    return (shown = t);
+    const now = performance.now() / 1000;
+    const dt = Math.min(0.25, Math.max(0, now - lastWall));
+    lastWall = now;
+    const a = audio.currentTime;
+    if (Math.abs(a - shown) > SEEK) return (shown = a);      // a real seek
+    const err = a - shown;
+    const corr = Math.max(-0.5 * dt, Math.min(0.5 * dt, err * 0.1));
+    return (shown = shown + dt + corr);
   };
   window.__lapsusClock = showClock;
 
