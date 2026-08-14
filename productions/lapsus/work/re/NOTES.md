@@ -1292,3 +1292,49 @@ correlation, which weights quiet lead-in like the downbeat.
 * **empt is not reproducible run-to-run** (0.838 / 0.850 / -0.013 observed) —
   its stamping draws from the shared MSVC stream, so anything that consumes a
   rand() before it shifts every stamp. Do not read small empt deltas as signal.
+
+### §15.3 `made` — ratash.jpg is drawn opaque and hides what is behind it
+
+Spotted by eye in the capture: the `made` overlay reads wrong. Localised, and
+the defect is real, but the MECHANISM is not established and no fix should be
+guessed until it is.
+
+What is settled:
+
+* `ratash.lwo` is **a 4-point, 1-polygon quad** — a flat billboard, not
+  cog-shaped geometry.
+* Its texture `textures/ratash.jpg` is a **black cog silhouette on a white
+  ground** (63.6% of it darker than 30/255).
+* Its surface has ONE `COLR` block, `negative=false`, colour black,
+  `luminosity 1` (so unlit), and **no `TRAN`, no `TTEX`, no `ADTR`**.
+* There is **no `ratash_a.jpg`**. The only `_a` companions in the archive are
+  `LapsusDezign1_a2.jpg` and `eDezign_a.jpg`.
+
+So by §4.5 the surface gets blend mode 0 and is drawn OPAQUE, white ground and
+all. It looks passable only because `made`'s backdrop is white there — but the
+quad covers the black lettering behind it, and the capture shows that lettering.
+Whatever the engine does, the white must not be painted.
+
+**The constraint that rules out the obvious fix.** Folding `1 − (R+G+B)/3` into
+the texture's alpha and giving the surface blend mode 3 was tried and is WRONG:
+it moves the quad out of the opaque pass into the blended one, which draws
+later, so the cog then covers the starburst that both the capture and the
+current build show on top of it. Whatever supplies the cutout leaves the DRAW
+ORDER alone.
+
+Ruled out as the mechanism:
+
+| candidate | why not |
+|---|---|
+| an `_a` companion | the file does not exist |
+| a `TTEX`/`TRAN` block supplying the alpha name | the surface has neither |
+| the block's `NEGA` flag | `negative=false` |
+| `GL_ALPHA_TEST` | `glAlphaFunc`/`GL_ALPHA_TEST` appear nowhere in the notes or the decompiled source |
+| `ADTR` additive blending | absent, and additive would brighten rather than cut out |
+
+`TextureManager::get(colorName, alphaName, filterMode)` takes the alpha path as
+an argument (§5.1), so the next place to look is the SURF builder's call site
+for a mask-1 surface: what does it pass as `alphaName` when there is no TTEX?
+The earlier finding that "the alpha name is always the empty temp" was already
+shown to be true of one site and false of another (§5.3 / mask 0x41 at
+0x42c943), so that question is open rather than answered.
