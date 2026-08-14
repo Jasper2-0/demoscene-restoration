@@ -1067,6 +1067,15 @@ function accBlit() {
           // TTEX, where material[+0x38] = 0 and the surface is opaque.
           alpha: bTran ? 1
                : (s.transparency ?? 0) > 0.95 ? 1 : 1 - (s.transparency ?? 0),
+          // TRAN can be ANIMATED. The engine's SURF parser reads the F4 and
+          // then a VX envelope index, stashing the envelope at surface+0x54.
+          // kekkuli2.lwo (turska's mesh) drives its transparency from a 5-key
+          // TCB envelope named "Transparency" that runs 1.0 -> 0.28 -> 0.63 ->
+          // 0.43 -> 0.77, so a static read renders it at a flat 11% opacity for
+          // the whole part where the capture has it fading in and pulsing.
+          alphaEnv: (!bTran && s.transparencyEnv)
+            ? (lwo.envelopes.find((e) => e.index === s.transparencyEnv) ?? null)
+            : null,
           twoSided: (s.sides ?? 1) === 3,
           refl: s.reflection ?? 0,
           // Specular gate, read at 0x42ca0f-0x42ca62:
@@ -1415,13 +1424,21 @@ function accBlit() {
         // Folding it into K instead (col = K * (amb + sum)) darkens every
         // scene with a non-zero AmbientIntensity: paleksi 0.515, rad_out 0.54,
         // viherio 0.22 (RENDER.md §13.2.1).
+        // An animated TRAN is evaluated per frame; a static one was folded into
+        // mat.alpha at build time. Blend mode is NOT re-derived — the engine
+        // fixes it once in the SURF->Material builder from the static value
+        // (§4.5), so a surface that starts transparent stays in the blended
+        // pass even where its envelope reaches zero.
+        const matAlpha = mat.alphaEnv
+          ? Math.max(0, Math.min(1, 1 - evalEnvelope(mat.alphaEnv, T)))
+          : (mat.alpha ?? 1);
         mgl.enableLighting(!mat.unlit);
         if (mat.unlit) {
           // RENDER.md §13.1: the unlit branch is a glColor4f substitution and
           // nothing else — the texture stages still run on top of it.
-          mgl.color4(mat.color[0], mat.color[1], mat.color[2], mat.alpha ?? 1);
+          mgl.color4(mat.color[0], mat.color[1], mat.color[2], matAlpha);
         } else {
-          mgl.color4(1, 1, 1, mat.alpha ?? 1);
+          mgl.color4(1, 1, 1, matAlpha);
           mgl.material({
             ambient: [1, 1, 1],
             diffuse: mat.color,

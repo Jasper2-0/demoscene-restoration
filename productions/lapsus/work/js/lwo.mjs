@@ -64,6 +64,41 @@ function subChunks(b, o, end) {
 
 const f32 = (b, o) => DV(b).getFloat32(o, false);
 
+/**
+ * An `ENVL` envelope: an animated scalar.
+ *
+ * Body is the index as a VX, then sub-chunks. `KEY ` is (time, value) and the
+ * `SPAN` that follows a key describes the interpolation INTO it — for `TCB`
+ * its three floats are tension, continuity and bias. Every span in this
+ * archive is TCB with all three at zero, i.e. plain Kochanek-Bartels, which is
+ * exactly what lws.mjs's evalEnvelope already computes for item motion.
+ *
+ * `PRE`/`POST` are the end behaviours; 1 is constant, which is what
+ * evalEnvelope does at both ends anyway.
+ */
+function parseEnvelope(b, start, end) {
+  const [index, n] = readVX(b, start);
+  const env = { index, name: '', keys: [] };
+  for (const c of subChunks(b, start + n, end)) {
+    const o = c.start;
+    switch (c.id) {
+      case 'NAME': env.name = readStr(b, o, o + c.len)[0]; break;
+      case 'KEY ': env.keys.push({ t: f32(b, o), v: f32(b, o + 4), ten: 0, con: 0, bia: 0 }); break;
+      case 'SPAN': {
+        // Parameters belong to the key this span arrives at — the last one
+        // pushed. Guarded because a span can precede any key in a malformed
+        // file, and every one here is zero regardless.
+        const k = env.keys[env.keys.length - 1];
+        if (k && c.len >= 16) { k.ten = f32(b, o + 4); k.con = f32(b, o + 8); k.bia = f32(b, o + 12); }
+        break;
+      }
+      default: break;
+    }
+  }
+  env.keys.sort((a, z) => a.t - z.t);
+  return env;
+}
+
 function parseSurface(b, start, len) {
   const end = start + len;
   const [name, n1] = readStr(b, start, end);
@@ -76,7 +111,17 @@ function parseSurface(b, start, len) {
       case 'DIFF': surf.diffuse = f32(b, o); break;
       case 'SPEC': surf.specular = f32(b, o); break;
       case 'REFL': surf.reflection = f32(b, o); break;
-      case 'TRAN': surf.transparency = f32(b, o); break;
+      // TRAN carries a value AND an optional envelope index: the engine's
+      // surface parser reads both (F4 then VX, storing the envelope handle at
+      // surface+0x54). kekkuli2.lwo's transparency is animated by a 5-key TCB
+      // envelope literally named "Transparency", and reading only the static
+      // float renders turska's mesh at a flat 11% opacity throughout.
+      case 'TRAN': {
+        surf.transparency = f32(b, o);
+        const [env] = readVX(b, o + 4);
+        if (env) surf.transparencyEnv = env;
+        break;
+      }
       case 'LUMI': surf.luminosity = f32(b, o); break;
       case 'GLOS': surf.glossiness = f32(b, o); break;
       case 'SMAN': surf.smoothingAngle = f32(b, o); break;          // radians
@@ -238,7 +283,7 @@ export function parseLWO(buf) {
         obj.clips.push(clip);
         break;
       }
-      case 'ENVL': obj.envelopes.push({ index: readVX(buf, s)[0] }); break;
+      case 'ENVL': obj.envelopes.push(parseEnvelope(buf, s, s + len)); break;
       default: obj.unknown.push({ id, len });
     }
     o = s + pad(len);
