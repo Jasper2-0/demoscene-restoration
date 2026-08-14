@@ -1078,11 +1078,35 @@ correlation, which weights quiet lead-in like the downbeat.
   `antialias: false` is identical (black 7.1%, median 12, p90 49), so our
   accumulation really is 8-bit.
 
-  Left, and now specific: why our sprites put more energy into their faint
-  outer region than the original's. Prime suspect is the HALF-TEXEL INSET —
+  Two more suspects tested and eliminated, both spec-correct and both kept:
+  - **Half-texel inset** (§11.2.4 spans `(W-1)/TW` from `+0.5/TW`, cropping the
+    outermost half-texel of every tile; we sampled the full [0,1]). Fixed —
+    black moves 7.1% -> 6.4% and the floor's median stays 12. Not the cause.
+  - **Particle culling.** §11.2's material build leaves `noCull` at
+    FUN_0040bef0's default of 0, so sprites ARE culled against
+    glFrontFace(GL_CW); we disabled culling for the particle pass. Fixed, and
+    it changes nothing at all — our billboard basis (`A = R x C`, `B = A x C`)
+    has consistent handedness, so `zRotation` spins U and V within the plane
+    without ever flipping the winding. The engine discards none of its sprites
+    either.
+
+  Also checked: this is NOT mostly a capture artifact. The YouTube re-encode
+  does crush faint flat darks, and it shows — the capture is a few points
+  blacker than ours on every dark part (morko 64.4% vs 60.2%, hairball 60.9%
+  vs 59.8%, krediili 96.1% vs 86.7%, silli 11.5% vs 6.1%). But pehko's gap is
+  54.8% vs 6.4%, an order of magnitude beyond that, so the floor is real.
+  Silli is the informative comparison: it is the other slow-decay feedback
+  part and shows the same excess in miniature, which fits — its quad is 20%,
+  so its steady state amplifies a per-frame residual by 5x where pehko's 5%
+  quad amplifies it by 20x.
+
+  Still unexplained: why our sprites put more energy into their faint outer
+  region than the original's. The prior prime suspect was the HALF-TEXEL INSET —
   §11.2.4 samples `(W-1)/TW` from a `+0.5/TW` origin, i.e. the engine crops
   the outermost half-texel of every tile, while we sample the full [0,1] range
-  and so pull in the edge texels of a 32x32 sprite magnified to ~100px.
+  and so pull in the edge texels of a 32x32 sprite magnified to ~100px — now
+  fixed, and not the answer. The sprite's own black level is also ruled out:
+  epes008.jpg has a true minimum of 0 with 71% of its pixels below 8.
 
   Superseded below, but the measurements are sound and worth keeping. Two more
   eliminations:

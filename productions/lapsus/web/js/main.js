@@ -1394,7 +1394,17 @@ const bgVao = gl.createVertexArray();
       gl.uniformMatrix4fv(gl.getUniformLocation(parProg, 'uProj'), false, proj);
       gl.uniform1i(gl.getUniformLocation(parProg, 'uTex'), 0);
       gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-      gl.depthMask(false); gl.disable(gl.CULL_FACE);
+      // CULLING STAYS ON. The particle material is built at 0x40cb69-0x40cbe5
+      // with FUN_0040bef0's defaults for everything it does not set, and
+      // `noCull` defaults to 0 — so the sprites are culled against
+      // glFrontFace(GL_CW) like everything else (§11.2). The billboard basis
+      // is A = R x C, B = A x C with R = (sin zRot, cos zRot, 0), so the
+      // quad's winding flips with the particle's random, freely-spinning
+      // zRotation: the engine discards roughly half of its own sprites.
+      // Disabling culling here doubled the per-frame additive contribution,
+      // which on a part whose fader is only 5% is amplified 20x into a
+      // visible floor over the whole frame (NOTES.md §15.2).
+      gl.depthMask(false);
       gl.activeTexture(gl.TEXTURE0);
       for (const [f, list] of byFrame) {
         let tex = null;
@@ -1428,7 +1438,7 @@ const bgVao = gl.createVertexArray();
         put(0, pos, 3); put(1, uv, 2); put(2, al, 3);
         gl.drawArrays(gl.TRIANGLES, 0, pos.length / 3);
       }
-      gl.disable(gl.BLEND); gl.depthMask(true); gl.enable(gl.CULL_FACE);
+      gl.disable(gl.BLEND); gl.depthMask(true);
       gl.useProgram(prog);
     }
   }
