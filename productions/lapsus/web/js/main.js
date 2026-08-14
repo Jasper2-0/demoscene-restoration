@@ -135,7 +135,16 @@ function applyScale(m, s) {
 
 // ---------------------------------------------------------------- GL
 const canvas = document.getElementById('c');
-const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer: true });
+// alpha:false — THE FRAMEBUFFER HAS NO ALPHA CHANNEL, as the original's window
+// had none. Left at the WebGL default of true, every surface drawn with
+// alpha < 1 writes that alpha into the canvas, and what you get out then
+// depends on how you read it back: canvas.toDataURL() returns the raw store
+// including alpha, while a page screenshot returns the composite. The two
+// harnesses disagreed by a lot on exactly the parts that draw transparent
+// surfaces — pene read as mean luma 55.6 through one and 39.7 through the
+// other, and its "renders at the wrong brightness" issue was largely that.
+const gl = canvas.getContext('webgl2',
+  { alpha: false, antialias: true, preserveDrawingBuffer: true });
 if (!gl) throw new Error('WebGL2 required');
 
 // THE FIXED-FUNCTION PIPELINE IS THE SHIM'S JOB, not this file's. Everything
