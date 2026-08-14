@@ -194,7 +194,7 @@ precision highp float;
 in vec3 vCol, vSpecCol, vP; in vec2 vUV, vUV1, vUV2, vUVenv; out vec4 o;
 uniform vec3 uColor;
 uniform sampler2D uTex;
-uniform bool uHasTex;
+uniform bool uHasTex, uAlphaFromTex;
 uniform float uAlpha;
 uniform sampler2D uEnv;              // RIMG reflection image
 uniform bool uHasEnv;
@@ -227,7 +227,15 @@ void main(){
   // the reflection MULTIPLIES the lit colour; it is only ADDED when it lands
   // on unit 1, which happens for mask 0x81 (a colour texture as well).
   // Unit 0 modulates the whole primary colour, the ambient term included.
-  if (uHasTex) col *= texture(uTex, vUV).rgb;
+  float alpha = uAlpha;
+  if (uHasTex) {
+    vec4 t0 = texture(uTex, vUV);
+    col *= t0.rgb;
+    // A TTEX surface's cutout lives in the colour texture's alpha, put there
+    // by the _a companion image (RENDER.md 5.3). NB: no backticks in GLSL
+    // comments — the shader is a JS template literal and they close it.
+    if (uAlphaFromTex) alpha *= t0.a;
+  }
   // Unit 1: GL_MODULATE for a DIFF texture (mask 5), GL_ADD for LUMI (mask 3).
   if (uHasTex1) {
     vec3 t1 = texture(uTex1, vUV1).rgb;
@@ -252,7 +260,7 @@ void main(){
     float f = clamp((uFogRange.y + vP.z) / (uFogRange.y - uFogRange.x), 0.0, 1.0);
     col = mix(uFogColor, col, f);
   }
-  o = vec4(col, uAlpha);
+  o = vec4(col, alpha);
 }`;
 const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
@@ -516,9 +524,75 @@ gl.bindAttribLocation(prog, 4, 'aUV2');
 const TEXDIR = 'work/unpacked/lapsus_dat/data/lwo/textures/';
 const texCache = new Map();
 const texSize = new Map();   // GL texture -> [w, h], for the backdrop fit
-async function loadTexture(file, dir = TEXDIR) {
-  const key = dir + file;
+/** Colour image + `_a` companion, combined into one RGBA texture. */
+async function loadTexturePaired(file, dir, alphaFile, key) {
+  const base = (f) => ROOT + dir + f.replace(/\\/g, '/').split('/').pop();
+  const [c, a] = await Promise.all([decodePixels(base(file)), decodePixels(base(alphaFile))]);
+  if (c.w !== a.w || c.h !== a.h) {
+    // The engine throws here rather than guessing; so do we, because a silent
+    // mismatch would show up as a subtly wrong cutout rather than an error.
+    throw new Error(`Color texture and alpha texture have different dimensions. ` +
+      `${file} ${c.w}x${c.h} vs ${alphaFile} ${a.w}x${a.h}`);
+  }
+  const out = new Uint8Array(c.data);          // copy: c.data may be a live ImageData
+  for (let i = 0; i < out.length; i += 4) {
+    out[i + 3] = (a.data[i] + a.data[i + 1] + a.data[i + 2]) / 3;
+  }
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, c.w, c.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, out);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+  texSize.set(tex, [c.w, c.h]);
+  texCache.set(key, tex);
+  return tex;
+}
+
+/**
+ * Decode an image to raw RGBA. Needed only when a texture has an `_a`
+ * companion, because combining them requires pixel access that
+ * `texImage2D(…, HTMLImageElement)` does not give.
+ */
+async function decodePixels(url) {
+  if (/\.tga$/i.test(url)) {
+    const t = decodeTGA(new Uint8Array(await (await fetch(url)).arrayBuffer()));
+    return { w: t.width, h: t.height, data: t.data };
+  }
+  const img = new Image();
+  await new Promise((res, rej) => {
+    img.onload = res; img.onerror = () => rej(new Error('image ' + url)); img.src = url;
+  });
+  const c = document.createElement('canvas');
+  c.width = img.width; c.height = img.height;
+  const cx = c.getContext('2d', { willReadFrequently: true });
+  cx.drawImage(img, 0, 0);
+  return { w: img.width, h: img.height, data: cx.getImageData(0, 0, img.width, img.height).data };
+}
+
+/**
+ * `loadTexture(colour, dir, alpha)` — the third argument is the `_a` companion
+ * image, and it is the whole reason this signature is not just a filename.
+ *
+ * THE ALPHA IS A SEPARATE FILE, not a channel. `LW::TextureManager::get` takes
+ * (colorName, alphaName, filterMode), and FUN_0040ec70 @0x40ec70 decodes the
+ * second image and writes its **(R + G + B) / 3** into the colour image's
+ * alpha byte, throwing "Color texture and alpha texture have different
+ * dimensions." if they disagree (RENDER.md §5.3).
+ *
+ * The pairing CANNOT be derived from the filenames — the archive ships
+ * `design1.tga`/`design1_a.tga`, `eDezign.jpg`/`eDezign_a.jpg` and
+ * `LapsusDezign1.jpg`/`LapsusDezign1_a2.jpg`, so the suffix is `_a` twice and
+ * `_a2` once. It comes from the DATA: a surface's TRAN block names the alpha
+ * image, and the two hardcoded Picture pairs name theirs in .rdata.
+ */
+async function loadTexture(file, dir = TEXDIR, alphaFile = null) {
+  const key = dir + file + (alphaFile ? '|' + alphaFile : '');
   if (texCache.has(key)) return texCache.get(key);
+  if (alphaFile) return loadTexturePaired(file, dir, alphaFile, key);
   // `dir` lets a caller opt out of basename-into-data/lwo/textures resolution:
   // the particle frames live in data/particles/tauno/ and their ColorTexture
   // pattern is already archive-relative.
@@ -724,13 +798,15 @@ void main(){
   vec2 px = uRect.xy + q * uRect.zw;
   gl_Position = vec4(px.x / 320.0 - 1.0, 1.0 - px.y / 240.0, 0., 1.);
 }`;
+// The alpha is IN the texture: TextureManager::get folds the _a companion's
+// (R+G+B)/3 into the colour image's alpha byte at load time (RENDER.md 5.3),
+// so by the time a Picture is drawn there is one RGBA texture, not two.
 const PIC_FS = `#version 300 es
 precision highp float; in vec2 vUV; out vec4 o;
-uniform sampler2D uTex, uAlphaTex; uniform float uOpacity; uniform bool uHasAlpha;
+uniform sampler2D uTex; uniform float uOpacity;
 void main(){
-  vec3 c = texture(uTex, vUV).rgb;
-  vec3 a = uHasAlpha ? texture(uAlphaTex, vUV).rgb : vec3(1.0);
-  o = vec4(c, ((a.r + a.g + a.b) / 3.0) * uOpacity);
+  vec4 c = texture(uTex, vUV);
+  o = vec4(c.rgb, c.a * uOpacity);
 }`;
 const picProg = gl.createProgram();
 gl.attachShader(picProg, sh(gl.VERTEX_SHADER, PIC_VS));
@@ -738,16 +814,13 @@ gl.attachShader(picProg, sh(gl.FRAGMENT_SHADER, PIC_FS));
 gl.linkProgram(picProg);
 const picVao = gl.createVertexArray();
 
-function drawPicture(tex, alphaTex, x, y, w, h, opacity) {
+function drawPicture(tex, x, y, w, h, opacity) {
   gl.useProgram(picProg);
   gl.bindVertexArray(picVao);
   gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
   gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.uniform1i(gl.getUniformLocation(picProg, 'uTex'), 0);
-  if (alphaTex) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, alphaTex); }
-  gl.uniform1i(gl.getUniformLocation(picProg, 'uAlphaTex'), 1);
-  gl.uniform1i(gl.getUniformLocation(picProg, 'uHasAlpha'), alphaTex ? 1 : 0);
   gl.uniform1f(gl.getUniformLocation(picProg, 'uOpacity'), opacity);
   gl.uniform4f(gl.getUniformLocation(picProg, 'uRect'), x, y, w, h);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -919,7 +992,20 @@ const bgVao = gl.createVertexArray();
         // figure's cloak to about a fifth of its lit colour; adding it unscaled
         // turns the cloak into bright iridescent chrome. The capture has it
         // nearly black.
-        const colrTex = await texOf(blk);
+        // A TTEX names the alpha of the COLOUR texture, not a texture of its own:
+      // mask 0x41's branch reassigns the alpha argument to the TRAN slot at
+      // 0x42c943 (`LEA ESI,[EBP+0x290]`) before calling the loader at 0x42c9d9.
+      // An earlier reading of this said "the alpha name is always the empty
+      // temp" — that is true of the mask-0x80 site it was taken from and false
+      // here, which is why dezz.lwo's LapsusDezign1_a2.jpg went unused and
+      // flu2's title overlay drew as an opaque block.
+      const tranClip = bTran ? lwo.clips.find((c) => c.index === bTran.imageIndex) : null;
+      const colrTex = await (async () => {
+        const cc = blk ? lwo.clips.find((c) => c.index === blk.imageIndex) : null;
+        if (!cc?.file) return null;
+        try { return await loadTexture(cc.file, TEXDIR, tranClip?.file ?? null); }
+        catch (e) { console.warn(e.message); return null; }
+      })();
         const mask80 = !!reflTex && !colrTex;
         const tex = mask80 ? reflTex : colrTex;
         // unit 1 is DIFF (modulate) when present, else LUMI (add). With all
@@ -965,7 +1051,12 @@ const bgVao = gl.createVertexArray();
           // changes the surface's BLEND CLASS and nothing else, and
           // material[+0x38] is forced to 0 when one is present, so the surface
           // is alpha-blended at alpha 1.
-          blendMode: (s.additiveTransparency ?? 0) > 0.95 ? 1
+          // The colour texture carries a real alpha only when a TTEX supplied one.
+        // Everything else uploads alpha 255, so gating on this rather than
+        // always multiplying keeps 32-bit TGAs that were never meant to be
+        // cutouts from suddenly becoming them.
+        alphaFromTex: !!tranClip,
+        blendMode: (s.additiveTransparency ?? 0) > 0.95 ? 1
                    : (s.transparency ?? 0) > 0.95 ? 1
                    : ((s.transparency ?? 0) > 0 || bTran) ? 3 : 0,
           // LWO TRAN is transparency, so alpha is its complement — except with a
@@ -1048,11 +1139,22 @@ const bgVao = gl.createVertexArray();
     let textured = 0, hairLines = 0, particleCount = 0, camIndex = 0, zoomAt = 0, fovX = 0;
     let probeInfo = null;
     const emptRand = msvcRand();
-    let emptTex = null, emptAlphaTex = null;
+    let emptTex = null;
+    // Part_Paleksi overlays a Picture LAST, every frame (RENDER.md §12.4):
+    // Picture("data/pics/eDezign.jpg", alpha "data/pics/eDezign_a.jpg", mode 3)
+    // at x=128, y=224, moved by the same decaying-burst scalar that shakes the
+    // camera. It was missing entirely, which is most of why paleksi read as
+    // "renders the wrong picture".
+    let paleksiTex = null;
+    if (/^paleksi$/i.test(SCENE)) {
+      try {
+        paleksiTex = await loadTexture('eDezign.jpg',
+          'work/unpacked/lapsus_dat/data/pics/', 'eDezign_a.jpg');
+      } catch (e) { console.warn(e.message); }
+    }
     if (/^empt$/i.test(SCENE)) {
       const PICS = 'work/unpacked/lapsus_dat/data/pics/';
-      try { emptTex = await loadTexture('design1.tga', PICS); } catch {}
-      try { emptAlphaTex = await loadTexture('design1_a.tga', PICS); } catch {}
+      try { emptTex = await loadTexture('design1.tga', PICS, 'design1_a.tga'); } catch (e) { console.warn(e.message); }
     }
 
     // ONE FRAME of the demo, at time `T`. Feedback parts call this repeatedly
@@ -1252,6 +1354,7 @@ const bgVao = gl.createVertexArray();
         gl.uniform1i(uTwoSided, mat.twoSided ? 1 : 0);
         gl.uniform1f(uDiffuse, mat.diffuse ?? 1);
         gl.uniform1f(uAlpha, mat.alpha ?? 1);
+      gl.uniform1i(gl.getUniformLocation(prog, 'uAlphaFromTex'), mat.alphaFromTex ? 1 : 0);
         gl.uniform1i(uHasEnv, mat.envTex ? 1 : 0);
         gl.uniform1f(uRefl, mat.refl ?? 0);
         gl.uniform1f(uSpec, mat.spec ?? 0);
@@ -1466,7 +1569,7 @@ const bgVao = gl.createVertexArray();
     if (/^empt$/i.test(SCENE) && emptTex) {
       const r01 = () => emptRand() * (1 / 32767);
       const stamp = (x, y, op) =>
-        drawPicture(emptTex, emptAlphaTex, Math.trunc(x), Math.trunc(y), 256, 256, op);
+        drawPicture(emptTex, Math.trunc(x), Math.trunc(y), 256, 256, op);
       if (T < 1.3) {                                    // phase A
         drawFade('in', 3, 1 - 0.1);                     // black veil at alpha 0.1
         const X = 8 * T - 8, A = X * X;
@@ -1566,6 +1669,20 @@ const bgVao = gl.createVertexArray();
     // fraction of the frame that spread subtends. Reading scale off pixels is
     // guesswork — this is the quantity itself, and it separates "the cloud is
     // the wrong size" from "the camera is in the wrong place".
+    // Overlay LAST (0x4073f2), after the scene render. The same scalar S that
+    // shifts the camera by 0.5 drives the overlay at gains 1.5 (x) and 10.5
+    // (y) — so the logo mostly bounces vertically — and both coordinates are
+    // TRUNCATED to whole pixels.
+    if (paleksiTex) {
+      const P = 1.1924489795918367;
+      const phase = T - Math.floor(T / P) * P;
+      let env = Math.pow(1 - phase / P, 5);
+      if (T < P) env *= 3;                       // first period only
+      const S = env * Math.sin(40 * phase);
+      drawPicture(paleksiTex, Math.trunc(S * 1.5 + 128), Math.trunc(S * 10.5 + 224),
+        512, 256, 1);
+    }
+
     if (qs.get('probe') && hairNodes.length) {
       const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
       for (const p of hairNodes) for (let i = 0; i < 3; i++) {

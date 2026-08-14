@@ -2599,8 +2599,29 @@ grey really is **DIFF**. The flag is computed once at 0x42b8e3–0x42b906
 > whose byte 0 is the (empty, meaningless) allocator, and MSVC sourced that
 > byte from the adjacent slot. `FUN_0042cf90` is
 > `(surface, &colourName, &alphaName, filterMode)` forwarding straight to
-> `LW::TextureManager::get` @0x414420 (0x42cffc–0x42d00b); the alpha name is
-> always the empty temp, the filter mode is `slot[+0x10] != 0`.
+> `LW::TextureManager::get` @0x414420 (0x42cffc–0x42d00b); the filter mode is
+> `slot[+0x10] != 0`.
+>
+> **CORRECTION (2026-08-14): "the alpha name is always the empty temp" was
+> wrong**, and it cost real time. It is true of the call site it was read from
+> and false in general. Each mask branch sets up its own arguments, and the
+> mask-0x41 branch reassigns the alpha register to the **TRAN** slot before
+> calling:
+>
+> ```
+> 0042c943  LEA ESI,[EBP + 0x290]     ; the TRAN name slot
+> ...
+> 0042c9d7  PUSH ESI                  ; alphaName = the TTEX image
+> 0042c9d8  PUSH EBX                  ; colourName = the COLR image
+> 0042c9d9  CALL 0x0042cf90
+> ```
+>
+> So a TTEX names the **alpha of the colour texture**, exactly as §5.3
+> describes, and `dezz.lwo`'s `LapsusDezign1_a2.jpg` is loaded and used. The
+> slot map, for anyone checking another branch: `+0x98` COLR, `+0xec` LUMI,
+> `+0x140` DIFF, `+0x194` SPEC, `+0x1e8`, `+0x23c` REFL, `+0x290` TRAN,
+> `+0x2b0` RIMG (0x42b947–0x42baa6, each LEA immediately preceding the OR that
+> sets its mask bit).
 
 **Q2 — does the unlit path change the units?** **No.** Unit 0 (0x40c231) and
 unit 1 (0x40c2c3) are reached identically from both branches, and the env-mode
