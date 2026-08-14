@@ -802,8 +802,19 @@ const bgVao = gl.createVertexArray();
       // into a white silhouette: base white + a full-brightness env texel.
       const reflTex = (s.reflection ?? 0) > 0.95 && s.reflectionImage
         ? await texOf({ imageIndex: s.reflectionImage }) : null;
-      const mask80 = !!reflTex && s.blocks.length === 0;
-      const tex = mask80 ? reflTex : await texOf(blk);
+      // The mask is built from which NAME SLOTS are non-empty, so what decides
+      // 0x80 against 0x81 is whether a colour texture actually RESOLVES — not
+      // whether a BLOK chunk happens to be present. Three of the archive's
+      // BLOKs are EMPTY: no CHAN, no IMAG, no PROJ. HigherBeingMM.lwo surface
+      // 0 is one of them, and counting it as a colour texture flipped that
+      // surface from 0x80 to 0x81, which moves its RIMG from unit 0
+      // GL_MODULATE to unit 1 GL_ADD. Modulating by the reflection darkens the
+      // figure's cloak to about a fifth of its lit colour; adding it unscaled
+      // turns the cloak into bright iridescent chrome. The capture has it
+      // nearly black.
+      const colrTex = await texOf(blk);
+      const mask80 = !!reflTex && !colrTex;
+      const tex = mask80 ? reflTex : colrTex;
       // unit 1 is DIFF (modulate) when present, else LUMI (add). With all
       // three, LUMI moves to the additive second pass instead.
       const tex1 = await texOf(bDiff ?? bLumi);
