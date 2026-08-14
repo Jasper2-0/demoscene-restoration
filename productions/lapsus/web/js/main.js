@@ -363,36 +363,139 @@ function projectUV(x, y, z, blk) {
 // faceted a third of the archive's surfaces and been wrong.
 function meshFromLayer(layer, obj) {
   const P = layer.points, n = P.length / 3;
-  const nrm = new Float32Array(P.length);
+
+  // ---- FLAT SHADING: one vertex per POLYGON CORNER, carrying that polygon's
+  // face normal, instead of one shared vertex per point carrying a smoothed
+  // average.
+  //
+  // The capture settles this. kuubiotekniikka's cubes are FLAT-FACETED in the
+  // original — each face a single uniform tone with a crisp edge — where a
+  // shared-vertex mesh renders them with gradients running across the faces.
+  //
+  // It also resolves what RENDER.md §10.5 could not: `glShadeModel` is never
+  // called, so GL is in its GL_SMOOTH default, and yet the picture is flat.
+  // Those reconcile only one way — the engine hands GL three vertices per
+  // triangle that all carry the SAME normal, so interpolating between them is
+  // a no-op. It never needs GL_FLAT. That is also why "accumulate one unit
+  // normal per polygon into shared vertices" (§10.5) measured worse: the
+  // answer was not a different weighting, it was not averaging at all.
+  //
+  // `src` maps each expanded vertex back to its original point, which is what
+  // keeps UV maps and the morph mixer working on point indices.
+  const src = [], EPa = [];
   const groups = new Map();                     // surface name -> index array
-  const idx = [];
+  const faces = [];                             // [firstExpandedVertex, count]
   layer.polygons.forEach((poly, pi) => {
     if (poly.length < 3) return;                         // 2-vertex = spline guide
+    const base = src.length;
+    for (const pt of poly) {
+      src.push(pt);
+      EPa.push(P[pt * 3], P[pt * 3 + 1], P[pt * 3 + 2]);
+    }
+    faces.push([base, poly.length]);
     const surf = obj.tags[layer.polygonSurface?.[pi] ?? -1] ?? '';
     let g = groups.get(surf);
     if (!g) groups.set(surf, g = []);
-    for (let i = 1; i + 1 < poly.length; i++) {
-      const a = poly[0], b = poly[i], c = poly[i + 1];
-      g.push(a, b, c);
-      idx.push(a, b, c);
-    }
+    for (let i = 1; i + 1 < poly.length; i++) g.push(base, base + i, base + i + 1);
   });
-  // Face-normal accumulation, factored out because a morphed mesh has to redo
-  // it every frame (the deltas are large enough on silli to change the shading
-  // completely, not just the silhouette).
+  const n2 = src.length;
+  // total INDICES across every surface group — what `count` reports and what
+  // the triangle tally divides by three.
+  const idxCount = [...groups.values()].reduce((a, g) => a + g.length, 0);
+  const EP = new Float32Array(EPa);
+  const nrm = new Float32Array(n2 * 3);
+
+  // Which surface each polygon belongs to, and whether that surface smooths.
+  //
+  // SMAN DECIDES, and its ABSENCE is the signal. In LightWave a surface with
+  // no SMAN chunk has smoothing OFF and renders faceted; one with SMAN smooths
+  // across edges up to that angle. The archive splits 52 / 21 on this, and the
+  // capture agrees on both sides: kuubio.lwo carries NO SMAN and its cubes are
+  // flat-faceted in the original even though its 8 points are welded and
+  // shared by three faces each, while Mesh059 (flu2's shards) carries SMAN
+  // 191.5 degrees and is smooth.
+  //
+  // An earlier pass here recorded "SMAN is parsed and dead" after searching
+  // for `FLD float ptr [reg + 0x60]` and finding only unrelated hits. That was
+  // the same mistake as the texture-alpha one: one access pattern checked, and
+  // absence concluded from it. The read has still not been located in the
+  // binary — what is established is the BEHAVIOUR, from the data and the
+  // capture together, which is what this implements.
+  const faceSurf = [], faceN = [], faceUnit = [];
+  {
+    let fi = 0;
+    layer.polygons.forEach((poly, pi) => {
+      if (poly.length < 3) return;
+      faceSurf[fi++] = obj.tags[layer.polygonSurface?.[pi] ?? -1] ?? '';
+    });
+  }
+  // Surfaces that smooth. Only SMAN's PRESENCE is used, not its angle:
+  // gating each edge on the angle as well measured indistinguishable
+  // (median 0.850 either way), and the shipped angles are mostly far past
+  // any edge in the mesh anyway — 863, 192, 105, 90 degrees. So the angle is
+  // carried in the data and does no work here; presence is the whole signal.
+  const smooths = new Set();
+  for (const sf of new Set(faceSurf)) {
+    if (obj.surfaces.find((x) => x.name === sf)?.smoothingAngle !== undefined) smooths.add(sf);
+  }
+
+  /** Face normals, then per-corner normals honouring each surface's SMAN. */
   const buildNormals = (pts, out) => {
-    out.fill(0);
-    for (let t = 0; t < idx.length; t += 3) {
-      const a = idx[t], b = idx[t+1], c = idx[t+2];
+    // Per-polygon UNIT normal, for the surfaces that do not smooth.
+    for (let f = 0; f < faces.length; f++) {
+      const [base] = faces[f];
+      const a = src[base], b = src[base + 1], c = src[base + 2];
       const ax = pts[a*3], ay = pts[a*3+1], az = pts[a*3+2];
       const ux = pts[b*3]-ax, uy = pts[b*3+1]-ay, uz = pts[b*3+2]-az;
       const vx = pts[c*3]-ax, vy = pts[c*3+1]-ay, vz = pts[c*3+2]-az;
       const nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
-      for (const k of [a, b, c]) { out[k*3] += nx; out[k*3+1] += ny; out[k*3+2] += nz; }
+      const l = Math.hypot(nx, ny, nz) || 1;
+      faceUnit[f] = [nx/l, ny/l, nz/l];
     }
-    for (let i = 0; i < n; i++) {
-      const l = Math.hypot(out[i*3], out[i*3+1], out[i*3+2]) || 1;
-      out[i*3] /= l; out[i*3+1] /= l; out[i*3+2] /= l;
+    // Smooth surfaces accumulate per FAN TRIANGLE, area-weighted (the raw
+    // cross product, whose length is twice the triangle's area). Both details
+    // are load-bearing and were measured, not assumed: accumulating unit
+    // normals instead, or one normal per polygon rather than per triangle,
+    // each cost paleksi ~0.94 -> ~0.5, because its mesh is mostly quads and
+    // both changes halve or skew what a quad contributes.
+    const acc = new Map();                       // "surface\0point" -> [x,y,z]
+    for (let f = 0; f < faces.length; f++) {
+      if (!smooths.has(faceSurf[f])) continue;
+      const [base, cnt] = faces[f];
+      for (let i = 1; i + 1 < cnt; i++) {
+        const a = src[base], b = src[base + i], c = src[base + i + 1];
+        const ax = pts[a*3], ay = pts[a*3+1], az = pts[a*3+2];
+        const ux = pts[b*3]-ax, uy = pts[b*3+1]-ay, uz = pts[b*3+2]-az;
+        const vx = pts[c*3]-ax, vy = pts[c*3+1]-ay, vz = pts[c*3+2]-az;
+        const nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
+        for (const pt of [a, b, c]) {
+          const key = faceSurf[f] + '\u0000' + pt;
+          let v = acc.get(key); if (!v) acc.set(key, v = [0, 0, 0]);
+          v[0] += nx; v[1] += ny; v[2] += nz;
+        }
+      }
+    }
+    for (let f = 0; f < faces.length; f++) {
+      const [base, cnt] = faces[f];
+      const smooth = smooths.has(faceSurf[f]);
+      for (let k = 0; k < cnt; k++) {
+        const o = (base + k) * 3;
+        if (!smooth) {
+          const fn = faceUnit[f];
+          out[o] = fn[0]; out[o+1] = fn[1]; out[o+2] = fn[2];
+          continue;
+        }
+        const v = acc.get(faceSurf[f] + '\u0000' + src[base + k]) ?? faceUnit[f];
+        const l = Math.hypot(v[0], v[1], v[2]) || 1;
+        out[o] = v[0]/l; out[o+1] = v[1]/l; out[o+2] = v[2]/l;
+      }
+    }
+  };
+  /** Re-expand positions from the (possibly morphed) point array. */
+  const expand = (pts, out) => {
+    for (let j = 0; j < n2; j++) {
+      const q = src[j] * 3;
+      out[j*3] = pts[q]; out[j*3+1] = pts[q+1]; out[j*3+2] = pts[q+2];
     }
   };
   buildNormals(P, nrm);
@@ -409,9 +512,13 @@ function meshFromLayer(layer, obj) {
     gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     return b;
   };
-  const posBuf = mkBuf(P), nrmBuf = mkBuf(nrm);
+  const posBuf = mkBuf(EP), nrmBuf = mkBuf(nrm);
+  // Per EXPANDED vertex. A UV map is keyed by original point, so it is looked
+  // up through `src`; a projection is computed from the position, so it reads
+  // EP directly. Both give what they gave before — the extra vertices are
+  // duplicates, not different places.
   const uvFor = (blk) => {
-    const a = new Float32Array(n * 2);
+    const a = new Float32Array(n2 * 2);
     if (blk && blk.projection === 5) {
       // PROJ 5 is UV MAPPING: coordinates come from the named TXUV VMAP, not
       // from geometry. `v` is FLIPPED (v = 1 - uv.v) — the only projection
@@ -420,13 +527,17 @@ function meshFromLayer(layer, obj) {
       // omitting this mode planar-projected those three objects entirely.
       const map = layer.uvMaps?.[blk.uvMap] ??
         Object.values(layer.uvMaps ?? {}).find((m) => m.type === 'TXUV');
-      if (map) for (const [pt, vals] of map.entries) {
-        if (pt < n) { a[pt*2] = vals[0]; a[pt*2+1] = 1 - vals[1]; }
+      if (map) {
+        const byPoint = new Map(map.entries);
+        for (let j = 0; j < n2; j++) {
+          const uv = byPoint.get(src[j]);
+          if (uv) { a[j*2] = uv[0]; a[j*2+1] = 1 - uv[1]; }
+        }
       }
     } else if (blk) {
-      for (let i = 0; i < n; i++) {
-        const [u, v] = projectUV(P[i*3], P[i*3+1], P[i*3+2], blk);
-        a[i*2] = u; a[i*2+1] = v;
+      for (let j = 0; j < n2; j++) {
+        const [u, v] = projectUV(EP[j*3], EP[j*3+1], EP[j*3+2], blk);
+        a[j*2] = u; a[j*2+1] = v;
       }
     }
     return mkBuf(a);
@@ -491,11 +602,16 @@ function meshFromLayer(layer, obj) {
         morphed[pt*3] += w * v[0]; morphed[pt*3+1] += w * v[1]; morphed[pt*3+2] += w * v[2];
       }
     }
+    // The morph moves POINTS; the buffers hold expanded polygon corners, so
+    // re-expand before uploading and rebuild the face normals from the moved
+    // points (silli's targets displace 7.8-8.5 units on a 64-unit object, so
+    // the normals genuinely change, not just the silhouette).
+    expand(morphed, EP);
     buildNormals(morphed, nrm);
-    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, morphed, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, EP, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf); gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.DYNAMIC_DRAW);
   };
-  return { parts, count: idx.length, centre: [0,1,2].map((k) => (mn[k] + mx[k]) / 2),
+  return { parts, count: idxCount, centre: [0,1,2].map((k) => (mn[k] + mx[k]) / 2),
            morphMaps, applyMorph: morphed ? applyMorph : null };
 }
 

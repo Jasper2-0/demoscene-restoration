@@ -1340,6 +1340,52 @@ five `[reg + 0x30]` immediate stores in the binary all belong to other structs.
 Finding that ctor would replace the last invented constant in the material
 path with a read one.
 
+---
+
+## 10.7 SMAN decides flat vs smooth — its ABSENCE is the signal
+
+**Corrects §10.5 and the "SMAN is parsed and dead" note.** A surface with **no
+`SMAN` chunk** has smoothing OFF and renders FACETED; one with `SMAN` smooths
+across its edges. The archive splits 52 / 21 on this.
+
+The capture settles it on both sides:
+
+* `kuubio.lwo` (kuubiotekniikka's cubes) carries **no SMAN**, and the original
+  renders its cubes flat-faceted — each face one uniform tone with a crisp
+  edge — *even though its 8 points are welded and shared by three faces each*.
+  A shared-vertex smoothed mesh cannot produce that.
+* `Mesh059.lwo` (flu2's shards) carries `SMAN 191.5°` and is smooth.
+
+That also resolves what §10.5 could not: `glShadeModel` is never called, so GL
+sits in its `GL_SMOOTH` default, and yet the picture is flat. Those reconcile
+only one way — for a faceted surface the engine hands GL three vertices per
+triangle carrying the SAME normal, so interpolating between them is a no-op.
+It never needs `GL_FLAT`.
+
+**The earlier "parsed and dead" finding was wrong**, and wrong the same way the
+texture-alpha one was: one access pattern (`FLD float ptr [reg + 0x60]`) was
+searched, nothing relevant came back, and absence was concluded from it. The
+read still has not been located in the binary. What is established here is the
+BEHAVIOUR, from the data and the capture together.
+
+### What is load-bearing in the implementation
+
+Measured, each one twice:
+
+| | |
+|---|---|
+| accumulate **per fan triangle**, not per polygon | per-polygon cost paleksi 0.943 → 0.480 |
+| accumulate the **raw cross product** (area-weighted) | unit normals cost paleksi 0.943 → 0.708 |
+| accumulate **within a surface** only | LightWave smooths inside a surface, not across |
+| **presence** of SMAN, not its angle | angle-gating measured indistinguishable (0.850 either way); shipped angles are 863/192/105/90°, past any edge in the mesh |
+
+Both weighting details bite for the same reason: these meshes are mostly
+quads, and per-polygon or unit accumulation halves or skews what a quad
+contributes.
+
+  kuubiotekniikka 0.996 -> 0.998 · diskojea 0.970 -> 0.988 ·
+  higherbiing 0.737 -> 0.748 · kartonki 0.839 -> 0.823
+
 ## 11. Hair and particles
 
 Both systems are driven by plain-ASCII config files, both are simulated on the
