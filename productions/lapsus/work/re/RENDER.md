@@ -1386,6 +1386,52 @@ contributes.
   kuubiotekniikka 0.996 -> 0.998 · diskojea 0.970 -> 0.988 ·
   higherbiing 0.737 -> 0.748 · kartonki 0.839 -> 0.823
 
+---
+
+## 10.8 The reflection path — what is measured, and what it rules out
+
+flu2's shards are the clean case: `Mesh059.lwo`, mask 0x80, REFL 1.0, no BLOK,
+RIMG = `NebulaMixed2.jpg`, so `col = lit x reflTexel` with nothing else in the
+way. It has never matched, and the colour is now measured rather than argued
+about. Lit pixels only (>40), shard region, t=1.6:
+
+| | R | G | B | R/B | lit area |
+|---|--:|--:|--:|--:|--:|
+| ours (modulate) | 96.8 | 85.5 | 73.1 | **1.32** | 31.4% |
+| ours (replace, experiment) | 79.9 | 72.0 | 59.2 | 1.35 | 39.0% |
+| **capture** | 74.5 | 75.7 | 69.2 | **1.08** | **50.9%** |
+
+And the reflection textures themselves:
+
+| | R | G | B | R/B |
+|---|--:|--:|--:|--:|
+| `NebulaMixed2.jpg` | 49.0 | 47.1 | 37.9 | 1.29 |
+| `EnvShit1.tga` | 64.1 | 49.4 | 38.9 | 1.65 |
+| `mechaenv.jpg` | 22.8 | 19.7 | 16.1 | 1.42 |
+
+**Our output carries the texture's own colour cast almost exactly (1.32
+against the texture's 1.29). The capture does not (1.08).** Whatever the
+original does with a reflection image, the image is NOT the dominant colour
+term — something neutral dominates and the reflection is a minority
+contribution. That is the constraint any explanation has to satisfy, and it
+holds regardless of which combiner is used.
+
+Ruled out by measurement:
+
+* **REFL as a coefficient.** It is genuinely a threshold. 0x42bac9-0x42bad9
+  reads `surface[+0x34]`, compares against 0.95 (`0x45ad34`) and CLEARS bit
+  0x80 when it is not greater — the bit is set purely on the RIMG name being
+  non-empty at 0x42babf. So REFL cannot scale anything; it only gates.
+* **Reflection REPLACING the lit colour** rather than modulating it. Tried:
+  brightness and lit area both move toward the capture (96.8 -> 79.9,
+  31.4% -> 39.0%) but the cast is untouched (1.35), so it is not the answer,
+  though it does suggest the lit term is currently too peaky.
+
+The capture also has HALF AGAIN as much lit area at LOWER peak brightness —
+the same "more area, less contrast" signature that §10.6's clamp experiment
+showed on the same part. Whatever is missing lifts the mid-range and
+desaturates it at once, which a pure per-texel combiner cannot do on its own.
+
 ## 11. Hair and particles
 
 Both systems are driven by plain-ASCII config files, both are simulated on the
