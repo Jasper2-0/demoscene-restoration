@@ -118,10 +118,24 @@ The gate stays, spec-correct and unexercised by anything measured so far.
 * **the third sampler** — deleted rather than moved. The engine has two texture
   units and no surface in the archive needs a third (RENDER.md §14).
 
-## Still open
+## The 2D passes, also moved
 
-The 2D passes — backdrop, pictures and fades — still use their own programs.
-The engine drew them with fixed-function GL (an ortho projection, a textured
-quad, a blend mode), so they *could* go through minigl's immediate mode, and
-they are the last part of Lapsus's GL that is a reimplementation rather than
-an effect.
+Backdrop, Pictures and faders had a program each. The engine draws all three
+the same way — an ortho projection, one textured quad, a blend mode, depth and
+culling off — which is what minigl's immediate mode already is, so they now go
+through `quad2D`, a twenty-line helper over the shim. Three programs, three
+shader pairs and three VAOs deleted; median r unchanged, every part identical.
+
+Going through the shim is also the more faithful reading: these were
+fixed-function quads in the original, not effects.
+
+## What is left in the caller, and why
+
+| | |
+|---|---|
+| hair, particles | dt-dependent integrators — engine behaviour, not GL |
+| the feedback accumulator | a ping-pong FBO; no fixed-function equivalent |
+| flat vs smooth shading | mesh-driven (one vertex per polygon corner without SMAN) |
+
+Nothing in Lapsus now reimplements a part of OpenGL 1.x. What remains is the
+demo.

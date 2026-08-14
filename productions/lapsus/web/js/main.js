@@ -147,6 +147,53 @@ const mgl = new MiniGL(gl);
 const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
 
+/**
+ * The 2D passes — backdrop, Pictures, faders — as fixed-function quads.
+ *
+ * The engine draws all three the same way: an ortho projection, one textured
+ * quad, a blend mode, depth and culling off. That is exactly what minigl's
+ * immediate mode is, so they go through the shim rather than through three
+ * hand-written programs each reimplementing a corner of it.
+ *
+ * begin() puts the pipeline in that state; end() hands depth and culling back,
+ * because everything drawn after these passes expects them on.
+ */
+const quad2D = {
+  begin() {
+    mgl.enableDepthTest(false);
+    mgl.enableCullFace(false);
+    mgl.enableLighting(false);
+    mgl.enableFog(false);
+    mgl.enableBlend(false);
+    for (const unit of [1, 0]) {
+      mgl.activeTexture(unit);
+      mgl.enableTexture(false);
+      mgl.texGenSphereMap(false);
+    }
+    mgl.texEnv({ mode: 'modulate' });
+    mgl.matrixMode(mgl.PROJECTION); mgl.loadIdentity();
+    mgl.matrixMode(mgl.MODELVIEW); mgl.loadIdentity();
+    mgl.color4(1, 1, 1, 1);
+  },
+  /** A quad in the current projection. `uvs` is four [u,v] pairs, or null. */
+  rect(x, y, w, h, uvs = null) {
+    const P = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+    mgl.begin(mgl.QUADS);
+    for (let i = 0; i < 4; i++) {
+      if (uvs) mgl.texCoord2(uvs[i][0], uvs[i][1]);
+      mgl.vertex3(P[i][0], P[i][1], 0);
+    }
+    mgl.end();
+  },
+  /** The whole screen, in clip space. */
+  clip(uvs = null) { this.rect(-1, -1, 2, 2, uvs); },
+  end() {
+    mgl.enableBlend(false);
+    mgl.enableDepthTest(true);
+    mgl.enableCullFace(true);
+  },
+};
+
 
 // Texture coordinates, read out of dm2000 itself — NOT from LightWave's
 // documentation, which disagrees (METHOD.md, "the binary is the source of
@@ -594,34 +641,12 @@ async function loadTexture(file, dir = TEXDIR, alphaFile = null) {
 // falls off the bottom of the screen. Stretching all 512 rows into 480
 // squashes the whole backdrop by 6.7%, which misaligns every feature in it.
 // uFit is (canvas / texture) per axis, so only the on-screen part is sampled.
-const BG_VS = `#version 300 es
-const vec2 P[4] = vec2[4](vec2(-1.,-1.), vec2(1.,-1.), vec2(-1.,1.), vec2(1.,1.));
-uniform vec2 uFit;
-out vec2 vUV;
-void main(){ vec2 p = P[gl_VertexID]; vUV = vec2(p.x*.5+.5, .5-p.y*.5) * uFit;
-  gl_Position = vec4(p,0.,1.); }`;
-const BG_FS = `#version 300 es
-precision highp float;
-in vec2 vUV; out vec4 o; uniform sampler2D uTex;
-void main(){ o = vec4(texture(uTex, vUV).rgb, 1.0); }`;
 // Faders (ENGINE.md §6). Six shared objects, but only three are ever used:
 // black FadeIn/FadeOut in mode 3 (alpha over a black quad), a white FadeIn in
 // mode 1 (additive flash), and a RandomFadeOut for Part_Empt's flicker. Drawn
 // as one fullscreen quad in ortho after everything else.
 //   mode 3: alpha = v (FadeIn) / 1-v (FadeOut), colour black
 //   mode 1: rgb scaled by 1-v (FadeIn) / v (FadeOut), additive
-const FADE_VS = `#version 300 es
-const vec2 P[4] = vec2[4](vec2(-1.,-1.), vec2(1.,-1.), vec2(-1.,1.), vec2(1.,1.));
-void main(){ gl_Position = vec4(P[gl_VertexID], 0., 1.); }`;
-const FADE_FS = `#version 300 es
-precision highp float; out vec4 o;
-uniform vec4 uFade;                  // rgb, alpha
-void main(){ o = uFade; }`;
-const fadeProg = gl.createProgram();
-gl.attachShader(fadeProg, sh(gl.VERTEX_SHADER, FADE_VS));
-gl.attachShader(fadeProg, sh(gl.FRAGMENT_SHADER, FADE_FS));
-gl.linkProgram(fadeProg);
-const fadeVao = gl.createVertexArray();
 
 /**
  * Draw one fader. `kind` is 'in' | 'out', `mode` 1 (additive white) or
@@ -632,22 +657,20 @@ function drawFade(kind, mode, v, rgb = [0, 0, 0]) {
   v = Math.min(1, Math.max(0, v));
   if (kind === 'in' && v >= 1) return;
   if (kind === 'out' && v <= 0) return;
-  gl.useProgram(fadeProg);
-  gl.bindVertexArray(fadeVao);
-  gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
-  gl.enable(gl.BLEND);
+  quad2D.begin();
   if (mode === 1) {
-    gl.blendFunc(gl.ONE, gl.ONE);
+    mgl.blendFunc(gl.ONE, gl.ONE);
     const k = kind === 'in' ? 1 - v : v;
-    gl.uniform4f(gl.getUniformLocation(fadeProg, 'uFade'), rgb[0]*k, rgb[1]*k, rgb[2]*k, 1);
+    mgl.color4(rgb[0]*k, rgb[1]*k, rgb[2]*k, 1);
   } else {
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    mgl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     // mode 3 writes the ramp into material TRANSPARENCY; GL alpha = 1 - that
     const transparency = kind === 'in' ? v : 1 - v;
-    gl.uniform4f(gl.getUniformLocation(fadeProg, 'uFade'), rgb[0], rgb[1], rgb[2], 1 - transparency);
+    mgl.color4(rgb[0], rgb[1], rgb[2], 1 - transparency);
   }
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
+  mgl.enableBlend(true);
+  quad2D.clip();
+  quad2D.end();
 }
 window.__lapsusFade = drawFade;
 
@@ -740,47 +763,33 @@ gl.linkProgram(parProg);
 // stamping and by the loading screens. Alpha comes from a SEPARATE `_a`
 // image as (R+G+B)/3 (RENDER.md §8), and material transparency scales it
 // (mode 3 = SRC_ALPHA / ONE_MINUS_SRC_ALPHA).
-const PIC_VS = `#version 300 es
-const vec2 P[4] = vec2[4](vec2(0.,0.), vec2(1.,0.), vec2(0.,1.), vec2(1.,1.));
-uniform vec4 uRect;                  // x, y, w, h in virtual 640x480 pixels
-out vec2 vUV;
-void main(){
-  vec2 q = P[gl_VertexID];
-  // NOT V-flipped: the engine's Picture quad maps the image top-to-bottom
-  // down the screen, so design1.tga's typography (which sits in the upper
-  // part of the image) lands at the BOTTOM of the quad — which is where the
-  // capture shows it.
-  vUV = q;
-  vec2 px = uRect.xy + q * uRect.zw;
-  gl_Position = vec4(px.x / 320.0 - 1.0, 1.0 - px.y / 240.0, 0., 1.);
-}`;
-// The alpha is IN the texture: TextureManager::get folds the _a companion's
-// (R+G+B)/3 into the colour image's alpha byte at load time (RENDER.md 5.3),
-// so by the time a Picture is drawn there is one RGBA texture, not two.
-const PIC_FS = `#version 300 es
-precision highp float; in vec2 vUV; out vec4 o;
-uniform sampler2D uTex; uniform float uOpacity;
-void main(){
-  vec4 c = texture(uTex, vUV);
-  o = vec4(c.rgb, c.a * uOpacity);
-}`;
-const picProg = gl.createProgram();
-gl.attachShader(picProg, sh(gl.VERTEX_SHADER, PIC_VS));
-gl.attachShader(picProg, sh(gl.FRAGMENT_SHADER, PIC_FS));
-gl.linkProgram(picProg);
-const picVao = gl.createVertexArray();
 
+/**
+ * A Picture: one textured quad in the engine's virtual 640x480 screen space.
+ *
+ * NOT V-flipped. The engine's Picture quad maps the image top-to-bottom down
+ * the screen, so design1.tga's typography (which sits in the upper part of the
+ * image) lands at the BOTTOM of the quad — which is where the capture shows it.
+ *
+ * The alpha is IN the texture: TextureManager::get folds the _a companion's
+ * (R+G+B)/3 into the colour image's alpha byte at load time (RENDER.md §5.3),
+ * so by the time a Picture is drawn there is one RGBA texture, not two.
+ * GL_MODULATE against glColor(1,1,1,opacity) then gives exactly
+ * alpha = opacity * texel.a.
+ */
 function drawPicture(tex, x, y, w, h, opacity) {
-  gl.useProgram(picProg);
-  gl.bindVertexArray(picVao);
-  gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
-  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.uniform1i(gl.getUniformLocation(picProg, 'uTex'), 0);
-  gl.uniform1f(gl.getUniformLocation(picProg, 'uOpacity'), opacity);
-  gl.uniform4f(gl.getUniformLocation(picProg, 'uRect'), x, y, w, h);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
+  quad2D.begin();
+  mgl.enableBlend(true);
+  mgl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  mgl.activeTexture(0);
+  mgl.bindTexture(tex);
+  mgl.enableTexture(true);
+  mgl.texEnv({ mode: 'modulate' });
+  mgl.color4(1, 1, 1, opacity);
+  mgl.matrixMode(mgl.PROJECTION);
+  mgl.ortho(0, 640, 480, 0, -1, 1);          // the engine's virtual screen
+  quad2D.rect(x, y, w, h, [[0, 0], [1, 0], [1, 1], [0, 1]]);
+  quad2D.end();
 }
 
 const ACC_VS = `#version 300 es
@@ -863,11 +872,6 @@ function accBlit() {
   gl.bindTexture(gl.TEXTURE_2D, null);
 }
 
-const bgProg = gl.createProgram();
-gl.attachShader(bgProg, sh(gl.VERTEX_SHADER, BG_VS));
-gl.attachShader(bgProg, sh(gl.FRAGMENT_SHADER, BG_FS));
-gl.linkProgram(bgProg);
-const bgVao = gl.createVertexArray();
 
 (async () => {
   // ONE PART, fully prepared: its scene, its geometry and textures, its own
@@ -1200,19 +1204,17 @@ const bgVao = gl.createVertexArray();
       try { bgTex = await loadTexture(scene.backdropImage); } catch { bgTex = null; }
     }
     if (bgTex) {
-      gl.useProgram(bgProg);
-      gl.bindVertexArray(bgVao);
-      gl.disable(gl.DEPTH_TEST);
-      gl.disable(gl.CULL_FACE);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, bgTex);
-      gl.uniform1i(gl.getUniformLocation(bgProg, 'uTex'), 0);
+      // uFit is (canvas / texture) per axis, so only the on-screen part of an
+      // oversized backdrop is sampled, and V runs DOWN the screen.
       const [tw, th] = texSize.get(bgTex) ?? [canvas.width, canvas.height];
-      gl.uniform2f(gl.getUniformLocation(bgProg, 'uFit'),
-        Math.min(1, canvas.width / tw), Math.min(1, canvas.height / th));
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      gl.enable(gl.DEPTH_TEST);
-      gl.enable(gl.CULL_FACE);
+      const fu = Math.min(1, canvas.width / tw), fv = Math.min(1, canvas.height / th);
+      quad2D.begin();
+      mgl.activeTexture(0);
+      mgl.bindTexture(bgTex);
+      mgl.enableTexture(true);
+      mgl.texEnv({ mode: 'replace' });
+      quad2D.clip([[0, fv], [fu, fv], [fu, 0], [0, 0]]);
+      quad2D.end();
     }
 
     if (fbAlpha != null && !useAcc) drawFade('in', 3, 1 - fbAlpha);
