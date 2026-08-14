@@ -833,14 +833,14 @@ certify a frame.
 | r | phase | part | | r | phase | part |
 |---|---|---|---|---|---|---|
 | 0.999 | 1 | hulluolli       | | 0.754 | 1 | syrjakyla |
-| 0.993 | 1 | pene            | | 0.732 | 2 | morko |
-| 0.979 | 2 | kuubiotekniikka | | 0.714 | 2 | hedi |
-| 0.971 | 2 | diskojea        | | 0.709 | 1 | paleksi |
-| 0.954 | 2 | made            | | 0.690 | 2 | kaivoalieni |
-| 0.937 | 2 | turska          | | 0.669 | 2 | hairball |
-| 0.912 | 1 | krediili        | | 0.648 | 1 | flu2 |
-| 0.886 | 1 | silli           | | 0.584 | 2 | higherbiing |
-| 0.853 | 2 | rad_out         | | 0.498 | 1 | pehko |
+| 0.993 | 1 | pene            | | 0.737 | 2 | higherbiing |
+| 0.979 | 2 | kuubiotekniikka | | 0.732 | 2 | morko |
+| 0.971 | 2 | diskojea        | | 0.714 | 2 | hedi |
+| 0.954 | 2 | made            | | 0.709 | 1 | paleksi |
+| 0.937 | 2 | turska          | | 0.690 | 2 | kaivoalieni |
+| 0.912 | 1 | krediili        | | 0.669 | 2 | hairball |
+| 0.886 | 1 | silli           | | 0.648 | 1 | flu2 |
+| 0.853 | 2 | rad_out         | | 0.462 | 1 | pehko |
 | 0.845 | 2 | viherio         | |       |   | |
 | 0.840 | 2 | kartonki        | |       |   | |
 | 0.838 | 1 | empt (noisy)    | |       |   | |
@@ -935,7 +935,31 @@ correlation, which weights quiet lead-in like the downbeat.
   IS the observed behaviour; here the OpenGL spec is the external document
   that loses to the demo. The persistent-state machinery is deleted, since
   under clamping every surface's exponent takes effect on its own.
-* **pehko (0.498) and higherbiing (0.584)** are the two weakest.
+* **pehko (0.462) and flu2 (0.648)** are the two weakest. higherbiing was one
+  of them and is now **0.737** — an EMPTY BLOK (no CHAN, no IMAG, no PROJ; 3 of
+  the archive's 89) was being counted as a colour texture, flipping
+  HigherBeingMM surface 0 from mask 0x80 to 0x81 and so routing its RIMG from
+  unit 0 GL_MODULATE to unit 1 GL_ADD. Modulating darkens the figure's cloak to
+  about a fifth; adding it unscaled made it bright iridescent chrome across a
+  third of the frame.
+
+  **flu2** is diagnosed, not fixed. Geometry, camera, shard placement and the
+  title overlay all match. Its shards (`Mesh059.lwo`, mask 0x80, reflection
+  modulating by `NebulaMixed2.jpg`) render DARKER and more saturated than the
+  capture's bright near-white metal — the same regression the mask-0x80 fix
+  introduced (0.688 -> 0.639), never since recovered. So it is the mask-0x80
+  MODULATE path that wants re-reading, not flu2 specifically. Its overlay
+  (`dezz.lwo`, luminosity 1.0 hence unlit, COLR + TRAN) sits ~15-20px left of
+  the capture's.
+
+  Confirmed NOT flu2's cause: the transparency IMAGE is correctly never
+  loaded. FUN_0042cf90 forwards (surface, &colourName, &alphaName, filterMode)
+  to TextureManager::get and the alpha name is always the empty temp, so a
+  SURFACE never receives a separate alpha image — only Pictures do, via
+  drawPicture's explicit alpha. dezz's `LapsusDezign1_a2.jpg` is not missing
+  from our render; the engine ignores it too. A TTEX changes the BLEND CLASS
+  and nothing else (mode 3 + depth mode 2, material[+0x38] forced to 0); that
+  arm was missing and has been added — correct per §4.5, measurably inert.
 
   pehko was assumed to need a real frame loop / ping-pong FBO. **That is not
   the defect.** `?fb=0` renders a feedback part as a single frame, which
