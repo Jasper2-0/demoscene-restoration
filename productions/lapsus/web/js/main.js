@@ -1404,9 +1404,17 @@ const bgVao = gl.createVertexArray();
         } catch { continue; }
         gl.bindTexture(gl.TEXTURE_2D, tex);
         const pos = [], uv = [], al = [];
+        const [tsw] = texSize.get(tex) ?? [32, 32];
+        const e0 = 0.5 / tsw, e1 = 1 - 0.5 / tsw;
         for (const q of list) {
           const c = billboard(q, camZ);
-          const uvs = [[0,1],[1,1],[1,0],[0,0]];
+          // HALF-TEXEL INSET, per §11.2.4: the engine spans (W-1)/TW from a
+          // +0.5/TW origin, i.e. texel centre 0 to texel centre W-1, cropping
+          // the outermost half-texel of the tile. Sampling the full [0,1]
+          // instead lands exactly on the tile boundary, where bilinear
+          // filtering blends in the WRAPPED opposite edge — a faint halo
+          // around every one of 800 sprites, additively accumulated.
+          const uvs = [[e0,e1],[e1,e1],[e1,e0],[e0,e0]];
           const cc = [q.r * q.alpha, q.g * q.alpha, q.b * q.alpha];
           for (const i of [0,1,2, 0,2,3]) {          // quad -> 2 triangles
             pos.push(...c[i]); uv.push(...uvs[i]); al.push(...cc);
