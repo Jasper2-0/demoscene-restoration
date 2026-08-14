@@ -840,10 +840,9 @@ certify a frame.
 | 0.938 | 2 | turska         | | 0.600 | 2 | higherbiing |
 | 0.901 | 1 | krediili       | | 0.521 | 1 | paleksi |
 | 0.878 | 1 | silli          | | 0.514 | 1 | pehko |
-| 0.850 | 1 | empt (noisy)   | |       |   | |
 | 0.848 | 2 | rad_out        | |       |   | |
 | 0.843 | 2 | kartonki       | |       |   | |
-| 0.838 | 1 | empt           | |       |   | |
+| 0.838 | 1 | empt (noisy)   | |       |   | |
 | 0.748 | 1 | syrjakyla      | |       |   | |
 | 0.717 | 2 | hedi           | |       |   | |
 
