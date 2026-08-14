@@ -1379,7 +1379,7 @@ The eliminations above stand and were not wasted: they are what established
 that the cutout could not come from an alpha channel, which is what made a
 blend-mode answer the only one left.
 
-### §15.4 paleksi's red cast is the SPECULAR colour, not the light colour
+### §15.4 RESOLVED — the light's specular colour is neutral grey × intensity
 
 Jasper, watching the capture after the camera fix landed: *"in paleksi we still
 have the red light that's white in the reference video."* Measured, and he is
@@ -1441,3 +1441,53 @@ flu2's issue says *"the color of our object looks very different from the
 reference, either how diffuse and env mapping are combined or some term is
 missing"*. That is this mechanism stated from the other side: a term added
 after the environment map, in a colour the map cannot correct.
+
+#### Traced: the LWS light loader writes the two colours from different values
+
+The open question in §15.4 was what fills `colour2` at `+0xdc..+0xe4`, since
+LWS has no per-light specular colour. Found it in the LWS loader, in the same
+function that parses `LightColor`:
+
+```c
+local_a18 = local_b38 * local_b40;        // LightColor.r * LightIntensity
+local_b54[0x34] = local_a18;              // +0xd0  GL_DIFFUSE r
+local_b54[0x35] = local_a14;              // +0xd4             g
+local_b54[0x36] = local_a10;              // +0xd8             b
+
+local_b5c = (local_b40 * _DAT_0045accc);  // LightIntensity * 255
+local_b54[0x37] = local_b5c;              // +0xdc  GL_SPECULAR r
+local_b54[0x38] = local_b5c;              // +0xe0              g   SAME value
+local_b54[0x39] = local_b5c;              // +0xe4              b   SAME value
+```
+
+`LW::Light::apply` divides both by 255, so:
+
+    GL_DIFFUSE  = LightColor * LightIntensity
+    GL_SPECULAR = (I, I, I)                     -- neutral, colour never enters
+
+The base constructor `FUN_00444540` zeroes both triples first, so a light with
+`LightIntensity 0` genuinely has no specular at all.
+
+The port had been feeding the light's DIFFUSE colour to the specular, which
+tints every highlight in the demo. Because `GL_SEPARATE_SPECULAR_COLOR` adds
+the highlight AFTER the texture stages, it is the one term a texture cannot
+correct — so paleksi, lit by a single almost-pure-red light over a GREEN sphere
+map, produced red highlights where the capture is green.
+
+    paleksi   median r 0.874 -> 0.940, spread 0.311 -> 0.236 (no longer uneven)
+    everything else unchanged or +0.002
+    gate median r 0.884 -> 0.890
+
+That nothing else moved is the point. An earlier guess of "specular = white"
+also fixed paleksi but broke morko (0.663 -> 0.567), rad_out (0.890 -> 0.862)
+and kaivoalieni (0.849 -> 0.835) — because their lights have intensity 2, 0 and
+0.5, and a flat (1,1,1) is wrong for all three. The traced rule leaves them
+exactly where they were.
+
+**Method note.** The first test of "is the light colour wrong?" was run BEFORE
+the camera-parenting fix, and returned r 0.531 either way — recorded in
+RENDER.md §15 as a rejected hypothesis. It was confounded: the picture was
+misaligned enough that correlation could not see colour at all. The same
+confound invalidated the first specular test. A negative result is only as good
+as the state it was measured in, and both needed re-running once the geometry
+was right.

@@ -1287,7 +1287,7 @@ function accBlit() {
     // the item's world +Z and negated to point toward the light (RENDER.md 8).
     // Light-model ambient = scene ambient colour x intensity; pene sets
     // AmbientIntensity 0, so there is no ambient floor at all.
-    const lightDirs = [], lightCols = [];
+    const lightDirs = [], lightCols = [], lightSpecs = [];
     for (const L of scene.lights.slice(0, 8)) {
       const w = worldMatrix(L, T);
       const dW = [-w[8], -w[9], -w[10]];                  // -(world +Z)
@@ -1297,8 +1297,22 @@ function accBlit() {
         view[2]*dW[0] + view[6]*dW[1] + view[10]*dW[2]];
       const len = Math.hypot(...d) || 1;
       lightDirs.push(d[0]/len, d[1]/len, d[2]/len);
-      const c = qs.has('whitelight') ? [1, 1, 1] : (L.color ?? [1, 1, 1]), I = L.intensity ?? 1;
+      const c = L.color ?? [1, 1, 1], I = L.intensity ?? 1;
       lightCols.push(c[0]*I, c[1]*I, c[2]*I);
+      // GL_SPECULAR IS NEUTRAL GREY, SCALED BY INTENSITY ALONE. Traced to the
+      // LWS light loader, which writes the two colours from different values:
+      //
+      //   colour  +0xd0/d4/d8 = LightColor.{r,g,b} * LightIntensity
+      //   colour2 +0xdc/e0/e4 = LightIntensity * 255   -- the SAME in R, G, B
+      //
+      // and Light::apply divides both by 255 on the way to glLightfv, so
+      // GL_SPECULAR = (I, I, I). The light's COLOUR never reaches the specular
+      // term. Feeding it the diffuse colour, as this did, tints every highlight
+      // in the demo — and because GL_SEPARATE_SPECULAR_COLOR adds the highlight
+      // AFTER the texture stages, it is the one term a texture cannot correct.
+      // paleksi is lit by a single almost-pure-red light over a GREEN sphere
+      // map, so its highlights came out red where the capture is green.
+      lightSpecs.push(I, I, I);
     }
     // w = 0 makes each one DIRECTIONAL, so the vector is the direction toward
     // the light and no position enters. The specular light colour is the same
@@ -1308,15 +1322,7 @@ function accBlit() {
     mgl.setLights(lightDirs.length / 3 ? Array.from({ length: lightDirs.length / 3 }, (_, i) => ({
       pos: [lightDirs[i*3], lightDirs[i*3+1], lightDirs[i*3+2], 0],
       diffuse: [lightCols[i*3], lightCols[i*3+1], lightCols[i*3+2]],
-      // GL_SPECULAR comes from a SECOND colour in the light record — RENDER.md
-      // §4.4: glLightfv(GL_DIFFUSE, colour[+0xd0..d8]/255) and
-      // glLightfv(GL_SPECULAR, colour2[+0xdc..e4]/255). What fills colour2 has
-      // not been traced, so this uses the light's diffuse colour, which is a
-      // GUESS and is measurably wrong for paleksi (see NOTES §15.4). ?lspec=
-      // switches the model for experiments: white, black, or diffuse.
-      specular: qs.get('lspec') === 'white' ? [1, 1, 1]
-              : qs.get('lspec') === 'black' ? [0, 0, 0]
-              : [lightCols[i*3], lightCols[i*3+1], lightCols[i*3+2]],
+      specular: [lightSpecs[i*3], lightSpecs[i*3+1], lightSpecs[i*3+2]],
     })) : []);
     const ambI = scene.ambientIntensity ?? 0, ambC = scene.ambientColor ?? [1, 1, 1];
     mgl.lightModelAmbient(ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
