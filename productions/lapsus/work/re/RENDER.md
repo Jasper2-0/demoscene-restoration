@@ -1770,6 +1770,14 @@ p.zRot = S11 * InitialZRotationNoise + InitialZRotation
 > ≈1.5 % of its texel. Statically that is unambiguous (the doubles are right
 > there in `.rdata`), but it is the one number in this section worth
 > sanity-checking against a capture before trusting it.
+>
+> **Checked and CONFIRMED (2026-08-14).** Read straight out of the binary:
+> 0x45a600 = 0.007, 0x45a5f8 = 0.027, 0x45a5f0 = 0.005, 0x45a5e8 = 0.020,
+> 0x45a330 = 0.5, and 0x45a608 = 0.3 for the age head start. So the tint is
+> exactly as written and our port matches it. This mattered because pehko's
+> accumulation floor (NOTES.md §15.2) would be explained by a per-sprite
+> contribution ~10x smaller than we use — it is not; the number is right and
+> the floor is something else.
 
 Particle layout (0x40 bytes, `FUN_0040e590` @0x40e590):
 
