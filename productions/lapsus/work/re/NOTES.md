@@ -877,12 +877,30 @@ correlation, which weights quiet lead-in like the downbeat.
 
 ### §15.2 Open — measured, not guessed
 
-* **Hair step size.** `work/verify/hairdt.mjs` sweeps dt across both hair parts
-  on the argument that one shared physical quantity (the capture machine's
-  frame period) cannot fit two independent scenes by accident. It does not
-  agree: krediili peaks at 1/25s, hairball at 1/12s, and the spread across the
-  whole sweep is only ~0.04 r. **Negative result — nothing adopted, 1/60
-  stands.** dt is not what is left in the hair.
+* ~~Hair step size.~~ **BOUNDED 2026-08-14 — dt is in [1/60, 1/40] and 1/60
+  stands.** `work/verify/hairdt.mjs` sweeps dt across both hair parts on the
+  argument that one shared physical quantity (the capture machine's frame
+  period) cannot fit two independent scenes by accident.
+
+  The first two runs reported disagreement, and both times the fault was the
+  probe's verdict rule rather than the data:
+
+  1. Scoring each dt by its WORST time across the part let the noisiest sample
+     decide. krediili's t=11s peaks at r=0.55 — at that score the residual is
+     dominated by something that is not dt, and the peak of a nearly flat
+     curve is just where the noise sat. Fixed by taking the verdict from the
+     STRONGEST time and printing the weaker ones without voting them.
+  2. Reporting argmax then turned a **0.0005** gap between 1/60 and 1/50 into
+     "krediili 1/60, hairball 1/50". That is a claim about the fourth decimal
+     of a luma correlation. A sweep like this BOUNDS a parameter; it does not
+     resolve it. Fixed by reporting every dt within 0.005 of the peak and
+     intersecting the two parts' sets.
+
+  Result: both parts admit **1/60, 1/50, 1/40** and nothing slower, and
+  krediili's curve is monotone decreasing across the whole sweep. Our 1/60 is
+  inside the bound and is krediili's peak. Within that set the frames differ
+  by less than the metric can see, so no finer answer is available from the
+  capture — and none is needed.
 * ~~Lighting is per-fragment; the engine's is per-vertex.~~ **FIXED
   2026-08-14.** `glShadeModel` is never called, so shading is GL_SMOOTH and
   fixed-function lights each vertex, emits a primary and a secondary colour and
