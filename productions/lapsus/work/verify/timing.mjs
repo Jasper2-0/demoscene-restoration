@@ -59,7 +59,8 @@ const cap = prod.captures[0];
 const inP1 = SCENE in PHASE1;
 const entry = PHASE1[SCENE] ?? PHASE2[SCENE];
 if (!entry) { console.error(`unknown part "${SCENE}"`); process.exit(2); }
-const trackMs = cap.trackOffsetsMs[inP1 ? 'data/mjuusik/1.mp3' : 'data/mjuusik/2.mp3'];
+const offsets = cap.visualTrackOffsetsMs ?? cap.trackOffsetsMs;
+const trackMs = offsets[inP1 ? 'data/mjuusik/1.mp3' : 'data/mjuusik/2.mp3'];
 const partStartCapture = trackMs / 1000 + entry.start;
 
 const TMP = path.join(process.env.TMPDIR ?? '/tmp', 'lapsus-timing');

@@ -882,6 +882,37 @@ to track 2 and is not estimator bias. The old pin came from a 10ms log-energy
 correlation — log-energy is a compressive nonlinearity applied before the
 correlation, which weights quiet lead-in like the downbeat.
 
+### §15.1b The audio clock and the visual clock are 40ms apart — RESOLVED 2026-08-14
+
+§15.1 pinned the *audio* onset at 106.720s and stopped there, on the assumption
+that one number serves both purposes. It does not. Moving reference frames in
+phase 2 align to a visual origin of **106.760s**, 40ms later.
+
+The binary says why. `Demo::loadPhase` @0x402860 calls `Music::play` @0x405060
+(`FSOUND_PlaySound`) and only THEN resets the QPC timer via 0x408950 — 0x4089a0
+merely seeds the first delta. So the engine's frame clock starts one synchronous
+sound-start after the audio does. The port had it backwards: `resetClock()` ran
+before `audio.play()`.
+
+Measured across 40 non-static phase-2 samples at 320x240, the +40ms visual
+origin moves median r 0.8606 -> 0.9483 and mean r 0.8085 -> 0.8824. Per part
+(cached-frame rescore): morko median 0.6429 -> 0.9710, rad_out 0.902 -> 0.965,
+kartonki 0.825 -> 0.892. Phase 1 is arithmetically untouched — its visual and
+audio offsets are the same 6.410 — and its four open parts reproduced their
+scores to three decimals across the change, which is the control.
+
+This is a CAUSE and not a fit, by the test that separates them: a morko-only
++60ms scores marginally better ON MORKO (median 0.9712, worst 0.8114) and worse
+phase-wide (median 0.8722 vs 0.9483). The +40ms is the one that moves every
+part in the phase the same direction, and it leaves the two parts that were
+already right — kuubiotekniikka 1.000, made 0.998 — where they were.
+
+`prod.json` therefore carries BOTH: `trackOffsetsMs` (audio, what align.mjs
+measures and must keep measuring) and `visualTrackOffsetsMs` (frames, what
+every comparison tool reads). See `tools/inspect/ADAPTER.md`.
+
+Traced and patched by Codex/GPT-5.6; gates run and committed here.
+
 ### §15.2 Open — measured, not guessed
 
 * ~~Hair step size.~~ **BOUNDED 2026-08-14 — dt is in [1/60, 1/40] and 1/60

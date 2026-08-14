@@ -41,7 +41,7 @@ const tag = extra.length ? '_' + extra.join('_').replace(/[^\w.-]/g, '') : '';
 
 const prod = JSON.parse(fs.readFileSync(fromRepo('productions/lapsus/prod.json'), 'utf8'));
 const cap = prod.captures[0];
-const offsets = cap.trackOffsetsMs;
+const offsets = cap.visualTrackOffsetsMs ?? cap.trackOffsetsMs;
 const inP1 = scene in PHASE1;
 const entry = PHASE1[scene] ?? PHASE2[scene];
 if (!entry) { console.error(`unknown part "${scene}"`); process.exit(2); }

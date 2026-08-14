@@ -53,9 +53,10 @@ const DTS = [1 / 60, 1 / 50, 1 / 40, 1 / 30, 1 / 25, 1 / 20, 1 / 15, 1 / 12];
 
 const prod = JSON.parse(fs.readFileSync(fromRepo('productions/lapsus/prod.json'), 'utf8'));
 const cap = prod.captures[0];
+const offsets = cap.visualTrackOffsetsMs ?? cap.trackOffsetsMs;
 const OFF = {
-  1: cap.trackOffsetsMs['data/mjuusik/1.mp3'] / 1000,
-  2: cap.trackOffsetsMs['data/mjuusik/2.mp3'] / 1000,
+  1: offsets['data/mjuusik/1.mp3'] / 1000,
+  2: offsets['data/mjuusik/2.mp3'] / 1000,
 };
 const TMP = path.join(process.env.TMPDIR ?? '/tmp', 'lapsus-hairdt');
 fs.mkdirSync(TMP, { recursive: true });

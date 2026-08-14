@@ -34,7 +34,8 @@ if (!scene || !Number.isFinite(start) || !Number.isFinite(local)) {
 
 const prod = JSON.parse(fs.readFileSync(fromRepo('productions/lapsus/prod.json'), 'utf8'));
 const cap = prod.captures[0];
-const off = cap.trackOffsetsMs[phase === 1 ? 'data/mjuusik/1.mp3' : 'data/mjuusik/2.mp3'] / 1000;
+const offsets = cap.visualTrackOffsetsMs ?? cap.trackOffsetsMs;
+const off = offsets[phase === 1 ? 'data/mjuusik/1.mp3' : 'data/mjuusik/2.mp3'] / 1000;
 const TMP = path.join(process.env.TMPDIR ?? '/tmp', 'lapsus-partclock');
 fs.mkdirSync(TMP, { recursive: true });
 

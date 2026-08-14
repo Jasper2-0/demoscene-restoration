@@ -65,3 +65,12 @@ difference.
 `prod.json` — `captures[0].path` and `captures[0].trackOffsetsMs`. The tools
 read the capture; the adapter owns the offsets, because only the production
 knows which track a part belongs to.
+
+A production may also carry `captures[0].visualTrackOffsetsMs`. When an engine
+starts its audio and its frame clock at measurably different instants, the two
+cannot share one origin: the audio offset is what an amplitude-envelope
+correlation measures, and the visual offset is where the *pictures* line up.
+Lapsus splits by 40ms in phase 2 because the binary resets its QPC timer only
+after the synchronous `FSOUND_PlaySound` returns. Anything comparing frames
+takes `visualTrackOffsetsMs ?? trackOffsetsMs`; anything measuring or aligning
+audio keeps reading `trackOffsetsMs`, or it would re-measure its own output.

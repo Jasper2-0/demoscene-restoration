@@ -2112,7 +2112,7 @@ function accBlit() {
   // frame should be compared against. A production with a single clock just
   // returns captureTime = offset + t.
   const prod = await (await fetch(ROOT + 'prod.json')).json();
-  const trk = prod.captures[0].trackOffsetsMs;
+  const trk = prod.captures[0].visualTrackOffsetsMs ?? prod.captures[0].trackOffsetsMs;
   const OFFSETS = { 1: trk['data/mjuusik/1.mp3'] / 1000, 2: trk['data/mjuusik/2.mp3'] / 1000 };
   const SCHEDULE = [
     ...PHASE1.map(([name, start, dur]) => ({ name, phase: 1, start, dur })),
@@ -2253,8 +2253,10 @@ function accBlit() {
     phase = n;
     audio.src = track(n);
     audio.currentTime = 0;
-    resetClock();
-    audio.play().then(res, res);
+    // The binary resets its QPC timer only AFTER synchronous FSOUND_PlaySound
+    // returns. Keep the same ordering: starting the visual clock before the
+    // browser has started playback makes phase time run early during startup.
+    audio.play().then(() => { resetClock(); res(); }, () => { resetClock(); res(); });
   });
 
   // A no-clear part in a REAL loop needs no replay window at all: the

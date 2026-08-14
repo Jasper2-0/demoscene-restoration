@@ -52,8 +52,9 @@ const PHASE2 = {
 const prod = JSON.parse(fs.readFileSync(fromRepo('productions/lapsus/prod.json'), 'utf8'));
 const cap = prod.captures[0];
 const MKV = fromRepo(cap.path);
-const off1 = cap.trackOffsetsMs['data/mjuusik/1.mp3'] / 1000;
-const off2 = cap.trackOffsetsMs['data/mjuusik/2.mp3'] / 1000;
+const offsets = cap.visualTrackOffsetsMs ?? cap.trackOffsetsMs;
+const off1 = offsets['data/mjuusik/1.mp3'] / 1000;
+const off2 = offsets['data/mjuusik/2.mp3'] / 1000;
 const TMP = path.join(process.env.TMPDIR ?? '/tmp', 'lapsus-allparts');
 fs.mkdirSync(TMP, { recursive: true });
 

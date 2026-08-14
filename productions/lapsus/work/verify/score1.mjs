@@ -14,8 +14,9 @@ const part=process.argv[2], local=parseFloat(process.argv[3]);
 const extra=process.argv.slice(4).filter((a)=>a.includes('='));
 const prod=JSON.parse(fs.readFileSync(fromRepo('productions/lapsus/prod.json'),'utf8'));
 const cap=prod.captures[0], MKV=fromRepo(cap.path);
-const PH={1:{off:cap.trackOffsetsMs['data/mjuusik/1.mp3']/1000,p:{empt:1,flu2:14,pene:23,krediili:31,silli:47,syrjakyla:55,paleksi:64.531,pehko:74.062,hulluolli:83.593}},
-          2:{off:cap.trackOffsetsMs['data/mjuusik/2.mp3']/1000,p:{kuubiotekniikka:0,diskojea:13.8,kartonki:22.3,hairball:29.7,higherbiing:36.7,viherio:50.7,morko:61.16,turska:64.7,rad_out:72.2,kaivoalieni:86.2,made:99.7,hedi:105.2}}};
+const offsets=cap.visualTrackOffsetsMs??cap.trackOffsetsMs;
+const PH={1:{off:offsets['data/mjuusik/1.mp3']/1000,p:{empt:1,flu2:14,pene:23,krediili:31,silli:47,syrjakyla:55,paleksi:64.531,pehko:74.062,hulluolli:83.593}},
+          2:{off:offsets['data/mjuusik/2.mp3']/1000,p:{kuubiotekniikka:0,diskojea:13.8,kartonki:22.3,hairball:29.7,higherbiing:36.7,viherio:50.7,morko:61.16,turska:64.7,rad_out:72.2,kaivoalieni:86.2,made:99.7,hedi:105.2}}};
 const ph = PH[1].p[part]!==undefined?PH[1]:PH[2];
 const capture = ph.off + ph.p[part] + local;
 const TMP=path.join(process.env.TMPDIR??'/tmp','lapsus-score1'); fs.mkdirSync(TMP,{recursive:true});

@@ -3095,8 +3095,26 @@ That closes a hypothesis that was standing against three separate issues.
 
 **Morko's actual peculiarity is its scene graph.** `morko.lws` is two long
 articulated chains — ~12 copies of `nivel1.lwo` each ("nivel" is Finnish for
-*joint*), every one `ParentItem`-ed to the previous, ending in the null `tgt1`
-/ `tgt2` — plus `nivel1paaB`, `luppakorva`, three lights and three cameras. A
-deep parent chain is where a per-link transform error compounds into a large
-displacement at the tip, which is what its frames show. That is where to look
-next, not at part code.
+*joint*), every one `ParentItem`-ed to the previous — plus `nivel1paaB`,
+`luppakorva`, three lights and three cameras. A deep parent chain is where a
+per-link transform error compounds into a large displacement at the tip, which
+is what its frames show. That is where to look next, not at part code.
+
+> **CORRECTED 2026-08-14.** This paragraph originally said the chains "end in
+> the null `tgt1` / `tgt2`", which read as engine-linked targets. They are not:
+> `tgt1` and `tgt2` are unparented and unreferenced, and the two `IKAnchor 1`
+> lines are authoring metadata the executable never parses — it contains no
+> loader tokens for `IKAnchor`, goals, pivots or controllers. There is no
+> `TargetItem`, `TargetObject` or pivot record in the scene at all, so nothing
+> in morko can be explained by targeting or IK.
+>
+> The chain was also NOT the fault. The transform maths was verified correct on
+> its own terms: `0x424b70 -> 0x43fdf0(case 4)` expands to `Ry(h)·Rx(p)·Rz(b)`,
+> matching our implementation with max element delta 0 over randomised inputs,
+> and the binary's parent recursion matches `M.mul(parent, local)`. All 2,727
+> morko keys have zero tension/continuity/bias, so the envelope shape is not it
+> either. The real cause was the phase-2 visual clock (NOTES.md §15.1b): morko's
+> deep chains just make a 40ms timing error *look* like a transform error,
+> because a fast chain displaces furthest per unit of wrong time. Worth
+> remembering — "which part is worst" points at whatever amplifies the error,
+> not at what causes it.
