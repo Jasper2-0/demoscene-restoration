@@ -1871,23 +1871,34 @@ function accBlit() {
     }
     return pics.get(file);
   };
+  /**
+   * The loading picture alone, at `opacity`, over whatever is already there.
+   *
+   * 1:1 IN PIXELS, exactly as the backdrops are drawn. Both loading screens
+   * are 640x512: 640x480 of artwork padded to a power-of-two height with a
+   * flat fill. The engine blits them pixel for pixel, so the pad falls off the
+   * bottom of the screen. Stretching all 512 rows into 480 squashes the
+   * picture by 6.7% and misaligns everything in it — the same mistake already
+   * found and fixed for the backdrops.
+   */
+  function drawLoadingPicture(tex, opacity = 1) {
+    const [tw, th] = texSize.get(tex) ?? [640, 480];
+    const fu = Math.min(1, 640 / tw), fv = Math.min(1, 480 / th);
+    drawPicture(tex, 0, 0, 640, 480, opacity, [[0, 0], [fu, 0], [fu, fv], [0, fv]]);
+  }
   /** clear + picture, with the boot FadeIn (Demo+0x6c, mode 3, black) on top. */
   function drawLoadingScreen(tex, fade = 1) {
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (tex) {
-      // 1:1 IN PIXELS, exactly as the backdrops are drawn. Both loading
-      // screens are 640x512: 640x480 of artwork padded to a power-of-two
-      // height with a flat fill. The engine blits them pixel for pixel, so the
-      // pad falls off the bottom of the screen. Stretching all 512 rows into
-      // 480 squashes the picture by 6.7% and misaligns everything in it — the
-      // same mistake already found and fixed for the backdrops.
-      const [tw, th] = texSize.get(tex) ?? [640, 480];
-      const fu = Math.min(1, 640 / tw), fv = Math.min(1, 480 / th);
-      drawPicture(tex, 0, 0, 640, 480, 1, [[0, 0], [fu, 0], [fu, fv], [0, fv]]);
-    }
+    if (tex) drawLoadingPicture(tex, 1);
     if (fade < 1) drawFade('in', 3, fade);
   }
+  // Half a second of dissolve out of the second loading screen into part 2.
+  // NOT in the original, which cut straight from loading2.jpg to the first
+  // frame of kuubiotekniikka — but the original also cut its music off there,
+  // and now that the track plays out (see the handover below) the hard cut is
+  // the only abrupt thing left in a transition that is otherwise gentle.
+  const LOADER_FADE = 0.5;
 
   const ui = document.getElementById('ui');
   const setStatus = (s) => { if (ui) ui.textContent = s; };
@@ -2181,6 +2192,11 @@ function accBlit() {
         await renderLive(part, local);
         applyFades(cur, local, dur);
       }
+    }
+    // The dissolve goes on top of everything, the part's own fades included.
+    if (phase === 2 && t < LOADER_FADE) {
+      const tex = pics.get(LOADING_PIC.loadpart2);
+      if (tex) drawLoadingPicture(tex, 1 - t / LOADER_FADE);
     }
     // What one live frame actually costs, for work/verify/livetrace.mjs. Frame
     // INTERVAL cannot answer this: vsync hides every part that still has

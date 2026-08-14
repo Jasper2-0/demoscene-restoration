@@ -24,12 +24,14 @@ await withPage(
       }, seek);
       console.log(`  seeked to ${landed.toFixed(2)}s`);
     }
+    const sampleMs = (process.argv.find((a) => a.startsWith('--ms=')) ?? '').slice(5);
+    if (sampleMs) await page.evaluate((v) => { window.__sampleMs = v; }, Number(sampleMs));
     const rows = await page.evaluate(async (SECS) => {
       const gl = document.getElementById('c').getContext('webgl2');
       const out = [];
       const t0 = performance.now();
       while (performance.now() - t0 < SECS * 1000) {
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, Number(window.__sampleMs) || 500));
         const px = new Uint8Array(gl.drawingBufferWidth * gl.drawingBufferHeight * 4);
         gl.readPixels(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, gl.RGBA, gl.UNSIGNED_BYTE, px);
         let sum = 0;
