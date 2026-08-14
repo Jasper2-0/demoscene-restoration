@@ -1212,8 +1212,38 @@ correlation, which weights quiet lead-in like the downbeat.
   the 1.50s derived from ln(0.01)/ln(1-alpha) is right. Shortening it to
   "fix" the floor would be fitting one statistic at the expense of the image.
 
-  Still unexplained: why our sprites put more energy into their faint outer
-  region than the original's. The prior prime suspect was the HALF-TEXEL INSET —
+  **THE MECHANISM, quantitatively.** The trail is a repeated
+  `dst = dst * (1 - alpha)` in an 8-bit buffer, and how that ROUNDS decides
+  whether it ever reaches black. WebGL blending rounds to nearest, and under
+  round-to-nearest every value 0..10 is a FIXED POINT of `v * 0.95` —
+  `round(10 * 0.95) = round(9.5) = 10` — so a faint pixel never decays at all
+  and additive dust integrates into a permanent floor. Under truncation,
+  `floor(v * 0.95)`, the only fixed point is 0, so faint pixels decay away
+  while bright ones still accumulate.
+
+      round-to-nearest fixed points: 0,1,2,3,4,5,6,7,8,9,10
+      truncating fixed points:       0
+
+  Our measured floor is median **12**, sitting exactly at that boundary, and
+  the capture's is **1**. That is the whole discrepancy, and it predicts the
+  observed number rather than merely being consistent with it. It also
+  explains why the bright cores match (coverage >= 64 is 6.0% against 5.9%):
+  values above ~10 decay correctly under either rule.
+
+  **The fix is a ping-pong FBO** — not for the frame-loop structure, which is
+  already right, but because the default framebuffer gives no control over
+  blend rounding, whereas an RGBA8 FBO pair lets the decay be an explicit
+  shader pass with `floor()`. That was implemented (two RGBA8 FBOs, a
+  truncating decay pass, a blit) and abandoned unfinished: the FBOs report
+  FRAMEBUFFER_COMPLETE and the decay pass is clean, but the first `renderAt`
+  into a non-default framebuffer raises GL_INVALID_OPERATION and the cause was
+  not found within a sensible budget. Reverted rather than left half-working.
+  Whoever picks this up starts from a known mechanism and a known-good decay
+  pass, and needs only to find what in the main render path objects to a
+  non-default target.
+
+  Still unexplained by anything simpler: why our sprites put more energy into
+  their faint outer region than the original's. The prior prime suspect was the HALF-TEXEL INSET —
   §11.2.4 samples `(W-1)/TW` from a `+0.5/TW` origin, i.e. the engine crops
   the outermost half-texel of every tile, while we sample the full [0,1] range
   and so pull in the edge texels of a 32x32 sprite magnified to ~100px — now
