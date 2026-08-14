@@ -78,6 +78,11 @@ export function addNote(note) {
 
   const file = path.join(dir, 'notes.json');
   const all = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [];
+  // A double-click on `record` should not become two findings. Same part,
+  // same instant, same words is the same observation.
+  const dup = all.find((n) => n.part === stored.part && n.local === stored.local &&
+                              n.text === stored.text);
+  if (dup) return dup;
   all.push(stored);
   fs.writeFileSync(file, JSON.stringify(all, null, 2));
 
@@ -127,14 +132,29 @@ function fileToGitHub(n) {
   // No sweep issue for this part — the observation is still real, so open one.
   // Marked `observed` rather than `sweep` so the sweep's own sync never treats
   // it as one of its findings and closes it from under you.
-  for (const [name, color, desc] of [['observed', '5319e7', 'Reported from the inspector by a human']]) {
-    try { gh(['label', 'create', name, '--color', color, '--description', desc]); } catch { /* exists */ }
-  }
+  // `gh label create` prints to stderr when the label exists, which is noise
+  // rather than an error; check first instead.
+  try {
+    const have = JSON.parse(gh(['label', 'list', '--limit', '200', '--json', 'name']))
+      .map((l) => l.name);
+    if (!have.includes('observed')) {
+      gh(['label', 'create', 'observed', '--color', '5319e7',
+          '--description', 'Reported from the inspector by a human']);
+    }
+  } catch { /* labels are cosmetic; never block filing on them */ }
   const out = gh(['issue', 'create', '--title', `${n.part} — ${n.text.split('\n')[0].slice(0, 70)}`,
     '--body-file', '-', '--label', 'observed', '--label', `prod:${n.production}`], body);
   const url = out.trim().split('\n').pop();
   return { url, action: 'create' };
 }
+
+/** Overwrite the stored notes (used when filing or resolving them). */
+export function writeNotes(prod, notes) {
+  fs.writeFileSync(path.join(outDir(prod), 'notes.json'), JSON.stringify(notes, null, 2));
+}
+
+/** File one already-stored note, and hand back what the tracker did. */
+export function fileNote(note) { return fileToGitHub(note); }
 
 /** Notes for a production, newest first. */
 export function listNotes(prod) {

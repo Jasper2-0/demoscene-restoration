@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fromRepo } from '../harness/index.mjs';
+import { listNotes, writeNotes, fileNote } from './notes.mjs';
 
 const argv = process.argv.slice(2);
 const prodName = argv.find((a) => !a.startsWith('--'));
@@ -46,6 +47,26 @@ const TAG = val('tag', '');
 const SEV_ORDER = { error: 0, major: 1, minor: 2 };
 const MIN = val('min', 'minor');
 if (!(MIN in SEV_ORDER)) { console.error(`--min must be one of ${Object.keys(SEV_ORDER)}`); process.exit(2); }
+
+// --notes: file observations recorded in the inspector that were never sent.
+// Kept separate from the sweep sync because they are a different kind of thing
+// — a human saw it, so nothing here may ever close or rewrite one.
+if (has('notes')) {
+  const notes = listNotes(prodName).slice().reverse();   // oldest first, stable numbering
+  const todo = notes.filter((n) => !n.issue && n.status !== 'done');
+  console.log(`${prodName}: ${notes.length} note(s), ${todo.length} unfiled`);
+  for (const n of todo) {
+    console.log(`  ${APPLY ? 'FILE' : 'would file'}  ${n.part} @ ${n.local}s — ${n.text.split('\n')[0].slice(0, 60)}`);
+    if (!APPLY) continue;
+    try {
+      n.issue = fileNote(n);
+      console.log(`    -> ${n.issue.url ?? '#' + n.issue.number} (${n.issue.action})`);
+    } catch (e) { console.error(`    ! ${e.message.split('\n')[0]}`); }
+  }
+  if (APPLY) writeNotes(prodName, notes.slice().reverse());
+  else console.log('\n  dry run — nothing was filed. Re-run with --apply.');
+  process.exit(0);
+}
 
 const runPath = fromRepo('productions', prodName, 'work/verify/inspect',
   `run${TAG ? `-${TAG}` : ''}.json`);
