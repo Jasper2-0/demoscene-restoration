@@ -34,6 +34,7 @@ import { parseLWO } from '../../work/js/lwo.mjs';
 import { decodeTGA } from '../../work/js/tga.mjs';
 import { parseHair, buildStrands, simulateSpan, shadeNormals, toLineVerts, msvcRand } from '../../work/js/hair.mjs';
 import { parseParticles, createSystem, stepSystem, frameOf, billboard } from '../../work/js/particles.mjs';
+import { MiniGL } from './shared/minigl.js';   // vendored: tools/sync-shared-runtime.mjs
 
 const ROOT = new URL('../../', import.meta.url).href;
 const DATA = ROOT + 'work/unpacked/lapsus_dat/data/';
@@ -127,173 +128,25 @@ const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer: true });
 if (!gl) throw new Error('WebGL2 required');
 
-// PER-VERTEX lighting and texgen, because that is where the fixed-function
-// pipeline does both. glShadeModel is never called anywhere in the binary, so
-// it keeps its GL_SMOOTH default: GL lights each VERTEX, emits a primary and a
-// secondary colour, and Gouraud-interpolates them across the triangle. It also
-// generates GL_SPHERE_MAP coordinates per vertex and interpolates those.
+// THE FIXED-FUNCTION PIPELINE IS THE SHIM'S JOB, not this file's. Everything
+// the meshes need from OpenGL 1.x — per-vertex lighting, materials, the
+// specular term, sphere-map texgen, the two texture units and their env
+// modes, fog — lives in shared/sunflower/js/minigl.js, where ptct, wonder and
+// energia already are. This file re-derived all of it once, got several parts
+// wrong, and could share none of the answers.
 //
-// Doing either per fragment is strictly "better" and therefore wrong here. A
-// per-pixel highlight stays round and tight across a large triangle where the
-// original's spreads and distorts between its corners, and a per-pixel sphere
-// map curves where the original's is linear across each face. On coarse
-// geometry — kartonki's blades, morko's plates — that is a visible difference,
-// not a subtle one, and it always errs toward looking too clean.
-const VS = `#version 300 es
-in vec3 aPos; in vec3 aNormal; in vec2 aUV; in vec2 aUV1; in vec2 aUV2;
-uniform mat4 uMV, uProj;
-uniform vec3 uColor, uAmbient;
-uniform bool uUnlit, uTexGen0;
-uniform float uSpec, uShine;
-#define MAXL 8
-uniform int uNumLights;
-uniform vec3 uLightDir[MAXL];        // eye space, pointing TOWARD the light
-uniform vec3 uLightColor[MAXL];
-out vec3 vCol, vSpecCol, vP; out vec2 vUV, vUV1, vUV2, vUVenv;
-vec2 sphereMap(vec3 n, vec3 p){
-  vec3 u = normalize(p);
-  vec3 r = u - 2.0 * n * dot(n, u);
-  float m = 2.0 * sqrt(r.x*r.x + r.y*r.y + (r.z + 1.0)*(r.z + 1.0));
-  return vec2(r.x/m + 0.5, r.y/m + 0.5);
-}
-void main(){
-  vec4 p = uMV * vec4(aPos, 1.0); vP = p.xyz;
-  vec3 n = normalize(mat3(uMV) * aNormal);      // GL_NORMALIZE equivalent
-  vUV1 = aUV1; vUV2 = aUV2;
-  vec2 sm = sphereMap(n, p.xyz);
-  vUVenv = sm;
-  vUV = uTexGen0 ? sm : aUV;
-  if (uUnlit) { vCol = uColor; vSpecCol = vec3(0.0); }
-  else {
-    vec3 diff = vec3(0.0), spec = vec3(0.0);
-    vec3 V = vec3(0.0, 0.0, 1.0);                // infinite viewer
-    for (int i = 0; i < MAXL; i++) {
-      if (i >= uNumLights) break;
-      diff += uLightColor[i] * max(dot(n, uLightDir[i]), 0.0);
-      if (uSpec > 0.0) {
-        vec3 H = normalize(uLightDir[i] + V);
-        spec += uLightColor[i] * uSpec * pow(max(dot(n, H), 0.0), uShine);
-      }
-    }
-    vCol = uAmbient + uColor * diff;             // 1*lmAmbient + K*sum(N.L)*Lc
-    vSpecCol = spec;
-  }
-  gl_Position = uProj * p;
-}`;
-// Fixed-function-equivalent lighting, per RENDER.md §8: per-light diffuse
-// only (no per-light ambient), light-model ambient from the scene, and the
-// LWO surface's own diffuse coefficient. No hardcoded fill light — pene has
-// AmbientIntensity 0, so anything facing away from its single distant light
-// is genuinely black, and an invented ambient floor would wash it out.
-const FS = `#version 300 es
-precision highp float;
-// vCol / vSpecCol are the fixed-function PRIMARY and SECONDARY colours, both
-// computed per vertex in VS and Gouraud-interpolated here. vUV already carries
-// unit 0's texgen result when mask 0x80 selected it, and vUVenv the sphere map
-// for the mask-0x81 unit-1 reflection.
-in vec3 vCol, vSpecCol, vP; in vec2 vUV, vUV1, vUV2, vUVenv; out vec4 o;
-uniform vec3 uColor;
-uniform sampler2D uTex;
-uniform bool uHasTex, uAlphaFromTex;
-uniform float uAlpha;
-uniform sampler2D uEnv;              // RIMG reflection image
-uniform bool uHasEnv;
-uniform sampler2D uTex1;             // second texture unit
-uniform bool uHasTex1, uTex1Add;     // unit-1 env: GL_ADD when true, else MODULATE
-uniform bool uPass1;                 // mask-7 second pass: additive LUMI only
-uniform bool uFogOn; uniform vec3 uFogColor; uniform vec2 uFogRange;
-void main(){
-  // Mask 7 (COLR+DIFF+LUMI) draws a SECOND additive pass carrying only the
-  // LUMI texture, on its own UV set (RENDER.md §4.5, mat[+0x60] = 1).
-  // Pass 1 is NOT a bare additive blit (RENDER.md §13.4): it modulates by
-  // glColor, samples its OWN third UV set, writes depth, and is still fogged —
-  // material[+0x6a] is never written by the SURF builder, so fog stays on.
-  // That last one bites higherbiing, the only mask-7 part with FogType 1.
-  vec3 pass1 = uColor * texture(uTex1, vUV2).rgb;
-  // PRIMARY COLOUR FIRST, then the texture stages — the order the
-  // fixed-function pipeline runs in, and it matters because the material's
-  // GL_AMBIENT is not the diffuse colour. The SURF builder stores
-  // 0x437f0000 = 255.0 into material[+0x04/+0x08/+0x0c] unconditionally
-  // (0x42b90b-0x42b937), so GL_AMBIENT = (1,1,1) for every surface in the
-  // demo, and GL_EMISSION is never written. Only GL_DIFFUSE carries K.
-  // Folding the ambient into K (col = K*(amb + sum)) attenuated the light-model
-  // ambient by the surface colour, which is wrong wherever AmbientIntensity is
-  // non-zero — paleksi 0.515, rad_out 0.54, viherio 0.22 (RENDER.md §13.2.1).
-  vec3 col = vCol;
-  // MASK 0x80 — a reflection image and NOTHING else. The engine binds the
-  // sphere map to texture unit ZERO (0x42bd1e: setTexCount(1),
-  // setTexture(unit 0, refl), setTexGen(unit 0, SPHERE_MAP)), and unit 0's env
-  // mode is unconditionally GL_MODULATE (§4.4 @0x40c231). So on these surfaces
-  // the reflection MULTIPLIES the lit colour; it is only ADDED when it lands
-  // on unit 1, which happens for mask 0x81 (a colour texture as well).
-  // Unit 0 modulates the whole primary colour, the ambient term included.
-  float alpha = uAlpha;
-  if (uHasTex) {
-    vec4 t0 = texture(uTex, vUV);
-    col *= t0.rgb;
-    // A TTEX surface's cutout lives in the colour texture's alpha, put there
-    // by the _a companion image (RENDER.md 5.3). NB: no backticks in GLSL
-    // comments — the shader is a JS template literal and they close it.
-    if (uAlphaFromTex) alpha *= t0.a;
-  }
-  // Unit 1: GL_MODULATE for a DIFF texture (mask 5), GL_ADD for LUMI (mask 3).
-  if (uHasTex1) {
-    vec3 t1 = texture(uTex1, vUV1).rgb;
-    if (uTex1Add) col += t1; else col *= t1;
-  }
-  // GL_SPHERE_MAP added on top: the engine puts the RIMG reflection on unit 1
-  // with env mode GL_ADD (RENDER.md §4, mask 0x81), which is why these
-  // surfaces read as glowing. The texel is added UNSCALED — LWO reflectivity
-  // does not attenuate it, it only decides whether the sphere-map bit is set
-  // at all (mask bit 0x80 is cleared unless reflectivity > 0.95). REFL is a
-  // threshold, not a coefficient.
-  if (uHasEnv) col += texture(uEnv, vUVenv).rgb;
-  // Specular added AFTER the texture: the engine enables
-  // GL_SEPARATE_SPECULAR_COLOR, so the highlight is not modulated by the
-  // texture the way the diffuse term is (RENDER.md §4.5).
-  col += vSpecCol;
-  // Fog last: GL_LINEAR over [min,max], the factor running the full 0->1.
-  // GL_FOG_DENSITY is never set and FogMin/MaxAmount are ignored, so this is
-  // an unclamped linear ramp — not the GL_EXP that METHOD.md warns about.
-  if (uPass1) col = pass1;
-  if (uFogOn) {
-    float f = clamp((uFogRange.y + vP.z) / (uFogRange.y - uFogRange.x), 0.0, 1.0);
-    col = mix(uFogColor, col, f);
-  }
-  o = vec4(col, alpha);
-}`;
+// minigl ADOPTS the context above rather than making its own, because the
+// capture harness needs preserveDrawingBuffer and because the passes below
+// that are genuinely this demo's own — hair, particles, pictures, fades, the
+// feedback accumulator — keep drawing with their own programs on the same
+// context.
+const mgl = new MiniGL(gl);
+
+// The passes that are genuinely this demo's own still compile their own
+// shaders: hair, particles, 2D pictures, fades and the feedback accumulator.
 const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
-const prog = gl.createProgram();
-gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
-gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
-gl.linkProgram(prog);
-if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
-gl.useProgram(prog);
-const uMV = gl.getUniformLocation(prog, 'uMV');
-const uProj = gl.getUniformLocation(prog, 'uProj');
-const uColor = gl.getUniformLocation(prog, 'uColor');
-const uHasTex = gl.getUniformLocation(prog, 'uHasTex');
-const uUnlit = gl.getUniformLocation(prog, 'uUnlit');
-const uTwoSided = gl.getUniformLocation(prog, 'uTwoSided');
-const uDiffuse = gl.getUniformLocation(prog, 'uDiffuse');
-const uAlpha = gl.getUniformLocation(prog, 'uAlpha');
-const uAmbient = gl.getUniformLocation(prog, 'uAmbient');
-const uNumLights = gl.getUniformLocation(prog, 'uNumLights');
-const uLightDir = gl.getUniformLocation(prog, 'uLightDir');
-const uLightColor = gl.getUniformLocation(prog, 'uLightColor');
-const uEnv = gl.getUniformLocation(prog, 'uEnv');
-const uHasEnv = gl.getUniformLocation(prog, 'uHasEnv');
-const uRefl = gl.getUniformLocation(prog, 'uRefl');
-const uSpec = gl.getUniformLocation(prog, 'uSpec');
-const uShine = gl.getUniformLocation(prog, 'uShine');
-const uFogOn = gl.getUniformLocation(prog, 'uFogOn');
-const uFogColor = gl.getUniformLocation(prog, 'uFogColor');
-const uFogRange = gl.getUniformLocation(prog, 'uFogRange');
-const uHasTex1 = gl.getUniformLocation(prog, 'uHasTex1');
-const uTex1Add = gl.getUniformLocation(prog, 'uTex1Add');
-const uPass1 = gl.getUniformLocation(prog, 'uPass1');
-const uTexGen0 = gl.getUniformLocation(prog, 'uTexGen0');
+
 
 // Texture coordinates, read out of dm2000 itself — NOT from LightWave's
 // documentation, which disagrees (METHOD.md, "the binary is the source of
@@ -507,11 +360,11 @@ function meshFromLayer(layer, obj) {
   // BLOK projections, and a channel's coordinates come from ITS OWN block —
   // so every surface group gets its own VAO with uv0/uv1 computed for that
   // surface. (The engine's vertex is stride 48 with uv0@32 and uv1@40.)
-  const mkBuf = (data) => {
-    const b = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    return b;
-  };
+  // Positions and normals are SHARED by every surface group in the layer, so
+  // they are buffers the meshes borrow; only the UVs and the index list are
+  // per-surface. Owning them per mesh would copy 50k triangles once per
+  // surface.
+  const mkBuf = (data) => mgl.createBuffer(data);
   const posBuf = mkBuf(EP), nrmBuf = mkBuf(nrm);
   // Per EXPANDED vertex. A UV map is keyed by original point, so it is looked
   // up through `src`; a projection is computed from the position, so it reads
@@ -554,23 +407,17 @@ function meshFromLayer(layer, obj) {
     const bSecond = bDiff ?? bLumi;
     const bPass1 = (bDiff && bLumi) ? bLumi : null;
 
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    const attach = (loc, buf, size) => {
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
-    };
-    attach(0, posBuf, 3); attach(1, nrmBuf, 3);
-    attach(2, uvFor(bColr), 2);
-    attach(3, uvFor(bSecond ?? bColr), 2);
-    attach(4, uvFor(bPass1 ?? bSecond ?? bColr), 2);
-    const ib = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(list), gl.STATIC_DRAW);
-    gl.bindVertexArray(null);
-    parts.push({ surfName, vao, ib, count: list.length,
-      secondIsAdd: !bDiff && !!bLumi, hasSecond: !!bSecond, pass1Blk: bPass1,
-      pass1Uv: bPass1 ? uvFor(bPass1) : null });
+    // THREE UV SETS, TWO UNITS (RENDER.md §14.1). Set 0 is COLR's projection,
+    // set 1 the second unit's, and set 2 the mask-7 additive pass's own — that
+    // pass is unit 0 sampling a different set, not a third texture unit. The
+    // draw picks which sets feed which unit, as glClientActiveTexture does.
+    const mesh = mgl.createMesh({
+      positions: posBuf, normals: nrmBuf,
+      uvs: [uvFor(bColr), uvFor(bSecond ?? bColr), uvFor(bPass1 ?? bSecond ?? bColr)],
+      indices: new Uint32Array(list),
+    });
+    parts.push({ surfName, mesh, count: list.length,
+      secondIsAdd: !bDiff && !!bLumi, hasSecond: !!bSecond, pass1Blk: bPass1 });
   }
   // Bounding-sphere centre (bbox midpoint) in object space — the sort key the
   // engine uses, transformed to camera space per frame (RENDER.md §4 step 5).
@@ -614,12 +461,6 @@ function meshFromLayer(layer, obj) {
   return { parts, count: idxCount, centre: [0,1,2].map((k) => (mn[k] + mx[k]) / 2),
            morphMaps, applyMorph: morphed ? applyMorph : null };
 }
-
-gl.bindAttribLocation(prog, 0, 'aPos');
-gl.bindAttribLocation(prog, 1, 'aNormal');
-gl.bindAttribLocation(prog, 2, 'aUV');
-gl.bindAttribLocation(prog, 3, 'aUV1');
-gl.bindAttribLocation(prog, 4, 'aUV2');
 
 // RENDER.md §8: RGBA8, REPEAT/REPEAT, LINEAR mag, LINEAR_MIPMAP_NEAREST min
 // (no trilinear — the mip popping is original), and rows are NOT flipped.
@@ -807,7 +648,6 @@ function drawFade(kind, mode, v, rgb = [0, 0, 0]) {
   }
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
-  gl.useProgram(prog);
 }
 window.__lapsusFade = drawFade;
 
@@ -941,7 +781,6 @@ function drawPicture(tex, x, y, w, h, opacity) {
   gl.uniform4f(gl.getUniformLocation(picProg, 'uRect'), x, y, w, h);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
-  gl.useProgram(prog);
 }
 
 const ACC_VS = `#version 300 es
@@ -1005,11 +844,10 @@ function accDecay(keep) {
   gl.clear(gl.DEPTH_BUFFER_BIT);
   for (const u of [0, 1, 2, 3]) { gl.activeTexture(gl.TEXTURE0 + u); gl.bindTexture(gl.TEXTURE_2D, null); }
   gl.activeTexture(gl.TEXTURE0);
-  // Hand the main program back. renderAt sets uniforms on `prog` before it
-  // ever binds it — that is safe only because `prog` is current from module
-  // scope, and gl.uniform* on a program that is not current is
-  // GL_INVALID_OPERATION.
-  gl.useProgram(prog);
+  // No need to hand the mesh program back: minigl binds its own program and
+  // defers every uniform to draw time, so these passes cannot strand it. That
+  // coupling is what made the accumulator raise GL_INVALID_OPERATION when it
+  // was first written — uniforms were set on a program that was not current.
   gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
   acc.cur = dst;
 }
@@ -1023,7 +861,6 @@ function accBlit() {
   gl.uniform1i(gl.getUniformLocation(blitProg, 'uSrc'), 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindTexture(gl.TEXTURE_2D, null);
-  gl.useProgram(prog);
 }
 
 const bgProg = gl.createProgram();
@@ -1376,15 +1213,15 @@ const bgVao = gl.createVertexArray();
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.enable(gl.DEPTH_TEST);
       gl.enable(gl.CULL_FACE);
-      gl.useProgram(prog);
     }
 
     if (fbAlpha != null && !useAcc) drawFade('in', 3, 1 - fbAlpha);
 
-    gl.uniformMatrix4fv(uProj, false, proj);
-    gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
-    gl.uniform1i(uEnv, 2);
-    gl.uniform1i(gl.getUniformLocation(prog, 'uTex1'), 1);
+    mgl.matrixMode(mgl.PROJECTION); mgl.loadMatrix(proj);
+    mgl.matrixMode(mgl.MODELVIEW);
+    // GL_NORMALIZE: the engine enables it, and both the lighting normal and
+    // the sphere-map normal are normalised because of it.
+    mgl.enableNormalize(true);
     // ---- LW_MorphMixer displacement, before anything reads the geometry.
     // Weight = the MorfForm envelope sampled at localTime, and a target is
     // dropped entirely unless |w| > 0.01 (FUN_0041be60 @0x41beb4 against
@@ -1414,22 +1251,29 @@ const bgVao = gl.createVertexArray();
       const c = L.color ?? [1, 1, 1], I = L.intensity ?? 1;
       lightCols.push(c[0]*I, c[1]*I, c[2]*I);
     }
-    gl.uniform1i(uNumLights, scene.lights.slice(0, 8).length);
-    if (lightDirs.length) {
-      gl.uniform3fv(uLightDir, new Float32Array(lightDirs));
-      gl.uniform3fv(uLightColor, new Float32Array(lightCols));
-    }
+    // w = 0 makes each one DIRECTIONAL, so the vector is the direction toward
+    // the light and no position enters. The specular light colour is the same
+    // colour as the diffuse: the engine never calls glLightfv(GL_SPECULAR),
+    // and GL's default for light 0 is white, so the highlight takes the
+    // light's own colour.
+    mgl.setLights(lightDirs.length / 3 ? Array.from({ length: lightDirs.length / 3 }, (_, i) => ({
+      pos: [lightDirs[i*3], lightDirs[i*3+1], lightDirs[i*3+2], 0],
+      diffuse: [lightCols[i*3], lightCols[i*3+1], lightCols[i*3+2]],
+      specular: [lightCols[i*3], lightCols[i*3+1], lightCols[i*3+2]],
+    })) : []);
     const ambI = scene.ambientIntensity ?? 0, ambC = scene.ambientColor ?? [1, 1, 1];
-    gl.uniform3f(uAmbient, ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
+    mgl.lightModelAmbient(ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
 
     // Fog: enabled only for FogType 1. Colour comes from BackdropColor when the
     // BackdropFog flag is set, else FogColor (RENDER.md §4).
     const fogOn = (scene.fog?.type ?? 0) === 1;
-    gl.uniform1i(uFogOn, fogOn ? 1 : 0);
+    mgl.enableFog(fogOn);
     if (fogOn) {
       const fc = scene.backdrop?.fog ? (scene.backdrop.color ?? [0,0,0]) : (scene.fog.color ?? [0,0,0]);
-      gl.uniform3f(uFogColor, fc[0], fc[1], fc[2]);
-      gl.uniform2f(uFogRange, scene.fog.minDist ?? 0, scene.fog.maxDist ?? 100);
+      // GL_LINEAR over [min,max] against eye -z. GL_FOG_DENSITY is never set
+      // and FogMin/MaxAmount are ignored, so this is a plain linear ramp — not
+      // the GL_EXP that METHOD.md warns about.
+      mgl.fog(scene.fog.minDist ?? 0, scene.fog.maxDist ?? 100, fc);
     }
     // ---- opaque first, then blended (RENDER.md 8 draw order)
     textured = 0;
@@ -1455,82 +1299,137 @@ const bgVao = gl.createVertexArray();
       for (const { o, part, mat } of (blended ? [...passes].reverse() : passes)) {
         const d = o.d;
         if (((mat.blendMode ?? 0) !== 0) !== blended) continue;
-        gl.uniformMatrix4fv(uMV, false, o.mv);
+        mgl.loadMatrix(o.mv);
         if (blended) {
-          gl.enable(gl.BLEND);
-          if (mat.blendMode === 1) gl.blendFunc(gl.ONE, gl.ONE);              // additive
-          else if (mat.blendMode === 2) gl.blendFunc(gl.DST_COLOR, gl.ZERO);  // multiplicative
-          else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);            // alpha
-          gl.depthMask(false);                                   // depth mode 2
-        } else { gl.disable(gl.BLEND); gl.depthMask(true); }     // depth mode 3
-        if (mat.twoSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
-        gl.uniform3f(uColor, mat.color[0], mat.color[1], mat.color[2]);
-        gl.uniform1i(uHasTex, mat.tex ? 1 : 0);
-        gl.uniform1i(uUnlit, mat.unlit ? 1 : 0);
-        gl.uniform1i(uTwoSided, mat.twoSided ? 1 : 0);
-        gl.uniform1f(uDiffuse, mat.diffuse ?? 1);
-        gl.uniform1f(uAlpha, mat.alpha ?? 1);
-      gl.uniform1i(gl.getUniformLocation(prog, 'uAlphaFromTex'), mat.alphaFromTex ? 1 : 0);
-        gl.uniform1i(uHasEnv, mat.envTex ? 1 : 0);
-        gl.uniform1f(uRefl, mat.refl ?? 0);
-        gl.uniform1f(uSpec, mat.spec ?? 0);
-        // THE REFERENCE HARDWARE CLAMPED. Settled by measurement, so the
-        // reasoning is recorded here rather than left as a standing doubt.
+          mgl.enableBlend(true);
+          if (mat.blendMode === 1) mgl.blendFunc(gl.ONE, gl.ONE);              // additive
+          else if (mat.blendMode === 2) mgl.blendFunc(gl.DST_COLOR, gl.ZERO);  // multiplicative
+          else mgl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);            // alpha
+          mgl.depthMask(false);                                  // depth mode 2
+        } else { mgl.enableBlend(false); mgl.depthMask(true); }  // depth mode 3
+        mgl.enableCullFace(!mat.twoSided);
+
+        // THE MATERIAL, and why it is shaped like this.
         //
-        // The engine really does hand GL an out-of-range exponent. The call is
-        // glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, material[+0x34]) at
-        // 0x40c19b-0x40c1a0, and FUN_0040c060 writes it on EVERY material —
-        // both branches end at the same call site (0x40c196):
+        // The SURF builder stores 0x437f0000 = 255.0 into material[+0x04/+0x08/
+        // +0x0c] unconditionally (0x42b90b-0x42b937), so GL_AMBIENT is (1,1,1)
+        // for EVERY surface in the demo and GL_EMISSION is never written. Only
+        // GL_DIFFUSE carries the surface's K. With glColor at white the fixed
+        // -function primary is therefore
         //
-        //   material[+0x69] set   -> 0x40c192: shininess = material[+0x34]
-        //   material[+0x69] clear -> 0x40c1d9: PUSH 1.0f; JMP 0x40c196
+        //     lightModelAmbient * 1  +  K * sum(lightColor * max(N.L, 0))
         //
-        // 9 of the archive's 27 GLOS-bearing surfaces map above 128. By the
-        // OpenGL spec that is GL_INVALID_VALUE, the state is left untouched,
-        // and the surface silently inherits the previous exponent — usually
-        // the 1.0 that the last non-specular surface wrote.
+        // — the ambient term arrives UNATTENUATED by the surface colour.
+        // Folding it into K instead (col = K * (amb + sum)) darkens every
+        // scene with a non-zero AmbientIntensity: paleksi 0.515, rad_out 0.54,
+        // viherio 0.22 (RENDER.md §13.2.1).
+        mgl.enableLighting(!mat.unlit);
+        if (mat.unlit) {
+          // RENDER.md §13.1: the unlit branch is a glColor4f substitution and
+          // nothing else — the texture stages still run on top of it.
+          mgl.color4(mat.color[0], mat.color[1], mat.color[2], mat.alpha ?? 1);
+        } else {
+          mgl.color4(1, 1, 1, mat.alpha ?? 1);
+          mgl.material({
+            ambient: [1, 1, 1],
+            diffuse: mat.color,
+            // The engine's specular is a scalar level applied to all three
+            // channels, and it is zeroed for a black surface colour.
+            specular: [mat.spec ?? 0, mat.spec ?? 0, mat.spec ?? 0],
+            // THE REFERENCE HARDWARE CLAMPED. Settled by measurement, so the
+            // reasoning is recorded rather than left as a standing doubt.
+            //
+            // The engine really does hand GL an out-of-range exponent. The
+            // call is glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS,
+            // material[+0x34]) at 0x40c19b-0x40c1a0, and FUN_0040c060 writes
+            // it on EVERY material — both branches end at the same call site
+            // (0x40c196):
+            //
+            //   material[+0x69] set   -> 0x40c192: shininess = material[+0x34]
+            //   material[+0x69] clear -> 0x40c1d9: PUSH 1.0f; JMP 0x40c196
+            //
+            // 9 of the archive's 27 GLOS-bearing surfaces map above 128. By
+            // the OpenGL spec that is GL_INVALID_VALUE, the state is left
+            // untouched, and the surface silently inherits the previous
+            // exponent — usually the 1.0 that the last non-specular surface
+            // wrote.
+            //
+            // That model was implemented in full, with the persistent state,
+            // the draw-order carry and the 1.0 reset, and MEASURED:
+            //
+            //   clamp to 128     syrjakyla 0.754 hedi 0.714 turska 0.937 flu2 0.648
+            //   reject-and-carry syrjakyla 0.379 hedi 0.453 turska 0.806 flu2 0.620
+            //
+            // Four independent parts, all worse, by large margins. The capture
+            // is the source of truth and it says the driver these frames were
+            // rendered on clamped into range instead of rejecting — which is
+            // what plenty of 2000-era GL drivers did with this exact call.
+            // Clamping is not an approximation of the engine's behaviour, it
+            // IS the observed behaviour; the spec is the external document
+            // that loses. (minigl clamps too, for the same measured reason.)
+            shininess: qs.has('shine') ? Number(qs.get('shine')) : (mat.shine ?? 16),
+          });
+        }
+
+        // ---- unit 0. GL_MODULATE unconditionally (§4.4 @0x40c231). For a
+        // mask-0x80 surface this unit carries the REFLECTION and nothing else
+        // (0x42bd1e: setTexCount(1), setTexture(0, refl), setTexGen(0,
+        // SPHERE_MAP)), so the sphere map MULTIPLIES the lit colour there — it
+        // is only added when it lands on unit 1, which is mask 0x81.
         //
-        // That model was implemented in full, with the persistent state, the
-        // draw-order carry and the 1.0 reset, and MEASURED against the capture:
+        // GL_MODULATE also multiplies ALPHA, which is where a TTEX surface's
+        // cutout comes from: the _a companion image was folded into this
+        // texture's alpha at load (RENDER.md §5.3).
+        mgl.activeTexture(0);
+        mgl.enableTexture(!!mat.tex);
+        if (mat.tex) { mgl.bindTexture(mat.tex); textured++; }
+        mgl.texGenSphereMap(!!mat.texGen0);
+        mgl.texEnv({ mode: 'modulate' });
+
+        // ---- unit 1, which the reflection and the second texture SHARE. The
+        // hardware has two units and the mask picks what sits on this one; no
+        // surface in the archive asks for both (RENDER.md §14, and
+        // work/verify/texunits.mjs counts them).
         //
-        //   clamp to 128     syrjakyla 0.754  hedi 0.714  turska 0.937  flu2 0.648
-        //   reject-and-carry syrjakyla 0.379  hedi 0.453  turska 0.806  flu2 0.620
-        //
-        // Four independent parts, all worse, by large margins. The capture is
-        // the source of truth and it says the driver these frames were rendered
-        // on clamped into range instead of rejecting — which is what plenty of
-        // 2000-era GL drivers did with this exact call. Clamping is therefore
-        // not an approximation of the engine's behaviour, it IS the observed
-        // behaviour; the spec is the external document that loses.
-        //
-        // Because every surface's exponent then takes effect on its own, none
-        // of the persistent-state machinery is needed and it is gone.
-        gl.uniform1f(uShine, qs.has('shine') ? Number(qs.get('shine'))
-                                          : Math.min(128, mat.shine ?? 16));
-        gl.uniform1i(uHasTex1, mat.tex1 ? 1 : 0);
-        gl.uniform1i(uTex1Add, mat.tex1Add ? 1 : 0);
-        gl.uniform1i(uPass1, 0);
-        gl.uniform1i(uTexGen0, mat.texGen0 ? 1 : 0);
-        gl.activeTexture(gl.TEXTURE0);
-        if (mat.tex) { gl.bindTexture(gl.TEXTURE_2D, mat.tex); textured++; }
-        if (mat.tex1) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.tex1); }
-        if (mat.envTex) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, mat.envTex); }
-        gl.bindVertexArray(part.vao);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.ib);
-        gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
+        // GL_ADD for a LUMI texture and for the reflection, GL_MODULATE for a
+        // DIFF texture. The reflection texel is added UNSCALED: LWO
+        // reflectivity does not attenuate it, it only decides whether the
+        // sphere-map bit is set at all (bit 0x80 is cleared unless
+        // reflectivity > 0.95). REFL is a threshold, not a coefficient — which
+        // is why these surfaces read as glowing.
+        const unit1 = mat.tex1 ?? mat.envTex;
+        mgl.activeTexture(1);
+        mgl.enableTexture(!!unit1);
+        if (unit1) mgl.bindTexture(unit1);
+        mgl.texGenSphereMap(!!mat.envTex && !mat.tex1);
+        mgl.texEnv({ mode: (mat.envTex && !mat.tex1) || mat.tex1Add ? 'add' : 'modulate' });
+
+        mgl.drawMesh(part.mesh, { count: part.count, uvSets: [0, 1] });
         // mask 7: second, additive pass carrying only the LUMI texture
         if (mat.texPass1 && !NOPASS1) {
-          gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-          gl.depthMask(true);                       // pass 1 WRITES depth
-          gl.uniform1i(uPass1, 1);
-          gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.texPass1);
-          gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
-          gl.uniform1i(uPass1, 0);
-          if (!blended) { gl.disable(gl.BLEND); gl.depthMask(true); }
+          // NOT a bare additive blit (RENDER.md §13.4): it modulates by
+          // glColor, samples its OWN third UV set, writes depth, and is still
+          // fogged — material[+0x6a] is never written by the SURF builder, so
+          // fog stays on. That last one bites higherbiing, the only mask-7
+          // part with FogType 1. It carries the LUMI texture ALONE, so the
+          // lighting and the other unit are off for it.
+          mgl.enableBlend(true); mgl.blendFunc(gl.ONE, gl.ONE);
+          mgl.depthMask(true);                      // pass 1 WRITES depth
+          mgl.enableLighting(false);
+          mgl.color4(mat.color[0], mat.color[1], mat.color[2], 1);
+          mgl.activeTexture(1); mgl.enableTexture(false);
+          mgl.activeTexture(0);
+          mgl.enableTexture(true); mgl.bindTexture(mat.texPass1);
+          mgl.texGenSphereMap(false);
+          mgl.texEnv({ mode: 'modulate' });
+          // unit 0 sampling UV SET 2 — the pass's own projection, not a third
+          // texture unit (RENDER.md §14.1).
+          mgl.drawMesh(part.mesh, { count: part.count, uvSets: [2, 1] });
+          if (!blended) { mgl.enableBlend(false); mgl.depthMask(true); }
         }
       }
     }
-    gl.disable(gl.BLEND); gl.depthMask(true);
+    mgl.enableBlend(false); mgl.depthMask(true);
     // ---- hair. `AddNullObject Hair_<name>` binds that null to
     // data/hairs/<name>.txt; every strand shares ONE root, the null's world
     // origin, so the animated nulls drive the hair purely by parenting.
@@ -1673,7 +1572,6 @@ const bgVao = gl.createVertexArray();
       // gl.lineWidth(3) call here would be silently clamped to 1.
       gl.drawArrays(gl.TRIANGLES, 0, verts.length / 10);
       gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
-      gl.useProgram(prog);
     }
     sim.t = simTo;
 
@@ -1777,7 +1675,6 @@ const bgVao = gl.createVertexArray();
           gl.drawArrays(gl.TRIANGLES, 0, pos.length / 3);
         }
         gl.disable(gl.BLEND); gl.depthMask(true);
-        gl.useProgram(prog);
       }
     }
 

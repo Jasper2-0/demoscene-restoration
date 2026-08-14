@@ -34,6 +34,16 @@ const PACKAGES = {
       'productions/energia/web/js/shared',
     ],
   },
+  // Lapsus renders its meshes through minigl but has no use for the rest of
+  // the sunflower scene layer, so it takes the shim and the maths it imports
+  // and nothing else. Vendored rather than cross-imported for the same reason
+  // as wonder and energia: a shipped page must stand on its own tree, and the
+  // verify harness serves productions/lapsus as its root.
+  minigl: {
+    source: 'shared/sunflower/js',
+    files: ['minigl.js', 'mathlib.js'],
+    targets: ['productions/lapsus/web/js/shared'],
+  },
   // Planned (unification happens one library at a time, each behind the
   // production's own verify gates — see the monorepo plan):
   //   minigl:   OpenGL 1.x FF over WebGL2   (ptct, wonder, energia)

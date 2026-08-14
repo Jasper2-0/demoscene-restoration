@@ -187,6 +187,27 @@
   const sourceColorBlendPixel = readCenter();
   mgl.enableBlend(false);
 
+  // GL_ADD adds COLOUR but MODULATES alpha: Cv = Cp + Cs, Av = Ap * As.
+  // A half-transparent white primary plus an opaque black texel must stay half
+  // transparent — [128,128,128] over the black clear. Adding the alpha too
+  // gives clamp(0.5 + 1.0) = 1 and reads [255,255,255], which is what drove
+  // Lapsus's translucent pene cube opaque.
+  mgl.activeTexture(1);
+  mgl.enableTexture(false);
+  mgl.activeTexture(0);
+  const opaqueBlack = mgl.createTextureFromData(Uint8Array.of(0, 0, 0, 255), 1, 1);
+  mgl.bindTexture(opaqueBlack);
+  mgl.enableTexture(true);
+  mgl.texEnv({ mode: 'add' });
+  mgl.enableBlend(true);
+  mgl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  mgl.color4(1, 1, 1, 0.5);
+  mgl.clear();
+  drawQuad();
+  const addAlphaPixel = readCenter();
+  mgl.enableBlend(false);
+  mgl.texEnv({ mode: 'modulate' });
+
   // Retained geometry: positions, UVs and indices reaching the draw through a
   // VAO built once, rather than uploaded per call. Same red texture, same
   // replace env, so any difference is the buffer path itself.
@@ -287,6 +308,7 @@
     // MiniGL requests an opaque drawing buffer, so destination alpha remains 1.
     blend: { pixel: blendPixel, expected: [64, 0, 0, 255] },
     sourceColorBlend: { pixel: sourceColorBlendPixel, expected: [64, 64, 64, 255] },
+    addAlpha: { pixel: addAlphaPixel, expected: [128, 128, 128, 255] },
     retained: { pixel: retainedPixel, expected: [255, 0, 0, 255] },
     uvSetA: { pixel: uvSetAPixel, expected: [255, 0, 0, 255] },
     uvSetB: { pixel: uvSetBPixel, expected: [0, 255, 0, 255] },

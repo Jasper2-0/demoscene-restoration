@@ -7,14 +7,31 @@ import { Mat4 } from './mathlib.js';
 
 const MAX_LIGHTS = 8;
 
-// Lighting is per vertex, as OpenGL 1.x does it. The model is narrower
-// than the full fixed-function one because of what the restored callers
-// set: GL_COLOR_MATERIAL is on with its default GL_AMBIENT_AND_DIFFUSE,
-// so glColor drives both material terms; light ambient is left at zero by
-// the constructor and never written; material specular is never set, so
-// there is no specular term at all. What survives is
+// Lighting is per vertex, as OpenGL 1.x does it.
+//
+// It began as the narrow subset PTCT/Wonder/Energia needed: GL_COLOR_MATERIAL on
+// with its default GL_AMBIENT_AND_DIFFUSE, so glColor drives both material
+// terms, no light ambient, and no specular at all —
 //
 //     lit = 0.2 (GL's default global ambient) + sum of diffuse * N.L
+//
+// Lapsus drives the fixed-function pipeline harder: explicit glMaterialfv for
+// ambient/diffuse/specular/shininess, a per-scene GL_LIGHT_MODEL_AMBIENT that
+// is usually ZERO rather than GL's 0.2 default, and GL_SEPARATE_SPECULAR_COLOR
+// so the highlight is added AFTER the texture stages instead of being
+// modulated by them. All three are here now, and all three DEFAULT TO THE
+// BEHAVIOUR ABOVE, so a caller that sets none of them renders exactly what it
+// rendered before:
+//
+//     material()      -> colorMaterial stays on unless a material is given
+//     lightModelAmbient() -> 0.2 until set
+//     light specular  -> zero unless a light supplies one
+//
+// The separate-specular detail is not pedantry: it is the one neutral term in
+// the pipeline that is NOT tinted by the texture, so it is what dilutes a
+// reflection map's colour cast. Getting it wrong is what made Lapsus's
+// reflective surfaces read as too saturated and too contrasty
+// (productions/lapsus/work/re/RENDER.md §10.8).
 const VS = `#version 300 es
 precision highp float;
 in vec3 aPos;
@@ -33,12 +50,20 @@ uniform bool uNormalizeNormals;
 uniform int uLightCount;
 uniform vec4 uLightPos[${MAX_LIGHTS}];      // eye space; w = 0 for directional
 uniform vec3 uLightDiffuse[${MAX_LIGHTS}];
+uniform vec3 uLightSpecular[${MAX_LIGHTS}];
+uniform vec3 uLightModelAmbient;
+uniform vec3 uMatAmbient;
+uniform vec3 uMatDiffuse;
+uniform vec3 uMatSpecular;
+uniform float uMatShininess;
+uniform bool uColorMaterial;
 uniform vec4 uLightSpot[${MAX_LIGHTS}];     // xyz direction (eye space), w = cos(cutoff) or -1
 out vec2 vUV0;
 out vec2 vUV1;
 out vec4 vColor;
 out float vEyeDist;
 out vec3 vLit;
+out vec3 vSpec;
 void main() {
   vec4 eye = uModelView * vec4(aPos, 1.0);
   gl_Position = uProjection * eye;
@@ -61,7 +86,13 @@ void main() {
   vUV1 = (uTexMatrix1 * vec4(uv1, 0.0, 1.0)).xy;
   vColor = aColor;
   vEyeDist = -eye.z;
-  vec3 lit = vec3(0.2);
+  // With GL_COLOR_MATERIAL on (the default here) glColor supplies both the
+  // ambient and diffuse material terms, so they are 1 and the FS multiplies
+  // by glColor afterwards. With an explicit material they come from it.
+  vec3 mAmb = uColorMaterial ? vec3(1.0) : uMatAmbient;
+  vec3 mDif = uColorMaterial ? vec3(1.0) : uMatDiffuse;
+  vec3 lit = uLightModelAmbient * mAmb;
+  vec3 spec = vec3(0.0);
   if (uLightCount > 0) {
     vec3 n = normalize(mat3(uModelView) * aNormal);
     for (int i = 0; i < ${MAX_LIGHTS}; i++) {
@@ -73,10 +104,19 @@ void main() {
         float c = dot(normalize(-l), normalize(uLightSpot[i].xyz));
         d *= c < uLightSpot[i].w ? 0.0 : c;
       }
-      lit += uLightDiffuse[i] * d;
+      lit += uLightDiffuse[i] * d * mDif;
+      if (d > 0.0) {
+        // INFINITE VIEWER. GL_LIGHT_MODEL_LOCAL_VIEWER defaults to FALSE, so
+        // the eye vector is the constant (0,0,1) rather than the direction to
+        // each vertex — a flatter, wider highlight than a local viewer gives.
+        vec3 h = normalize(l + vec3(0.0, 0.0, 1.0));
+        spec += uLightSpecular[i] * uMatSpecular
+              * pow(max(dot(n, h), 0.0), max(uMatShininess, 1e-6));
+      }
     }
   }
   vLit = lit;
+  vSpec = spec;
 }`;
 
 const FS = `#version 300 es
@@ -86,6 +126,7 @@ in vec2 vUV1;
 in vec4 vColor;
 in float vEyeDist;
 in vec3 vLit;
+in vec3 vSpec;
 uniform sampler2D uSampler0;
 uniform sampler2D uSampler1;
 uniform bool uTexEnabled0;
@@ -111,10 +152,11 @@ uniform vec2 uCombineScale1;
 uniform bool uUseVertexColor;
 uniform bool uLightingEnabled;
 uniform vec4 uColor;
-uniform vec3 uFog; // x: enabled, y: start, z: end (linear fog, black)
+uniform vec3 uFog; // x: enabled, y: start, z: end (GL_LINEAR)
 // [ptct ext] rgb = fog color; a > 0.5 selects OpenGL's default GL_EXP fog:
 // f = exp(-density * eyeDist), c = mix(fogColor, c, f). density is passed in
-// uFog.y (uFog.z unused in this mode). a = 0 keeps the legacy linear black fog.
+// uFog.y (uFog.z unused in this mode). a = 0 selects GL_LINEAR, which uses
+// uFogColor.rgb as its target — (0,0,0), i.e. fade to black, unless set.
 uniform vec4 uFogColor;
 uniform bool uPointMode;
 out vec4 outColor;
@@ -183,7 +225,12 @@ vec4 applyTextureEnv(vec4 previous, vec4 texel, vec4 primary,
                      vec2 scale) {
   if (mode == 0) return previous * texel;                // MODULATE
   if (mode == 1) return texel;                           // REPLACE
-  if (mode == 2) return clamp(previous + texel, 0.0, 1.0); // ADD
+  // GL_ADD. The spec's texture-environment table adds only the COLOUR:
+  // Cv = Cp + Cs but Av = Ap * As. Adding alpha too drives any blended
+  // surface carrying an additive second unit straight to opaque — Lapsus's
+  // pene is a translucent cube with a reflection on unit 1, and it rendered
+  // solid until this was fixed.
+  if (mode == 2) return vec4(clamp(previous.rgb + texel.rgb, 0.0, 1.0), previous.a * texel.a);
   if (mode == 3) {                                      // DECAL
     return vec4(mix(previous.rgb, texel.rgb, texel.a), previous.a);
   }
@@ -232,13 +279,21 @@ void main() {
       uTexMode1, uCombineRGB1, uSourceRGB1, uOperandRGB1,
       uCombineAlpha1, uSourceAlpha1, uOperandAlpha1, uCombineScale1);
   }
+  // GL_SEPARATE_SPECULAR_COLOR: the secondary colour is added AFTER the
+  // texture stages, so the highlight is not tinted by the texture the way the
+  // diffuse term is. Zero unless a caller supplies both a light specular and a
+  // material specular, so this is a no-op for callers that set neither.
+  if (uLightingEnabled) c.rgb += vSpec;
   if (uFog.x > 0.5) {
     if (uFogColor.a > 0.5) { // [ptct ext] exponential fog toward a color
       float f = clamp(exp(-uFog.y * vEyeDist), 0.0, 1.0);
       c.rgb = mix(uFogColor.rgb, c.rgb, f);
     } else {
+      // GL_LINEAR. Mixing toward the fog colour; the colour is (0,0,0) unless
+      // a caller sets one, and mix(black, c, f) == c * f, so this is exactly
+      // the multiply it replaces for anyone who never calls fog() with one.
       float f = clamp((uFog.z - vEyeDist) / (uFog.z - uFog.y), 0.0, 1.0);
-      c.rgb *= f;
+      c.rgb = mix(uFogColor.rgb, c.rgb, f);
     }
   }
   if (uPointMode) {
@@ -283,15 +338,30 @@ function defaultTextureUnit() {
 }
 
 export class MiniGL {
-  constructor(canvas) {
-    const attribs = { alpha: false, antialias: true, depth: true, preserveDrawingBuffer: false };
-    let gl = canvas.getContext('webgl2', attribs);
-    if (!gl) gl = canvas.getContext('webgl2', { ...attribs, antialias: false });
+  /**
+   * @param {HTMLCanvasElement|WebGL2RenderingContext} target
+   *
+   * Pass a context to ADOPT one that already exists. A port that renders some
+   * passes with its own programs creates the context itself, often with
+   * attributes the shim would not pick — Lapsus needs preserveDrawingBuffer
+   * for the capture harness — and getContext() silently ignores attributes
+   * once a context exists, so adopting explicitly beats depending on call
+   * order.
+   */
+  constructor(target) {
+    const isContext = typeof target.getParameter === 'function';
+    const canvas = isContext ? target.canvas : target;
+    let gl = target;
+    if (!isContext) {
+      const attribs = { alpha: false, antialias: true, depth: true, preserveDrawingBuffer: false };
+      gl = canvas.getContext('webgl2', attribs)
+        ?? canvas.getContext('webgl2', { ...attribs, antialias: false });
+    }
     if (!gl) throw new Error('WebGL2 not available');
     this.gl = gl;
 
     this.contextLost = false;
-    canvas.addEventListener('webglcontextlost', (e) => {
+    canvas?.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       this.contextLost = true;
     });
@@ -389,11 +459,24 @@ export class MiniGL {
     this.uFog = gl.getUniformLocation(prog, 'uFog');
     // [ptct ext] see fogExp()/fogExpOff() below
     this.uFogColor = gl.getUniformLocation(prog, 'uFogColor');
-    gl.uniform4f(this.uFogColor, 0, 0, 0, 0);
+    this.fogColorValue = new Float32Array([0, 0, 0, 0]);
+    this.fogColorDirty = true;
+    this.lightPos = new Float32Array(MAX_LIGHTS * 4);
+    this.lightDiffuse = new Float32Array(MAX_LIGHTS * 3);
+    this.lightSpecular = new Float32Array(MAX_LIGHTS * 3);
+    this.lightSpot = new Float32Array(MAX_LIGHTS * 4);
+    this.lightsDirty = true;
     this.uLightingEnabled = gl.getUniformLocation(prog, 'uLightingEnabled');
     this.uLightCount = gl.getUniformLocation(prog, 'uLightCount');
     this.uLightPos = gl.getUniformLocation(prog, 'uLightPos');
     this.uLightDiffuse = gl.getUniformLocation(prog, 'uLightDiffuse');
+    this.uLightSpecular = gl.getUniformLocation(prog, 'uLightSpecular');
+    this.uLightModelAmbient = gl.getUniformLocation(prog, 'uLightModelAmbient');
+    this.uMatAmbient = gl.getUniformLocation(prog, 'uMatAmbient');
+    this.uMatDiffuse = gl.getUniformLocation(prog, 'uMatDiffuse');
+    this.uMatSpecular = gl.getUniformLocation(prog, 'uMatSpecular');
+    this.uMatShininess = gl.getUniformLocation(prog, 'uMatShininess');
+    this.uColorMaterial = gl.getUniformLocation(prog, 'uColorMaterial');
     this.uLightSpot = gl.getUniformLocation(prog, 'uLightSpot');
     this.aPos = gl.getAttribLocation(prog, 'aPos');
     this.aUV = [gl.getAttribLocation(prog, 'aUV0'), gl.getAttribLocation(prog, 'aUV1')];
@@ -415,6 +498,7 @@ export class MiniGL {
     this.curColor = [1, 1, 1, 1];
     this.pointSizeValue = 1;
     gl.activeTexture(gl.TEXTURE0);
+    this._initMaterialDefaults();
     this.whiteTex = this._makeWhiteTexture();
     this.fogEnabled = false;
     this.fogStart = 0;
@@ -445,13 +529,33 @@ export class MiniGL {
     this.nrmVBO = gl.createBuffer();
     this.idxIBO = gl.createBuffer();
 
-    gl.disable(gl.DEPTH_TEST);
-    gl.disable(gl.CULL_FACE);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-    gl.clearColor(0, 0, 0, 1);
+    // Initial pipeline state, but ONLY when we created the context. These are
+    // the defaults the EXP scene layer expects (wonder, energia, ptct) and it
+    // never sets them itself. A port that hands us its own context has its own
+    // passes and its own assumptions — Lapsus's backdrop and 2D passes assume
+    // GL's default of blending DISABLED — so seizing global state there would
+    // silently change drawing that has nothing to do with this shim.
+    if (!isContext) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.CULL_FACE);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+      gl.clearColor(0, 0, 0, 1);
+    }
     gl.uniform1i(gl.getUniformLocation(prog, 'uSampler0'), 0);
     gl.uniform1i(gl.getUniformLocation(prog, 'uSampler1'), 1);
+  }
+
+  _initMaterialDefaults() {
+    // Defaults reproduce the pre-material behaviour exactly: colour material
+    // on, GL's 0.2 global ambient, no specular anywhere.
+    this.colorMaterial = true;
+    this.matAmbient = [1, 1, 1];
+    this.matDiffuse = [1, 1, 1];
+    this.matSpecular = [0, 0, 0];
+    this.matShininess = 0;
+    this.lightModelAmbient_ = [0.2, 0.2, 0.2];
+    this.lightSpecular = new Float32Array(MAX_LIGHTS * 3);
   }
 
   _makeWhiteTexture() {
@@ -572,7 +676,8 @@ export class MiniGL {
       : this.matrices[this.mode];
   }
   loadIdentity() { this.cur.identity(); this.matricesDirty = true; }
-  loadMatrix(mat) { this.cur.copy(mat); this.matricesDirty = true; }
+  /** glLoadMatrixf takes a float array, so accept one as well as a Mat4. */
+  loadMatrix(mat) { this.cur.m.set(mat.m ?? mat); this.matricesDirty = true; }
   multMatrix(mat) { this.cur.mult(mat); this.matricesDirty = true; }
   frustum(l, r, b, t, n, f) { this.cur.frustum(l, r, b, t, n, f); this.matricesDirty = true; }
   ortho(l, r, b, t, n, f) { this.cur.ortho(l, r, b, t, n, f); this.matricesDirty = true; }
@@ -674,25 +779,60 @@ export class MiniGL {
   // with spotCos < 0 is an omni.
   enableLighting(on) { this.lightingOn = !!on; }
 
+  /**
+   * Explicit material, i.e. glMaterialfv. Passing one turns GL_COLOR_MATERIAL
+   * OFF for subsequent draws, because a caller that sets a material means it.
+   * `material(null)` restores glColor-driven ambient+diffuse.
+   *
+   * `shininess` is clamped to [0,128] as GL requires. Out of range, real GL
+   * raises GL_INVALID_VALUE and keeps the PREVIOUS value; clamping is what the
+   * 2000-era drivers these captures came from actually did, measured against
+   * one (productions/lapsus/work/re/RENDER.md §10.6).
+   */
+  material(m) {
+    if (!m) { this.colorMaterial = true; return; }
+    this.colorMaterial = false;
+    this.matAmbient = m.ambient ?? [1, 1, 1];
+    this.matDiffuse = m.diffuse ?? [1, 1, 1];
+    this.matSpecular = m.specular ?? [0, 0, 0];
+    this.matShininess = Math.max(0, Math.min(128, m.shininess ?? 0));
+  }
+
+  /** GL_LIGHT_MODEL_AMBIENT. GL's default is 0.2 grey; scenes often set 0. */
+  lightModelAmbient(r, g, b) { this.lightModelAmbient_ = [r, g, b]; }
+
   setLights(lights) {
-    const gl = this.gl;
     const n = Math.min(lights.length, MAX_LIGHTS);
     const pos = new Float32Array(MAX_LIGHTS * 4);
     const dif = new Float32Array(MAX_LIGHTS * 3);
     const spot = new Float32Array(MAX_LIGHTS * 4);
+    // Per-light specular, zero unless supplied — so a caller that never sets
+    // one gets no specular term at all, as before.
+    const spc = new Float32Array(MAX_LIGHTS * 3);
     for (let i = 0; i < n; i++) {
       const l = lights[i];
       pos.set([l.pos[0], l.pos[1], l.pos[2], l.pos.length > 3 ? l.pos[3] : 1], i * 4);
       dif.set([l.diffuse[0], l.diffuse[1], l.diffuse[2]], i * 3);
+      if (l.specular) spc.set([l.specular[0], l.specular[1], l.specular[2]], i * 3);
       const d = l.spotDir || [0, 0, -1];
       spot.set([d[0], d[1], d[2], l.spotCos === undefined ? -1 : l.spotCos], i * 4);
     }
     this.nLights = n;
-    gl.uniform4fv(this.uLightPos, pos);
-    gl.uniform3fv(this.uLightDiffuse, dif);
-    gl.uniform4fv(this.uLightSpot, spot);
+    this.lightPos = pos; this.lightDiffuse = dif;
+    this.lightSpecular = spc; this.lightSpot = spot;
+    this.lightsDirty = true;
   }
-  fog(start, end) { this.fogStart = start; this.fogEnd = end; }
+  /**
+   * GL_LINEAR fog over [start, end]. `color` is GL_FOG_COLOR and defaults to
+   * black, which is what fading to nothing means and what every caller before
+   * Lapsus assumed. Lapsus takes it from the scene's BackdropColor or FogColor
+   * (RENDER.md §4), so a lit scene fogs toward its own sky rather than to
+   * black.
+   */
+  fog(start, end, color = null) {
+    this.fogStart = start; this.fogEnd = end;
+    if (color) this._setFogColor(color[0], color[1], color[2], 0);
+  }
 
   // [ptct ext] OpenGL-default GL_EXP fog toward a color, as ptct's engine uses
   // (it sets GL_FOG_DENSITY = 1/fogDist and never changes GL_FOG_MODE from the
@@ -701,9 +841,13 @@ export class MiniGL {
   // fog path is untouched when fogExp is never called.
   fogExp(density, r, g, b) {
     this.fogStart = density; this.fogEnd = 0;
-    this.gl.uniform4f(this.uFogColor, r, g, b, 1);
+    this._setFogColor(r, g, b, 1);
   }
-  fogExpOff() { this.gl.uniform4f(this.uFogColor, 0, 0, 0, 0); }
+  fogExpOff() { this._setFogColor(0, 0, 0, 0); }
+  _setFogColor(r, g, b, a) {
+    this.fogColorValue = new Float32Array([r, g, b, a]);
+    this.fogColorDirty = true;
+  }
   blendFunc(src, dst) { this.gl.blendFunc(src, dst); }
   depthMask(on) { this.gl.depthMask(!!on); }
   depthFunc(fn) { this.gl.depthFunc(fn); }
@@ -728,7 +872,25 @@ export class MiniGL {
 
   _applyCommonUniforms(pointMode = false) {
     const gl = this.gl;
+    // A port may render some passes with its own programs — Lapsus has five
+    // beside this one, for hair, particles, 2D pictures, fades and the
+    // feedback accumulator. So the shim cannot assume it still owns the
+    // context from one draw to the next: bind before writing uniforms, and
+    // keep every uniform DEFERRED to this point rather than writing it from
+    // the setter, or it lands in whichever program happens to be current.
+    gl.useProgram(this.prog);
     this._syncMatrices();
+    if (this.lightsDirty) {
+      gl.uniform4fv(this.uLightPos, this.lightPos);
+      gl.uniform3fv(this.uLightDiffuse, this.lightDiffuse);
+      gl.uniform3fv(this.uLightSpecular, this.lightSpecular);
+      gl.uniform4fv(this.uLightSpot, this.lightSpot);
+      this.lightsDirty = false;
+    }
+    if (this.fogColorDirty) {
+      gl.uniform4fv(this.uFogColor, this.fogColorValue);
+      this.fogColorDirty = false;
+    }
     for (let index = 0; index < 2; index++) {
       const unit = this.textureUnits[index], env = unit.env;
       gl.activeTexture(gl.TEXTURE0 + index);
@@ -752,6 +914,12 @@ export class MiniGL {
     gl.activeTexture(gl.TEXTURE0 + this.activeTextureUnit);
     gl.uniform1i(this.uNormalizeNormals, this.normalizeNormals ? 1 : 0);
     gl.uniform1i(this.uLightingEnabled, this.lightingOn ? 1 : 0);
+    gl.uniform1i(this.uColorMaterial, this.colorMaterial ? 1 : 0);
+    gl.uniform3fv(this.uMatAmbient, this.matAmbient);
+    gl.uniform3fv(this.uMatDiffuse, this.matDiffuse);
+    gl.uniform3fv(this.uMatSpecular, this.matSpecular);
+    gl.uniform1f(this.uMatShininess, this.matShininess);
+    gl.uniform3fv(this.uLightModelAmbient, this.lightModelAmbient_);
     gl.uniform1i(this.uLightCount, this.lightingOn ? this.nLights : 0);
     gl.uniform3f(this.uFog, this.fogEnabled ? 1 : 0, this.fogStart, this.fogEnd);
     gl.uniform1f(this.uPointSize, this.pointSizeValue);
@@ -906,6 +1074,150 @@ export class MiniGL {
       gl.vertexAttrib3f(this.aNormal, 0, 0, 1);
     }
     gl.drawArrays(gl.LINES, 0, positions.length / 3);
+  }
+
+  // ---- retained geometry.
+  //
+  // The array draws above re-upload their vertices EVERY call, which is right
+  // for an immediate-mode caller replaying a few hundred vertices per effect.
+  // It is the wrong shape for a port with real meshes: Lapsus draws 50k
+  // triangles per object at 60fps, and re-uploading that per frame is the
+  // whole frame budget. These create the buffers once and draw them many
+  // times, with a VAO so the attribute setup leaves the draw loop too.
+  //
+  // Attribute locations belong to minigl's single program, so the VAO is only
+  // valid for this instance — which is also why the mesh handle is opaque and
+  // must be freed through deleteMesh rather than by the caller.
+
+  /**
+   * A buffer that outlives one mesh. Lapsus shares one position and one normal
+   * buffer across every surface group in a layer while each group carries its
+   * own UVs and indices; without this, createMesh would duplicate the shared
+   * geometry once per surface.
+   */
+  createBuffer(data, target = null) {
+    const gl = this.gl;
+    const t = target ?? gl.ARRAY_BUFFER;
+    const b = gl.createBuffer();
+    gl.bindBuffer(t, b);
+    gl.bufferData(t, data, gl.STATIC_DRAW);
+    return b;
+  }
+
+  /**
+   * Build a retained mesh.
+   *
+   * Every geometry field takes EITHER a typed array (a buffer is created and
+   * owned by the mesh) OR a buffer from createBuffer (borrowed, and never
+   * freed by deleteMesh).
+   *
+   * `uvs` is an ARRAY OF UV SETS, not one set per unit. A fixed-function mesh
+   * may carry more coordinate sets than there are texture units — Lapsus
+   * carries three, because a mask-7 surface's second additive pass projects
+   * its LUMI texture through its own set — and each draw chooses which set
+   * feeds which unit, exactly as glClientActiveTexture does.
+   *
+   * @param {object} m  { positions, indices, normals?, uvs? }
+   */
+  createMesh(m) {
+    const gl = this.gl;
+    const owned = [];
+    const asBuffer = (v) => {
+      if (!v) return null;
+      if (!ArrayBuffer.isView(v)) return v;              // already a buffer
+      const b = this.createBuffer(v);
+      owned.push(b);
+      return b;
+    };
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const point = (buf, loc, size) => {
+      if (!buf || loc < 0) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+    const pos = asBuffer(m.positions);
+    const nrm = asBuffer(m.normals);
+    const uvs = (m.uvs ?? []).map(asBuffer);
+    point(pos, this.aPos, 3);
+    point(nrm, this.aNormal, 3);
+    point(uvs[0], this.aUV[0], 2);
+    point(uvs[1] ?? uvs[0], this.aUV[1], 2);
+    // Constant attributes for whatever is absent. enable/disable is VAO state,
+    // so it belongs here and not at draw time.
+    if (!nrm && this.aNormal >= 0) gl.disableVertexAttribArray(this.aNormal);
+    if (!uvs[0] && this.aUV[0] >= 0) gl.disableVertexAttribArray(this.aUV[0]);
+    if (!uvs[0] && this.aUV[1] >= 0) gl.disableVertexAttribArray(this.aUV[1]);
+    if (this.aColor >= 0) gl.disableVertexAttribArray(this.aColor);
+
+    let ib = m.indices, count = m.count ?? 0, short = false;
+    if (ArrayBuffer.isView(m.indices)) {
+      short = m.indices instanceof Uint16Array;
+      count = m.indices.length;
+      ib = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.indices, gl.STATIC_DRAW);
+      owned.push(ib);
+    } else {
+      short = !!m.shortIndices;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    }
+    gl.bindVertexArray(null);
+    return {
+      vao, ib, pos, nrm, uvs, owned, count,
+      sel: [0, 1],
+      type: short ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
+      bytes: short ? 2 : 4,
+    };
+  }
+
+  /** Replace positions and/or normals in place — for morph targets. */
+  updateMesh(mesh, { positions = null, normals = null } = {}) {
+    const gl = this.gl;
+    if (positions && mesh.pos) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, mesh.pos);
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
+    }
+    if (normals && mesh.nrm) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, mesh.nrm);
+      gl.bufferData(gl.ARRAY_BUFFER, normals, gl.DYNAMIC_DRAW);
+    }
+  }
+
+  /**
+   * Draw a retained mesh.
+   *
+   * `uvSets` picks which of the mesh's coordinate sets feeds unit 0 and unit 1
+   * for this draw. The selection is remembered on the mesh, so re-pointing
+   * costs two calls only when it actually changes.
+   */
+  drawMesh(mesh, { count = mesh.count, offset = 0, uvSets = null } = {}) {
+    const gl = this.gl;
+    this._applyCommonUniforms();
+    // No per-vertex colours on a retained mesh: glColor drives the primary,
+    // matching the array path's `colors === null` branch.
+    gl.uniform1i(this.uUseVertexColor, 0);
+    gl.uniform4fv(this.uColor, this.curColor);
+    gl.bindVertexArray(mesh.vao);
+    if (uvSets && (uvSets[0] !== mesh.sel[0] || uvSets[1] !== mesh.sel[1])) {
+      for (let u = 0; u < 2; u++) {
+        const buf = mesh.uvs[uvSets[u]] ?? mesh.uvs[0];
+        if (!buf || this.aUV[u] < 0) continue;
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.vertexAttribPointer(this.aUV[u], 2, gl.FLOAT, false, 0, 0);
+      }
+      mesh.sel = [uvSets[0], uvSets[1]];
+    }
+    gl.drawElements(gl.TRIANGLES, count, mesh.type, offset * mesh.bytes);
+    gl.bindVertexArray(null);
+  }
+
+  /** Frees only what the mesh created; borrowed buffers are the caller's. */
+  deleteMesh(mesh) {
+    const gl = this.gl;
+    for (const b of mesh.owned) gl.deleteBuffer(b);
+    gl.deleteVertexArray(mesh.vao);
   }
 
   drawElements(positions, uvs, indices, colors = null, normals = null, mode = null, uvs1 = null) {
