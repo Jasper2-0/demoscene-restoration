@@ -1,7 +1,26 @@
-// allparts.mjs — render every scheduled part at its midpoint and score it
-// against the capture. One command, one report card.
+// allparts.mjs — render every scheduled part at SEVERAL instants and score
+// each against the capture. One command, one report card.
 //
 //   node productions/lapsus/work/verify/allparts.mjs
+//   SAMPLES=8 node productions/lapsus/work/verify/allparts.mjs
+//
+// IT USED TO SAMPLE THE MIDPOINT ONLY, and that let a real bug through for a
+// whole day. Paleksi's camera kick is proportional to a term that is about
+// -1.2e-13 at the middle of the part and large either side of it, so the part
+// rendered visibly wrong while this gate reported r 0.943, unchanged, every
+// time it was asked. Every "median unchanged" claim made against the old
+// version only ever meant "unchanged at one instant per part".
+//
+// So: N samples per part, inset from both ends by a quarter-slot so a sample
+// never lands on a part boundary (the same plan tools/inspect/sweep.mjs uses),
+// and the report card carries the WORST instant beside the median, because the
+// worst instant is the one a viewer notices.
+//
+// Samples are rendered through the `window.__demo` adapter in ONE page rather
+// than a page per frame, which is what makes multi-sampling affordable — 100+
+// samples in about the time the old 21 took. That path was checked against the
+// old `?scene=&t=` one on paleksi, pehko, hairball and turska: identical to
+// four decimal places, including a feedback part and a hair part.
 //
 // Whole-frame luma correlation is a blunt instrument (see verify/timing.mjs
 // for why it is useless for *timing*), but for "which parts are visibly
@@ -51,35 +70,73 @@ const corr = (a, b) => {
   return d / Math.sqrt(sa * sb || 1);
 };
 
-const rows = [];
+const SAMPLES = Math.max(1, Number(process.env.SAMPLES ?? 5));
+// Inset by a quarter-slot at each end: a sample exactly on a boundary is
+// decided by a one-frame timing difference, not by the renderer.
+const localsFor = (dur) => Array.from({ length: SAMPLES }, (_, i) =>
+  +((i + 0.5) / SAMPLES * (dur - 0.3) + 0.15).toFixed(3));
+
+const jobs = [];
 for (const [phase, table, off] of [[1, PHASE1, off1], [2, PHASE2, off2]]) {
   for (const [scene, e] of Object.entries(table)) {
-    if (scene === 'startpart1') continue;          // 1s, dominated by its fade
-    const local = e.dur / 2;
-    const capture = off + e.start + local;
-    let ours = null, err = null;
-    try {
-      await withPage({ root: 'productions/lapsus', path: '/web/index.html',
-        query: `?scene=${scene}&t=${local}`, width: W, height: H, viewport: { width: W, height: H } },
-        async ({ page }) => {
-          await page.waitForFunction('window.__lapsusReady === true', { timeout: 30000 });
-          const e2 = await page.evaluate(() => window.__lapsusError ?? null);
-          if (e2) throw new Error(e2);
-          fs.writeFileSync(`${TMP}/o.png`, await shootCanvas(page, { canvasSelector: '#c', warmupFrames: 2 }));
-        });
-      ours = gray(`${TMP}/o.png`, `${TMP}/o.raw`);
-    } catch (e) { err = String(e.message ?? e).split('\n')[0].slice(0, 60); }
-
-    if (!ours) { rows.push({ phase, scene, r: null, err }); continue; }
-    execFileSync('ffmpeg', ['-v', 'error', '-y', '-ss', String(capture), '-i', MKV, '-frames:v', '1', `${TMP}/r.png`]);
-    rows.push({ phase, scene, r: corr(ours, gray(`${TMP}/r.png`, `${TMP}/r.raw`)), err: null });
+    if (scene === 'startpart1') continue;        // 1s, entirely its own fade
+    for (const local of localsFor(e.dur)) {
+      jobs.push({ phase, scene, local, capture: off + e.start + local });
+    }
   }
 }
 
+const byPart = new Map();
+let err = null;
+try {
+  await withPage({ root: 'productions/lapsus', path: '/web/index.html',
+    query: '?inspect=1', width: W, height: H, viewport: { width: W, height: H } },
+    async ({ page }) => {
+      await page.waitForFunction('window.__lapsusReady === true', { timeout: 60000 });
+      const e2 = await page.evaluate(() => window.__lapsusError ?? null);
+      if (e2) throw new Error(e2);
+      let done = 0;
+      for (const j of jobs) {
+        let r = null, jobErr = null;
+        try {
+          await page.evaluate(async (p, l) => { await window.__demo.render({ part: p, local: l }); },
+            j.scene, j.local);
+          fs.writeFileSync(`${TMP}/o.png`,
+            await shootCanvas(page, { canvasSelector: '#c', warmupFrames: 0 }));
+          const ours = gray(`${TMP}/o.png`, `${TMP}/o.raw`);
+          execFileSync('ffmpeg', ['-v', 'error', '-y', '-ss', String(j.capture), '-i', MKV,
+            '-frames:v', '1', `${TMP}/r.png`]);
+          r = corr(ours, gray(`${TMP}/r.png`, `${TMP}/r.raw`));
+        } catch (e) { jobErr = String(e.message ?? e).split('\n')[0].slice(0, 60); }
+        const key = `${j.phase}\u0000${j.scene}`;
+        if (!byPart.has(key)) byPart.set(key, { phase: j.phase, scene: j.scene, rs: [], err: null });
+        const rec = byPart.get(key);
+        if (r == null) rec.err = jobErr; else rec.rs.push(r);
+        if (++done % 20 === 0) process.stdout.write(`  ${done}/${jobs.length}`);
+      }
+    });
+} catch (e) { err = String(e.message ?? e).split('\n')[0]; }
+if (err) { console.error('\n  harness failed: ' + err); process.exit(1); }
+
+const median = (a) => { const s2 = [...a].sort((x, y) => x - y); return s2[s2.length >> 1]; };
+const rows = [...byPart.values()].map((x) => ({
+  phase: x.phase, scene: x.scene, err: x.err,
+  r: x.rs.length ? median(x.rs) : null,
+  worst: x.rs.length ? Math.min(...x.rs) : null,
+  spread: x.rs.length ? Math.max(...x.rs) - Math.min(...x.rs) : null,
+}));
+
 rows.sort((a, b) => (b.r ?? -1) - (a.r ?? -1));
-console.log('\n  r      phase  part');
+console.log('\n  median  worst  spread  phase  part');
 for (const x of rows) {
-  console.log(`  ${x.r == null ? 'ERR  ' : x.r.toFixed(3)}   ${x.phase}      ${x.scene}${x.err ? '   ' + x.err : ''}`);
+  if (x.r == null) { console.log(`  ERR                          ${x.phase}      ${x.scene}   ${x.err ?? ''}`); continue; }
+  // A wide spread means the part is right at some instants and wrong at
+  // others — which the median alone hides and the midpoint alone cannot see.
+  const flag = x.spread > 0.25 ? '  << uneven' : '';
+  console.log(`  ${x.r.toFixed(3)}   ${x.worst.toFixed(3)}  ${x.spread.toFixed(3)}     ${x.phase}      ${x.scene}${flag}`);
 }
 const ok = rows.filter((x) => x.r != null);
-console.log(`\n${ok.length}/${rows.length} rendered; median r ${ok.length ? ok[Math.floor(ok.length/2)].r.toFixed(3) : '-'}`);
+const worst = ok.length ? ok.reduce((a, b) => (b.worst < a.worst ? b : a)) : null;
+console.log(`\n${ok.length}/${rows.length} parts rendered, ${SAMPLES} samples each` +
+  `; median r ${ok.length ? median(ok.map((x) => x.r)).toFixed(3) : '-'}` +
+  (worst ? `; worst instant ${worst.worst.toFixed(3)} in ${worst.scene}` : ''));
