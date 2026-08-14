@@ -83,13 +83,18 @@ export function addNote(note) {
   const dup = all.find((n) => n.part === stored.part && n.local === stored.local &&
                               n.text === stored.text);
   if (dup) return dup;
-  all.push(stored);
-  fs.writeFileSync(file, JSON.stringify(all, null, 2));
 
+  // FILE FIRST, THEN PERSIST. Writing notes.json before filing loses the issue
+  // number — the note is returned to the browser with it, but what lands on
+  // disk has no `issue`, so a later `--notes` pass sees an unfiled note and
+  // files it again. That produced four duplicate issues (#18-#21) before it
+  // was spotted.
   if (note.file) {
     try { stored.issue = fileToGitHub(stored); }
     catch (e) { stored.issueError = String(e.message ?? e); }
   }
+  all.push(stored);
+  fs.writeFileSync(file, JSON.stringify(all, null, 2));
   return stored;
 }
 
