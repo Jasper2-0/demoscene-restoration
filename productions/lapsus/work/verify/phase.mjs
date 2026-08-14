@@ -99,9 +99,23 @@ if (Math.abs(best.d) < step * 1.5) {
   console.log(atZero.r > 0.75
     ? '\n  -> ALIGNED. The peak is at zero and it is high: this part is on time and matching.'
     : '\n  -> Peak is at zero but low: the timing is right and the picture itself is wrong.');
-} else if (best.r - atZero.r > MARGIN) {
+} else if (best.r - atZero.r > MARGIN && best.r >= 0.55) {
+  // BOTH CONDITIONS ARE REQUIRED, and the second was missing. "Some offset
+  // beats zero by 0.1" is satisfied by NOISE on a scan where nothing matches:
+  // paleksi at local 1.304s scored 0.15-0.33 at every offset across +-1.2s and
+  // this printed "OFF BY 0.20s" off a 0.335 peak, sending the next step after a
+  // clock that is not wrong. A timing offset means the picture is RIGHT
+  // somewhere — flu2's real one peaked at 0.845 — so the peak has to be good in
+  // absolute terms and not merely the tallest bump in the grass.
   console.log(`\n  -> OFF BY ${best.d.toFixed(2)}s. The peak beats the aligned sample by ` +
-              `${(best.r - atZero.r).toFixed(3)},\n     so this part renders at the wrong time.`);
+              `${(best.r - atZero.r).toFixed(3)} and reaches ${best.r.toFixed(3)},\n` +
+              `     so this part renders at the wrong time.`);
+} else if (best.r - atZero.r > MARGIN) {
+  console.log(`\n  -> NO MATCH ANYWHERE. The best offset (${best.d >= 0 ? '+' : ''}` +
+              `${best.d.toFixed(2)}s) only reaches ${best.r.toFixed(3)}, so even the\n` +
+              '     nearest-matching instant does not match. This is NOT a timing offset:\n' +
+              '     the part draws a different picture at every time in the scan. Widen the\n' +
+              '     span if you still suspect the clock, but look at the picture first.');
 } else {
   console.log('\n  -> FLAT. Nothing nearby matches appreciably better than the aligned frame\n' +
               '     (best beats it by only ' + (best.r - atZero.r).toFixed(3) + '), so this is not a\n' +
