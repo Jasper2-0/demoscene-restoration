@@ -674,20 +674,24 @@ if (!gl.getProgramParameter(hairProg, gl.LINK_STATUS)) throw new Error(gl.getPro
 // Particles (RENDER.md §11): GL_QUADS billboards, additive, depth test on
 // with depthMask(FALSE). Only Part_Pehko uses the system, cloning ONE system
 // per hair node.
+// The sprite colour is PER PARTICLE, not one tint for the system: emit()
+// draws its own r/g/b (0x40dc3f-0x40dc9c) and the draw does
+// glColor4f(r*alpha, g*alpha, b*alpha, 1.0) under (ONE, ONE). aColor carries
+// the already-multiplied r*alpha so the shader stays a plain modulate.
 const PAR_VS = `#version 300 es
-in vec3 aPos; in vec2 aUV; in float aAlpha;
-uniform mat4 uMV, uProj; out vec2 vUV; out float vA;
-void main(){ vUV = aUV; vA = aAlpha; gl_Position = uProj * uMV * vec4(aPos,1.0); }`;
+in vec3 aPos; in vec2 aUV; in vec3 aColor;
+uniform mat4 uMV, uProj; out vec2 vUV; out vec3 vC;
+void main(){ vUV = aUV; vC = aColor; gl_Position = uProj * uMV * vec4(aPos,1.0); }`;
 const PAR_FS = `#version 300 es
-precision highp float; in vec2 vUV; in float vA; out vec4 o;
-uniform sampler2D uTex; uniform vec3 uTint;
-void main(){ o = vec4(texture(uTex, vUV).rgb * vA * uTint, 1.0); }`;
+precision highp float; in vec2 vUV; in vec3 vC; out vec4 o;
+uniform sampler2D uTex;
+void main(){ o = vec4(texture(uTex, vUV).rgb * vC, 1.0); }`;
 const parProg = gl.createProgram();
 gl.attachShader(parProg, sh(gl.VERTEX_SHADER, PAR_VS));
 gl.attachShader(parProg, sh(gl.FRAGMENT_SHADER, PAR_FS));
 gl.bindAttribLocation(parProg, 0, 'aPos');
 gl.bindAttribLocation(parProg, 1, 'aUV');
-gl.bindAttribLocation(parProg, 2, 'aAlpha');
+gl.bindAttribLocation(parProg, 2, 'aColor');
 gl.linkProgram(parProg);
 
 // Picture — a 2D sprite in a virtual 640x480 ortho, used by Part_Empt's
@@ -1351,11 +1355,6 @@ const bgVao = gl.createVertexArray();
       gl.uniformMatrix4fv(gl.getUniformLocation(parProg, 'uMV'), false, view);
       gl.uniformMatrix4fv(gl.getUniformLocation(parProg, 'uProj'), false, proj);
       gl.uniform1i(gl.getUniformLocation(parProg, 'uTex'), 0);
-      // RENDER.md §11.4: the tint computes to r in [0.0135,0.017] and
-      // g,b in [0.010,0.0125] — only ~1.5% additive contribution per sprite,
-      // which is what keeps 720 overlapping sprites from blowing out. The
-      // bytes were unambiguous but wanted a capture check; this is it.
-      gl.uniform3f(gl.getUniformLocation(parProg, 'uTint'), 0.0153, 0.0113, 0.0113);
       gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
       gl.depthMask(false); gl.disable(gl.CULL_FACE);
       gl.activeTexture(gl.TEXTURE0);
@@ -1370,8 +1369,9 @@ const bgVao = gl.createVertexArray();
         for (const q of list) {
           const c = billboard(q, camZ);
           const uvs = [[0,1],[1,1],[1,0],[0,0]];
+          const cc = [q.r * q.alpha, q.g * q.alpha, q.b * q.alpha];
           for (const i of [0,1,2, 0,2,3]) {          // quad -> 2 triangles
-            pos.push(...c[i]); uv.push(...uvs[i]); al.push(q.alpha);
+            pos.push(...c[i]); uv.push(...uvs[i]); al.push(...cc);
           }
         }
         const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
@@ -1379,7 +1379,7 @@ const bgVao = gl.createVertexArray();
           gl.bindBuffer(gl.ARRAY_BUFFER, b);
           gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
           gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0); };
-        put(0, pos, 3); put(1, uv, 2); put(2, al, 1);
+        put(0, pos, 3); put(1, uv, 2); put(2, al, 3);
         gl.drawArrays(gl.TRIANGLES, 0, pos.length / 3);
       }
       gl.disable(gl.BLEND); gl.depthMask(true); gl.enable(gl.CULL_FACE);

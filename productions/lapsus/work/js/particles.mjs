@@ -61,26 +61,46 @@ export const createSystem = (p) => ({ live: [], sinceEmit: p.emitInterval });
  * uninterrupted sequence and the order of consumption is part of the result.
  */
 export function stepSystem(st, p, origin, dt, rand) {
-  const r = () => rand() * (1 / 32767);            // 0..1
+  const U01 = () => rand() * (1 / 32767);          // 0..1
+  const S11 = () => rand() * (2 / 32767) - 1;      // -1..1
   st.sinceEmit += dt;
   if (st.sinceEmit >= p.emitInterval && st.live.length < p.maxParticles) {
     st.sinceEmit = 0;
     const [px, py, pz, nx, ny, nz] = p.initialPosition;
     const [vx, vy, vz, mx, my, mz] = p.initialVelocity;
-    st.live.push({
-      pos: [origin[0] + px + (r() - 0.5) * 2 * nx,
-            origin[1] + py + (r() - 0.5) * 2 * ny,
-            origin[2] + pz + (r() - 0.5) * 2 * nz],
-      // VelocityMultiplier is 0 in the shipped file, and the emitter's own
-      // velocity is nonsense in the engine (prevPosition is only written in
-      // the "finished" branch) — so it contributes nothing and is omitted
-      // deliberately rather than approximated.
-      vel: [vx + (r() - 0.5) * 2 * mx, vy + (r() - 0.5) * 2 * my, vz + (r() - 0.5) * 2 * mz],
-      size: p.initialSize[0] + (r() - 0.5) * 2 * p.initialSize[1],
-      zRot: p.initialZRotation[0] + (r() - 0.5) * 2 * p.initialZRotation[1],
-      zRotVel: p.minZRotVelocity + r() * (p.maxZRotVelocity - p.minZRotVelocity),
-      age: 0, alpha: 1,
-    });
+    // ORDER MATTERS. ParticleSystem::emit @0x40db50 makes exactly 13 rand()
+    // calls per particle, in this sequence, off the one stream the whole demo
+    // shares. Drawing the same count in a different order gives every
+    // particle different values — the cloud stays statistically similar and
+    // stops being the same cloud.
+    const size = S11() * p.initialSize[1] + p.initialSize[0];              // 1
+    const zRotVel = U01() * (p.maxZRotVelocity - p.minZRotVelocity) + p.minZRotVelocity; // 2
+    // A random age HEAD START of up to 0.3s (0x40dc33, _DAT_0045a608).
+    // Without it every particle emitted on the same step has the same age,
+    // therefore the same flipbook frame and the same size, and 800 sprites
+    // collapse into a few identical overlapping discs — a uniform haze
+    // instead of the capture's grain.
+    const age = U01() * 0.3;                                              // 3
+    // Per-particle tint, not one constant for the whole system. The sprite is
+    // drawn glColor4f(r*alpha, g*alpha, b*alpha, 1) under (ONE,ONE), so this
+    // is ~1.5% of the texel each and the spread across particles is what
+    // gives the cloud its colour variation.
+    const cr = (U01() * 0.007 + 0.027) * 0.5;                             // 4
+    const cg = (U01() * 0.005 + 0.020) * 0.5;                             // 5
+    const cb = (U01() * 0.005 + 0.020) * 0.5;                             // 6
+    // Only the emitter's world TRANSLATION enters the spawn (FUN_0040e830):
+    // its rotation and scale are ignored, so the spawn box and the initial
+    // velocity are always in world axes.
+    const pos = [origin[0] + px + S11() * nx,                             // 7
+                 origin[1] + py + S11() * ny,                             // 8
+                 origin[2] + pz + S11() * nz];                            // 9
+    // VelocityMultiplier is 0 in the shipped file, and the emitter's own
+    // velocity is nonsense in the engine (prevPosition is only written in the
+    // "finished" branch, so systemVelocity is worldPos/dt) — it contributes
+    // nothing and is omitted deliberately rather than approximated.
+    const vel = [vx + S11() * mx, vy + S11() * my, vz + S11() * mz];      // 10,11,12
+    const zRot = S11() * p.initialZRotation[1] + p.initialZRotation[0];   // 13
+    st.live.push({ pos, vel, size, zRot, zRotVel, age, alpha: 1, r: cr, g: cg, b: cb });
   }
   for (let i = st.live.length - 1; i >= 0; i--) {
     const q = st.live[i];
