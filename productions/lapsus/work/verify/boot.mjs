@@ -5,7 +5,8 @@ await withPage(
     viewport: { width: 640, height: 480 } },
   async ({ page, errors }) => {
     await page.waitForFunction('window.__lapsusReady === true', { timeout: 60000 });
-    await page.mouse.click(320, 240);
+    const noClick = process.argv.includes('--noclick');
+    if (!noClick) await page.mouse.click(320, 240);
     const seek = parseFloat(process.argv[3] ?? 'NaN');
     if (!Number.isNaN(seek)) {
       // Wait for phase 1 to actually be playing, then jump near the loader.

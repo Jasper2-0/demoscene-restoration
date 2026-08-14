@@ -2033,8 +2033,6 @@ function accBlit() {
   // against the soundtrack no matter how the frame rate varies — which is the
   // one thing a viewer would notice.
   const sceneParts = (table) => table.map((p) => p[0]).filter((n) => !LOADING_PIC[n]);
-  setStatus('loading part 1…');
-  const phase1Loaded = load(sceneParts(PHASE1));
 
   const audio = new Audio();
   audio.preload = 'auto';
@@ -2243,47 +2241,54 @@ function accBlit() {
     frame().catch((e) => console.error('frame', e)).finally(() => { rendering = false; });
   }
 
-  // Autoplay needs a gesture in every current browser, so the first click
-  // starts the music and the clock together.
-  setStatus('click to start');
   // ---- BOOT, phase 0 (ENGINE.md §4 and §7 step 1).
   //
-  // With an empty schedule every frame is "clear, draw loading.jpg, fade with
-  // clamp0((t - 0.5) * 0.5)" — so the boot screen fades up from black between
-  // t=0.5 and t=2.5. On frame 2 the engine does Sleep(4000) and RESETS the
-  // timer, to let the video mode switch settle; those four seconds are black
-  // on screen, and they are the first thing anyone sees. Phase 1 begins when
-  // t > 3.0.
+  // THE ORDER IS THE POINT, and it used to be backwards: the assets were
+  // fetched, then the gesture was asked for, then the loading screen appeared.
+  // The one screen whose entire job is to be looked at while the demo loads
+  // was being shown after the loading had already finished. Now the screen
+  // comes up first, the gesture is taken over it, and the loading happens
+  // underneath it — which is also what the original does, since loadPhase(1)
+  // runs with loading.jpg frozen on the display.
   //
-  // The one deviation: loadPhase(1) is synchronous in the original and freezes
-  // the display on loading.jpg. Here the assets load concurrently with the
-  // boot screen, so the wait is spent rather than added to. The visible
-  // sequence — black, loading.jpg fading up, then the demo — is the same, and
-  // the boot screen still holds until the assets are actually there.
-  const BOOT_SLEEP = 4.0;      // Sleep(4000) on frame 2, then timer reset
-  const BOOT_END = 3.0;        // _DAT_0045a32c
+  // With an empty schedule the engine draws loading.jpg every frame with the
+  // fade clamp0((t - 0.5) * 0.5), so it rises from black between t=0.5 and
+  // t=2.5, and phase 1 begins at t > 3.0. Both are kept, and the fade is never
+  // cut short however fast the load turns out to be.
+  //
+  // DROPPED: the Sleep(4000) on frame 2. It is there to let a video mode
+  // switch settle; there is no mode switch here, and four seconds of black in
+  // front of the loading screen would defeat the ordering above — the viewer
+  // would be waiting for permission to wait.
+  const BOOT_END = 3.0;                         // _DAT_0045a32c
+  const bootTex = await loadingPic('startpart1');
+  const bootT0 = performance.now() / 1000;
+  const bootAge = () => performance.now() / 1000 - bootT0;
+  let booting = true;
+  (function bootFrame() {
+    if (!booting) return;
+    drawLoadingScreen(bootTex, Math.max(0, (bootAge() - 0.5) * 0.5));
+    requestAnimationFrame(bootFrame);
+  })();
+
+  // Autoplay needs a gesture in every current browser, so the first click,
+  // touch or key starts the music and the clock together.
+  const GESTURES = ['pointerdown', 'click', 'keydown'];
+  setStatus('click to start');
   const begin = async () => {
-    document.removeEventListener('click', begin);
-    document.removeEventListener('keydown', begin);
+    for (const ev of GESTURES) document.removeEventListener(ev, begin);
+    // The loading screen is already up and keeps drawing while this runs;
+    // load() names the part it is on through the same status line.
+    await load(sceneParts(PHASE1));
+    if (bootAge() < BOOT_END) {
+      await new Promise((r) => setTimeout(r, (BOOT_END - bootAge()) * 1000));
+    }
     setStatus('');
-    const bootTex = await loadingPic('startpart1');
-    const t0 = performance.now() / 1000;
-    let ready = false;
-    phase1Loaded.then(() => { ready = true; });
-    await new Promise((done) => {
-      const boot = () => {
-        const bt = performance.now() / 1000 - t0 - BOOT_SLEEP;
-        drawLoadingScreen(bootTex, Math.max(0, (bt - 0.5) * 0.5));
-        if (bt > BOOT_END && ready) return done();
-        requestAnimationFrame(boot);
-      };
-      boot();
-    });
+    booting = false;
     await startPhase(1);
     tick();
   };
-  document.addEventListener('click', begin);
-  document.addEventListener('keydown', begin);
+  for (const ev of GESTURES) document.addEventListener(ev, begin);
   window.__lapsusReady = true;
 
 })().catch((e) => {
