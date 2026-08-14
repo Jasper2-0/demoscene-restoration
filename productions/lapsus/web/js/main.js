@@ -1317,11 +1317,21 @@ function accBlit() {
     }
     // ---- opaque first, then blended (RENDER.md 8 draw order)
     textured = 0;
-    // Depth sort: key is the camera-space Z of each object's bounding-sphere
-    // centre, ASCENDING (nearest first). The opaque pass walks forward and the
-    // blended pass BACKWARD (far->near). It is per-OBJECT, not per-triangle, so
-    // the original's transparency ordering is imperfect — reproduce it rather
-    // than improve on it (RENDER.md §4 steps 5-8).
+    // Depth sort, per RENDER.md §4 steps 5-8: NEAREST FIRST, opaque pass
+    // forward, blended pass BACKWARD so blending runs far->near. Per-OBJECT,
+    // not per-triangle, so the original's transparency ordering is imperfect —
+    // reproduce it rather than improve on it.
+    //
+    // THE SIGN MATTERS AND IT WAS WRONG. The engine's key is the sphere centre
+    // through camInverseWorld, in a camera space that looks down +Z, so its
+    // ascending sort is nearest-first. Ours is GL eye space, which looks down
+    // -Z, so the same ascending sort put the FARTHEST object first and every
+    // pass ran backwards. The depth test hides that in the opaque pass; the
+    // blended pass drew near->far and composited in the wrong order. In `made`
+    // the ratash quad (z -85.6) is behind the four Obu objects (z -72.2), so it
+    // was drawn LAST and its multiply painted over the 3D object the capture
+    // shows on top of it. Sorting by distance rather than by signed z restores
+    // the engine's order.
     // ?onlyobj=<substring> / ?skipobj=<substring> — draw one object, or drop
     // one. A whole-frame score says the picture is wrong; it cannot say WHICH
     // object is painting the wrong pixels, and on a scene with a dozen objects
@@ -1335,8 +1345,16 @@ function accBlit() {
       const mv = M.mul(view, worldMatrix(d.item, T));
       const c = d.mesh.centre;
       return { d, mv, z: mv[2]*c[0] + mv[6]*c[1] + mv[10]*c[2] + mv[14] };
-    }).sort((a, b) => a.z - b.z);
+    }).sort((a, b) => b.z - a.z);        // -z is distance: nearest first
 
+    // ?probe-style diagnostic: what got drawn, in what order, with what key.
+    // Draw order is decided by a sort key whose SIGN depends on the view's
+    // Scale(1,1,-1), so it is not something to reason about from the source.
+    if (single || inspect) window.__lapsusOrder = objs.map((o) => ({
+      item: String(o.d.item.file ?? o.d.item.name ?? '?').split('/').pop(),
+      z: +o.z.toFixed(3),
+      modes: [...new Set(o.d.mesh.parts.map((pt) => o.d.mats.get(pt.surfName)?.blendMode ?? 0))],
+    }));   // diagnostic only — not built during live playback
     const passes = [];
     for (const o of objs) for (const part of o.d.mesh.parts) {
       const mat = o.d.mats.get(part.surfName)
