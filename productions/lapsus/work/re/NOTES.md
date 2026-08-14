@@ -950,6 +950,43 @@ correlation, which weights quiet lead-in like the downbeat.
   introduced (0.688 -> 0.639), never since recovered. So it is the mask-0x80
   MODULATE path that wants re-reading, not flu2 specifically.
 
+  Narrowed further, and one earlier reading of mine was WRONG: by eye I called
+  our overlay "too bright", but measured by region it is the opposite. Mean
+  luma by region at t=4.5:
+
+      shards  (left 380px)   ours 41.3   capture 61.3
+      overlay (right 260px)  ours 11.1   capture 19.2
+
+  The overlay region contains shard content too, so this is one defect, not
+  two: the SHARDS are ~1.5x too dark and they bleed into both crops. Controls
+  rule out anything global — kartonki renders at 1.07x the capture and pene at
+  1.14x, i.e. slightly BRIGHTER, so nothing scene-independent is dimming us.
+
+  Verified from the bytes and eliminated as causes:
+  - The mask-0x80 dispatch is exactly as implemented. 0x42bd1e-0x42be44 does
+    FUN_0042cf90(RIMG name, empty temp, 1) -> setTexCount(1) at 0x42be1a ->
+    setTexture(unit 0) at 0x42be30 -> setTexGen(unit 0, SPHERE_MAP) at
+    0x42be3f. It jumps to 0x42ca0f rather than 0x42ca01 purely to skip the
+    shared `setTexture(0, tex)` it has already done itself.
+  - `dezz` is mask **0x41** (COLR + TRAN), which has its own branch at
+    0x42c8bc — one texture on unit 0, opaque. Its FUN_0042cf90 call at
+    0x42c9d9 does pass a real pointer as alphaName (`PUSH ESI`) rather than
+    the empty temp the 0x80 branch passes, but ESI is `LEA ESI,[EBP+0x140]`
+    (0x42b99b) — the slot 2 / DIFF name — which is EMPTY for mask 0x41. So no
+    alpha is loaded and drawing it opaque is right. (Worth noting for later:
+    on mask 5, COLR + DIFF, that same slot is NOT empty, so the engine would
+    hand the DIFF image in as the colour texture's alpha.)
+  - K is correct: with a COLR block present the material takes the neutral
+    grey `diffuseLevel` (1.0 here), not dezz's 0.784 surface colour, and
+    main.js already does this.
+  - Lights parse correctly (two distant, intensity 2.0 and 0.5,
+    `AmbientIntensity 0`), fog is off (`FogType 0`), no fade is active at the
+    midpoint, and both objects are single-layer.
+
+  So the residual is the mask-0x80 lit-and-modulated path being about a third
+  too dark on this scene specifically, and it is NOT the texgen, the mask
+  classification, the material colour, the lights, fog or a fade. UNRESOLVED.
+
   Measured, so the next person starts from numbers: whole-frame mean luma is
   **29.0 for ours against 44.2 for the capture** at t=4.5 — we are at 66%.
   `NebulaMixed2.jpg` has mean luma **46.6/255 = 0.18**, and flu2 lights the
