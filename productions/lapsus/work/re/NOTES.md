@@ -1002,6 +1002,28 @@ correlation, which weights quiet lead-in like the downbeat.
   (`dezz.lwo`, luminosity 1.0 hence unlit, COLR + TRAN) sits ~15-20px left of
   the capture's.
 
+  Characterised by DISTRIBUTION rather than mean, which changes what the
+  defect is. Shard region (left 380px) at t=4.5:
+
+      ours     black 34.9%   p50  16  p75  44  p90 123  p99 255   mean 41.3
+      capture  black 30.2%   p50  58  p75  98  p90 139  p99 215   mean 61.3
+
+  The black fraction matches, so the silhouette and coverage are right. Our
+  MIDTONES are crushed (p50 16 against 58) while our HIGHLIGHTS over-clip
+  (p99 255 against 215). It is not a uniform gain shortfall.
+
+  On a mask-0x80 surface `col = primary x reflTexel`, so our median implies
+  `N.L ~ 0.17` where the capture implies `~0.63`. Two candidates follow, and
+  both are now tested and dead:
+  - **Clamping the lighting result to [0,1]** before the texture stage, which
+    is what fixed-function GL does and which we do not do. It fixes the
+    over-clip in the wrong direction — p99 255 -> 165, mean 41.3 -> 30.0, both
+    now well BELOW the capture — and does nothing for the midtones. Not
+    applied.
+  - **Inverted normals** (LWO2 winds polygons clockwise-from-outside, which is
+    the opposite of the right-hand-rule cross product we use). Negating them
+    gives p50 16 -> 1 and mean 30.0 -> 10.2. Our orientation is right.
+
   Confirmed NOT flu2's cause: the transparency IMAGE is correctly never
   loaded. FUN_0042cf90 forwards (surface, &colourName, &alphaName, filterMode)
   to TextureManager::get and the alpha name is always the empty temp, so a
