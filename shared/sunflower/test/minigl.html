@@ -158,6 +158,14 @@
   mgl.clear();
   drawQuad({ z: -0.5 });
   const fogPixel = readCenter();
+
+  // Same ramp, but fogging toward a colour rather than to black: half way
+  // through [0,1] a white quad is halfway to the fog colour.
+  mgl.fog(0, 1, [1, 0, 0]);
+  mgl.clear();
+  drawQuad({ z: -0.5 });
+  const fogColorPixel = readCenter();
+  mgl.fog(0, 1, [0, 0, 0]);
   mgl.enableFog(false);
 
   // SRC_ALPHA / ONE_MINUS_SRC_ALPHA over the opaque black clear color.
@@ -275,6 +283,7 @@
     arrayNormal: { pixel: normalPixel, expected: [51, 51, 51, 255] },
     independentUv: { pixel: independentUvPixel, expected: [255, 0, 255, 255] },
     fog: { pixel: fogPixel, expected: [128, 128, 128, 255] },
+    fogColor: { pixel: fogColorPixel, expected: [255, 128, 128, 255] },
     // MiniGL requests an opaque drawing buffer, so destination alpha remains 1.
     blend: { pixel: blendPixel, expected: [64, 0, 0, 255] },
     sourceColorBlend: { pixel: sourceColorBlendPixel, expected: [64, 64, 64, 255] },

@@ -152,10 +152,11 @@ uniform vec2 uCombineScale1;
 uniform bool uUseVertexColor;
 uniform bool uLightingEnabled;
 uniform vec4 uColor;
-uniform vec3 uFog; // x: enabled, y: start, z: end (linear fog, black)
+uniform vec3 uFog; // x: enabled, y: start, z: end (GL_LINEAR)
 // [ptct ext] rgb = fog color; a > 0.5 selects OpenGL's default GL_EXP fog:
 // f = exp(-density * eyeDist), c = mix(fogColor, c, f). density is passed in
-// uFog.y (uFog.z unused in this mode). a = 0 keeps the legacy linear black fog.
+// uFog.y (uFog.z unused in this mode). a = 0 selects GL_LINEAR, which uses
+// uFogColor.rgb as its target — (0,0,0), i.e. fade to black, unless set.
 uniform vec4 uFogColor;
 uniform bool uPointMode;
 out vec4 outColor;
@@ -283,8 +284,11 @@ void main() {
       float f = clamp(exp(-uFog.y * vEyeDist), 0.0, 1.0);
       c.rgb = mix(uFogColor.rgb, c.rgb, f);
     } else {
+      // GL_LINEAR. Mixing toward the fog colour; the colour is (0,0,0) unless
+      // a caller sets one, and mix(black, c, f) == c * f, so this is exactly
+      // the multiply it replaces for anyone who never calls fog() with one.
       float f = clamp((uFog.z - vEyeDist) / (uFog.z - uFog.y), 0.0, 1.0);
-      c.rgb *= f;
+      c.rgb = mix(uFogColor.rgb, c.rgb, f);
     }
   }
   if (uPointMode) {
@@ -435,7 +439,13 @@ export class MiniGL {
     this.uFog = gl.getUniformLocation(prog, 'uFog');
     // [ptct ext] see fogExp()/fogExpOff() below
     this.uFogColor = gl.getUniformLocation(prog, 'uFogColor');
-    gl.uniform4f(this.uFogColor, 0, 0, 0, 0);
+    this.fogColorValue = new Float32Array([0, 0, 0, 0]);
+    this.fogColorDirty = true;
+    this.lightPos = new Float32Array(MAX_LIGHTS * 4);
+    this.lightDiffuse = new Float32Array(MAX_LIGHTS * 3);
+    this.lightSpecular = new Float32Array(MAX_LIGHTS * 3);
+    this.lightSpot = new Float32Array(MAX_LIGHTS * 4);
+    this.lightsDirty = true;
     this.uLightingEnabled = gl.getUniformLocation(prog, 'uLightingEnabled');
     this.uLightCount = gl.getUniformLocation(prog, 'uLightCount');
     this.uLightPos = gl.getUniformLocation(prog, 'uLightPos');
@@ -763,7 +773,6 @@ export class MiniGL {
   lightModelAmbient(r, g, b) { this.lightModelAmbient_ = [r, g, b]; }
 
   setLights(lights) {
-    const gl = this.gl;
     const n = Math.min(lights.length, MAX_LIGHTS);
     const pos = new Float32Array(MAX_LIGHTS * 4);
     const dif = new Float32Array(MAX_LIGHTS * 3);
@@ -780,12 +789,21 @@ export class MiniGL {
       spot.set([d[0], d[1], d[2], l.spotCos === undefined ? -1 : l.spotCos], i * 4);
     }
     this.nLights = n;
-    gl.uniform4fv(this.uLightPos, pos);
-    gl.uniform3fv(this.uLightDiffuse, dif);
-    gl.uniform3fv(this.uLightSpecular, spc);
-    gl.uniform4fv(this.uLightSpot, spot);
+    this.lightPos = pos; this.lightDiffuse = dif;
+    this.lightSpecular = spc; this.lightSpot = spot;
+    this.lightsDirty = true;
   }
-  fog(start, end) { this.fogStart = start; this.fogEnd = end; }
+  /**
+   * GL_LINEAR fog over [start, end]. `color` is GL_FOG_COLOR and defaults to
+   * black, which is what fading to nothing means and what every caller before
+   * Lapsus assumed. Lapsus takes it from the scene's BackdropColor or FogColor
+   * (RENDER.md §4), so a lit scene fogs toward its own sky rather than to
+   * black.
+   */
+  fog(start, end, color = null) {
+    this.fogStart = start; this.fogEnd = end;
+    if (color) this._setFogColor(color[0], color[1], color[2], 0);
+  }
 
   // [ptct ext] OpenGL-default GL_EXP fog toward a color, as ptct's engine uses
   // (it sets GL_FOG_DENSITY = 1/fogDist and never changes GL_FOG_MODE from the
@@ -794,9 +812,13 @@ export class MiniGL {
   // fog path is untouched when fogExp is never called.
   fogExp(density, r, g, b) {
     this.fogStart = density; this.fogEnd = 0;
-    this.gl.uniform4f(this.uFogColor, r, g, b, 1);
+    this._setFogColor(r, g, b, 1);
   }
-  fogExpOff() { this.gl.uniform4f(this.uFogColor, 0, 0, 0, 0); }
+  fogExpOff() { this._setFogColor(0, 0, 0, 0); }
+  _setFogColor(r, g, b, a) {
+    this.fogColorValue = new Float32Array([r, g, b, a]);
+    this.fogColorDirty = true;
+  }
   blendFunc(src, dst) { this.gl.blendFunc(src, dst); }
   depthMask(on) { this.gl.depthMask(!!on); }
   depthFunc(fn) { this.gl.depthFunc(fn); }
@@ -821,7 +843,25 @@ export class MiniGL {
 
   _applyCommonUniforms(pointMode = false) {
     const gl = this.gl;
+    // A port may render some passes with its own programs — Lapsus has five
+    // beside this one, for hair, particles, 2D pictures, fades and the
+    // feedback accumulator. So the shim cannot assume it still owns the
+    // context from one draw to the next: bind before writing uniforms, and
+    // keep every uniform DEFERRED to this point rather than writing it from
+    // the setter, or it lands in whichever program happens to be current.
+    gl.useProgram(this.prog);
     this._syncMatrices();
+    if (this.lightsDirty) {
+      gl.uniform4fv(this.uLightPos, this.lightPos);
+      gl.uniform3fv(this.uLightDiffuse, this.lightDiffuse);
+      gl.uniform3fv(this.uLightSpecular, this.lightSpecular);
+      gl.uniform4fv(this.uLightSpot, this.lightSpot);
+      this.lightsDirty = false;
+    }
+    if (this.fogColorDirty) {
+      gl.uniform4fv(this.uFogColor, this.fogColorValue);
+      this.fogColorDirty = false;
+    }
     for (let index = 0; index < 2; index++) {
       const unit = this.textureUnits[index], env = unit.env;
       gl.activeTexture(gl.TEXTURE0 + index);
