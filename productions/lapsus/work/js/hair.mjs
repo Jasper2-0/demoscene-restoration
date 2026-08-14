@@ -59,7 +59,16 @@ export function buildStrands(h, rand = msvcRand()) {
   const segLen = h.hairLength / Math.max(1, h.nodesPerHair);
   const strands = [];
   for (let s = 0; s < h.hairCount; s++) {
-    const d = [0, 1, 2].map(() => rand() * (1 / 32767) - 0.5);
+    // The three draws land in REVERSE order: 0x42393f-0x423ba1 computes r1,
+    // r2, r3 in that sequence and stores dir = (r3*inv, r2*inv, r1*inv), so
+    // the FIRST value drawn becomes Z and the third becomes X. Consuming the
+    // stream in order and assigning x,y,z in order gives a different strand
+    // for the same seed — statistically the same cloud, but not the same
+    // hair, and this demo's hair is deterministic by design.
+    const r1 = rand() * (1 / 32767) - 0.5;
+    const r2 = rand() * (1 / 32767) - 0.5;
+    const r3 = rand() * (1 / 32767) - 0.5;
+    const d = [r3, r2, r1];
     const len = Math.hypot(...d) || 1;
     const dir = d.map((x) => x / len);
     // node[0] IS the root anchor at the object origin and is never

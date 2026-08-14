@@ -1409,7 +1409,11 @@ const bgVao = gl.createVertexArray();
     2.659056187, 2.991438150, 3.323820114, 3.766996145, 4.431760311, 4.764142036,
     5.096524239, 5.539700031, 6.426052094];
   const VIHERIO_CYCLE = 7.090816326530613;
-  let win = FB_WINDOW[SCENE];
+  // ?fb= overrides the replay window, so a feedback part can be rendered as a
+  // single frame (?fb=0) to separate "the per-frame content is wrong" from
+  // "the accumulation is wrong". Those are different bugs with different
+  // fixes and the composite image cannot tell them apart.
+  let win = qs.has('fb') ? Number(qs.get('fb')) : FB_WINDOW[SCENE];
   if (/^viherio$/i.test(SCENE)) {
     const phase = T % VIHERIO_CYCLE;
     win = VIHERIO_ONSETS.some((e) => phase >= e && phase < e + 0.1) ? 0.12 : undefined;

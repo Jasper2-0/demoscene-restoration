@@ -32,6 +32,12 @@ const PHASE2 = {
 
 const scene = (process.argv[2] ?? 'hulluolli').toLowerCase();
 const local = parseFloat(process.argv[3] ?? '4.8');
+// Any further `k=v` arguments are appended to the renderer's query string, so
+// diagnostics like ?fb=0 (render a feedback part as a single frame) or
+// ?hairdt= can be driven from here without a second harness.
+const extra = process.argv.slice(4).filter((a) => a.includes('='));
+const suffix = extra.length ? '&' + extra.join('&') : '';
+const tag = extra.length ? '_' + extra.join('_').replace(/[^\w.-]/g, '') : '';
 
 const prod = JSON.parse(fs.readFileSync(fromRepo('productions/lapsus/prod.json'), 'utf8'));
 const cap = prod.captures[0];
@@ -44,16 +50,16 @@ const captureTime = trackMs / 1000 + entry.start + local;
 
 const outDir = fromRepo('productions/lapsus/work/verify/frames');
 fs.mkdirSync(outDir, { recursive: true });
-const ours = path.join(outDir, `${scene}_t${local}_ours.png`);
-const ref = path.join(outDir, `${scene}_t${local}_ref.png`);
-const sbs = path.join(outDir, `${scene}_t${local}_sbs.png`);
+const ours = path.join(outDir, `${scene}_t${local}${tag}_ours.png`);
+const ref = path.join(outDir, `${scene}_t${local}${tag}_ref.png`);
+const sbs = path.join(outDir, `${scene}_t${local}${tag}_sbs.png`);
 
 console.log(`${scene}  local t=${local}s  (phase ${inP1 ? 1 : 2} t=${(entry.start + local).toFixed(2)}s)`);
 console.log(`capture time = ${captureTime.toFixed(2)}s`);
 
 await withPage(
   { root: 'productions/lapsus', path: '/web/index.html',
-    query: `?scene=${scene}&t=${local}`, width: 640, height: 480,
+    query: `?scene=${scene}&t=${local}${suffix}`, width: 640, height: 480,
     viewport: { width: 640, height: 480 } },
   async ({ page, server, errors, failedRequests }) => {
     await page.waitForFunction('window.__lapsusReady === true', { timeout: 30000 });

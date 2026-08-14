@@ -935,10 +935,37 @@ correlation, which weights quiet lead-in like the downbeat.
   IS the observed behaviour; here the OpenGL spec is the external document
   that loses to the demo. The persistent-state machinery is deleted, since
   under clamping every surface's exponent takes effect on its own.
-* **pehko 0.514 and higherbiing 0.584** are now the two weakest. pehko is a
-  no-clear feedback part approximated by replaying a decay window instead of
-  owning a real frame loop — the honest fix is a ping-pong FBO and a real
-  frame loop, which is a harness change rather than a renderer one.
+* **pehko (0.498) and higherbiing (0.584)** are the two weakest.
+
+  pehko was assumed to need a real frame loop / ping-pong FBO. **That is not
+  the defect.** `?fb=0` renders a feedback part as a single frame, which
+  separates "the per-frame content is wrong" from "the accumulation is
+  wrong" — the composite image cannot tell them apart. The single frame
+  contains exactly **800** sprites, the 80 systems x pool of 10 that §11.2.2
+  predicts, and they are spread over far more of the screen than the
+  capture's, dimly. So the per-frame CONTENT is wrong and the accumulation is
+  a red herring.
+
+  Eliminated so far, each by reading rather than by trying:
+  - The black veil is right. `FadeIn::draw(v)` mode 3 writes
+    `material.transparency = v` giving GL alpha `1 - v` (§6), so
+    `part[+0x20]->vf1(0.95f)` really is a 5% veil, not 95%.
+  - The replay order is right: fader first, then content, matching
+    0x40781b -> 0x40782b -> 0x40783e.
+  - The sprite count is exactly right (800).
+  - Segment length is right: `node[i].len = HairLength / NodesPerHair` =
+    10/10 = 1.0, so a strand reaches 9.0 units at node 9.
+  - Sprite size is right: §11.2.4's corners are P +/- U +/- V with
+    |U| = sizeX/2, so a quad spans `InitialSize` = 1.6 units.
+  - Particle travel is small: `InitialVelocity` 1.0 with `Friction 0.5` over
+    `LifeTime 1.677` integrates to ~1.1 units, against a 9-unit hair.
+
+  What is left is that the emitter cloud subtends too much of the frame —
+  either the hair nodes span more world space than they should, or the camera
+  is not where we put it. The bright core lands within ~25px of the capture's,
+  which argues for scale rather than position. Next step is to test whether a
+  single uniform scale reconciles the two, which localises it to the camera;
+  if no single factor does, it is the emitter distribution.
 * **empt is not reproducible run-to-run** (0.838 / 0.850 / -0.013 observed) —
   its stamping draws from the shared MSVC stream, so anything that consumes a
   rand() before it shifts every stamp. Do not read small empt deltas as signal.
