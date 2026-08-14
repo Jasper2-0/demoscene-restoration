@@ -80,10 +80,10 @@
       "format": "bestvideo+bestaudio",
       "sha256": "115f682ffd830f9bc1863a0c21624d767523a2996ef5b1c86933ba047dd6432e",
       "alignmentOffsetMs": 6410,
-      "note": "two MP3s play in order with a loading part in the middle. 10ms log-energy correlation: mp3#1 starts at 6.41s (score 0.81), mp3#2 at 106.96s (score 0.88). mp3#1 is cut early (would run to 117.4s) — matches FSOUND_StopSound in the import list; mp3#2 would end at 226.0s but the capture ends at 219.1s.",
+      "note": "two MP3s play in order with a loading part in the middle. mp3#1 starts at 6.41s, mp3#2 at 106.72s. mp3#1 is cut early (would run to 117.4s) - matches FSOUND_StopSound in the import list; mp3#2 would end at 225.8s but the capture ends at 219.1s. mp3#2 was originally pinned at 106.96s by a 10ms log-energy correlation and RE-MEASURED to 106.720s by work/verify/align.mjs, which correlates a moving-mean-subtracted amplitude envelope (onsets, not loudness) at 1ms resolution over three disjoint 30s excerpts. The excerpts agree to 3ms, and the same instrument reproduces mp3#1's pin to 11ms, so the 240ms is specific to track 2 and not estimator bias. Independently corroborated: sweeping render time against fixed reference frames put EVERY phase-2 part 0.15-0.30s early under the old pin, and no phase-1 part.",
       "trackOffsetsMs": {
         "data/mjuusik/1.mp3": 6410,
-        "data/mjuusik/2.mp3": 106960
+        "data/mjuusik/2.mp3": 106720
       }
     }
   ],
