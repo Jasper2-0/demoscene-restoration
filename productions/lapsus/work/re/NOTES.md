@@ -824,7 +824,7 @@ kartonki 0.691, hedi 0.458, morko 0.346).
 
 ---
 
-## §15 Standing (2026-08-14) — median r 0.838, all 21 parts rendering
+## §15 Standing (2026-08-14) — median r 0.840, all 21 parts rendering
 
 `node work/verify/allparts.mjs`. Each part rendered at its midpoint and
 whole-frame luma-correlated against the capture. Use it to rank work, never to
@@ -832,21 +832,20 @@ certify a frame.
 
 | r | phase | part | | r | phase | part |
 |---|---|---|---|---|---|---|
-| 0.999 | 1 | hulluolli      | | 0.693 | 2 | kaivoalieni |
-| 0.993 | 1 | pene           | | 0.686 | 2 | viherio |
-| 0.979 | 2 | kuubiotekniikka| | 0.667 | 2 | hairball |
-| 0.974 | 2 | diskojea       | | 0.660 | 2 | morko |
-| 0.954 | 2 | made           | | 0.641 | 1 | flu2 |
-| 0.938 | 2 | turska         | | 0.600 | 2 | higherbiing |
-| 0.901 | 1 | krediili       | | 0.521 | 1 | paleksi |
-| 0.878 | 1 | silli          | | 0.514 | 1 | pehko |
-| 0.848 | 2 | rad_out        | |       |   | |
-| 0.843 | 2 | kartonki       | |       |   | |
-| 0.838 | 1 | empt (noisy)   | |       |   | |
-| 0.748 | 1 | syrjakyla      | |       |   | |
-| 0.717 | 2 | hedi           | |       |   | |
+| 0.999 | 1 | hulluolli       | | 0.754 | 1 | syrjakyla |
+| 0.993 | 1 | pene            | | 0.732 | 2 | morko |
+| 0.979 | 2 | kuubiotekniikka | | 0.714 | 2 | hedi |
+| 0.971 | 2 | diskojea        | | 0.709 | 1 | paleksi |
+| 0.954 | 2 | made            | | 0.690 | 2 | kaivoalieni |
+| 0.937 | 2 | turska          | | 0.667 | 2 | hairball |
+| 0.901 | 1 | krediili        | | 0.648 | 1 | flu2 |
+| 0.886 | 1 | silli           | | 0.584 | 2 | higherbiing |
+| 0.853 | 2 | rad_out         | | 0.514 | 1 | pehko |
+| 0.845 | 2 | viherio         | |       |   | |
+| 0.840 | 2 | kartonki        | |       |   | |
+| 0.838 | 1 | empt (noisy)    | |       |   | |
 
-Median 0.515 -> **0.838** over this pass. What moved it, in order of size:
+Median 0.515 -> **0.840** over this pass. What moved it, in order of size:
 
 1. **The hair root moves.** Simulating with the root pinned where the null ends
    up converges to a fixed point that has no `dt` in it, so the strands settle
@@ -884,17 +883,22 @@ correlation, which weights quiet lead-in like the downbeat.
   agree: krediili peaks at 1/25s, hairball at 1/12s, and the spread across the
   whole sweep is only ~0.04 r. **Negative result — nothing adopted, 1/60
   stands.** dt is not what is left in the hair.
-* **Lighting is per-fragment; the engine's is per-vertex.** `glShadeModel` is
-  never called, so shading is GL_SMOOTH and fixed-function evaluates lighting
-  at vertices and interpolates. Ours evaluates per pixel. Provable deviation,
-  not yet fixed; largest on coarse geometry.
+* ~~Lighting is per-fragment; the engine's is per-vertex.~~ **FIXED
+  2026-08-14.** `glShadeModel` is never called, so shading is GL_SMOOTH and
+  fixed-function lights each vertex, emits a primary and a secondary colour and
+  Gouraud-interpolates both — generating sphere-map coordinates per vertex as
+  well. Moving both to VS gave paleksi 0.521 -> 0.709 and viherio 0.686 ->
+  0.845. Worth recording WHY it survived: per-fragment lighting is strictly
+  "better" and errs toward looking too clean, so nothing about the output
+  looked broken.
 * **GL_SHININESS > 128.** 9 of the archive's 27 GLOS-bearing surfaces map to an
   exponent above GL's ceiling. Real GL raises GL_INVALID_VALUE and keeps the
   material's PREVIOUS shininess; we clamp. Reproducing it needs the
   material-set order.
-* **paleksi 0.521, pehko 0.514** are the two weakest. pehko is a no-clear
-  feedback part approximated by replaying a decay window instead of owning a
-  real frame loop.
+* **pehko 0.514 and higherbiing 0.584** are now the two weakest. pehko is a
+  no-clear feedback part approximated by replaying a decay window instead of
+  owning a real frame loop — the honest fix is a ping-pong FBO and a real
+  frame loop, which is a harness change rather than a renderer one.
 * **empt is not reproducible run-to-run** (0.838 / 0.850 / -0.013 observed) —
   its stamping draws from the shared MSVC stream, so anything that consumes a
   rand() before it shifts every stamp. Do not read small empt deltas as signal.
