@@ -1256,6 +1256,64 @@ does not touch its UVs.
 
 ---
 
+---
+
+## 10.5 Vertex normals — the builder is found, and CONTRADICTS the capture
+
+LWO ships no normals; the engine generates them. The builder is
+`FUN_0041df70`, and the per-polygon normal it uses is `FUN_0041de40`:
+
+```
+FUN_0041de40(polyIndex, out):            # computePolygonNormal
+    e1, e2 = two edge vectors from three of the polygon's points
+              (0x41de68-0x41dea7)
+    n  = cross(e1, e2)                   # 0x41dec1-0x41df06
+    normalize(n)                         # CALL 0x00410350 @0x41df28 — a real
+                                         #   normalize: len, FDIVR 1.0, scale
+                                         #   in place (0x410350-0x41038a)
+    *out = n                             # 0x41df4b-0x41df5c
+
+FUN_0041df70:
+    for each polygon:
+        n = computePolygonNormal(poly)   # 0x41e6b6
+        for v in poly.vertices:          # 0x41e6e5-0x41e725
+            accum[v] += n
+    normalize each accum                 # FSQRT 0x41e804, FDIVR 0x41e817
+```
+
+So: **one UNIT normal per polygon, added once per polygon vertex, then
+normalized.** Not area-weighted, and not per-triangle. `GL_NORMALIZE` (0x0ba1)
+is referenced once, so the draw-time normalisation is there too.
+
+**Implementing exactly that made the port measurably WORSE**, across parts that
+have nothing to do with each other:
+
+| | median | paleksi | viherio | morko | rad_out |
+|---|---|---|---|---|---|
+| area-weighted, per triangle (ours) | **0.840** | 0.709 | 0.845 | 0.732 | 0.853 |
+| unit, per triangle | 0.827 | 0.583 | 0.826 | 0.713 | 0.834 |
+| unit, per polygon (as read above) | 0.827 | 0.506 | 0.671 | 0.694 | 0.834 |
+
+Reverted to the area-weighted per-triangle accumulation, which is what the
+capture supports. This is NOT the `GL_SHININESS` situation, where a plausible
+mechanism (a 2000-era driver clamping instead of rejecting) explains the
+capture beating the spec. Here there is no mechanism, which means the reading
+above is probably subtly wrong rather than the capture being unusual. Two
+specific things were not pinned down and should be, before anyone tries again:
+
+1. **Which three points** `FUN_0041de40` uses. The address arithmetic at
+   0x41de43-0x41de56 was not fully resolved; "the first three" is an
+   assumption, and on a non-planar quad a different triple gives a different
+   normal.
+2. **Whether `FUN_0041df70` feeds the render vertex array at all.** It was
+   reached by searching for callers of the normalize helper, not by tracing
+   back from the stride-48 array whose normal sits at +0x10 (§4.3). It could
+   be building something else — a collision or bounding representation, or the
+   display-list path.
+
+Recording the negative result rather than burying it: the algorithm is now
+known, and the reason we do not use it is measured, not assumed.
+
 ## 11. Hair and particles
 
 Both systems are driven by plain-ASCII config files, both are simulated on the
