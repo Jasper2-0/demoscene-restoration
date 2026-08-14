@@ -1378,3 +1378,66 @@ starburst.
 The eliminations above stand and were not wasted: they are what established
 that the cutout could not come from an alpha channel, which is what made a
 blend-mode answer the only one left.
+
+### §15.4 paleksi's red cast is the SPECULAR colour, not the light colour
+
+Jasper, watching the capture after the camera fix landed: *"in paleksi we still
+have the red light that's white in the reference video."* Measured, and he is
+right that something is too red — but it is not the diffuse light.
+
+Mean colour of the whole frame at local 5.919:
+
+```
+ours   R 88  G 70  B 34     R/B 2.59
+ref    R 87  G 94  B 63     R/B 1.38
+```
+
+**Our RED channel is already correct** (88 against 87). Green and blue are the
+ones that are too low. So the light being "too red" cannot be fixed by making
+the light whiter — that raises R as well, and measurably overshoots.
+
+What is being swamped is the sphere map. paleksi's surface is mask 0x80, so
+`Shock1Brown1.jpg` is its ONLY texture and modulates everything — and despite
+its name that image is **green**: mean R39 **G55** B23. The capture's frame is
+green-dominant to match (G94 > R87). Ours is red-dominant because something red
+is added *after* the texture stage.
+
+That something is the specular term. `GL_SEPARATE_SPECULAR_COLOR` adds it after
+texturing, by design, so it is the one term the green map cannot tint — and the
+port feeds it the LIGHT'S DIFFUSE COLOUR, which here is (0.867, 0.082, 0.004).
+
+### The measurement, and why it is not yet a fix
+
+`?lspec=` switches the model. With the camera fix in place:
+
+| local | specular = light colour (current) | = black | = white |
+|---|---|---|---|
+| 3.612 | r 0.9465 / RMSE 14.88 | 0.9334 / 16.97 | **0.9587 / 13.22** |
+| 5.919 | r 0.8438 / RMSE 34.59 | 0.7289 / 46.56 | **0.9409 / 19.92** |
+
+At 5.919 white takes the mean luma from 71.6 to 90.2 against a reference of
+87.5. Across the whole demo, though, white specular is a WASH:
+
+    paleksi   0.874 -> 0.940     morko        0.663 -> 0.567
+    kartonki  0.803 -> 0.809     rad_out      0.890 -> 0.862
+    viherio   0.884 -> 0.885     kaivoalieni  0.849 -> 0.835
+    median    0.884 -> 0.885
+
+So neither model is right for every light, and the port keeps the diffuse
+colour for now — not because it is correct but because it is the status quo and
+the alternative is no better overall.
+
+**The real answer is in the binary.** `LW::Light::apply` FUN_004445b0 reads two
+distinct colours — `(+0xd0,+0xd4,+0xd8)` to `GL_DIFFUSE` and
+`(+0xdc,+0xe0,+0xe4)` to `GL_SPECULAR`, both scaled by `_DAT_0045a5d4`. LWS has
+no per-light specular colour, so whatever fills `colour2` is set by the loader,
+and finding that write settles this for every part at once. Searching for
+direct stores to those offsets does not find it; the loader writes through a
+computed pointer.
+
+### It probably explains #12 as well
+
+flu2's issue says *"the color of our object looks very different from the
+reference, either how diffuse and env mapping are combined or some term is
+missing"*. That is this mechanism stated from the other side: a term added
+after the environment map, in a colour the map cannot correct.

@@ -1297,7 +1297,7 @@ function accBlit() {
         view[2]*dW[0] + view[6]*dW[1] + view[10]*dW[2]];
       const len = Math.hypot(...d) || 1;
       lightDirs.push(d[0]/len, d[1]/len, d[2]/len);
-      const c = L.color ?? [1, 1, 1], I = L.intensity ?? 1;
+      const c = qs.has('whitelight') ? [1, 1, 1] : (L.color ?? [1, 1, 1]), I = L.intensity ?? 1;
       lightCols.push(c[0]*I, c[1]*I, c[2]*I);
     }
     // w = 0 makes each one DIRECTIONAL, so the vector is the direction toward
@@ -1308,7 +1308,15 @@ function accBlit() {
     mgl.setLights(lightDirs.length / 3 ? Array.from({ length: lightDirs.length / 3 }, (_, i) => ({
       pos: [lightDirs[i*3], lightDirs[i*3+1], lightDirs[i*3+2], 0],
       diffuse: [lightCols[i*3], lightCols[i*3+1], lightCols[i*3+2]],
-      specular: [lightCols[i*3], lightCols[i*3+1], lightCols[i*3+2]],
+      // GL_SPECULAR comes from a SECOND colour in the light record — RENDER.md
+      // §4.4: glLightfv(GL_DIFFUSE, colour[+0xd0..d8]/255) and
+      // glLightfv(GL_SPECULAR, colour2[+0xdc..e4]/255). What fills colour2 has
+      // not been traced, so this uses the light's diffuse colour, which is a
+      // GUESS and is measurably wrong for paleksi (see NOTES §15.4). ?lspec=
+      // switches the model for experiments: white, black, or diffuse.
+      specular: qs.get('lspec') === 'white' ? [1, 1, 1]
+              : qs.get('lspec') === 'black' ? [0, 0, 0]
+              : [lightCols[i*3], lightCols[i*3+1], lightCols[i*3+2]],
     })) : []);
     const ambI = scene.ambientIntensity ?? 0, ambC = scene.ambientColor ?? [1, 1, 1];
     mgl.lightModelAmbient(ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
