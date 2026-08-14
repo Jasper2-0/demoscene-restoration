@@ -837,10 +837,10 @@ certify a frame.
 | 0.979 | 2 | kuubiotekniikka | | 0.714 | 2 | hedi |
 | 0.971 | 2 | diskojea        | | 0.709 | 1 | paleksi |
 | 0.954 | 2 | made            | | 0.690 | 2 | kaivoalieni |
-| 0.937 | 2 | turska          | | 0.667 | 2 | hairball |
-| 0.901 | 1 | krediili        | | 0.648 | 1 | flu2 |
+| 0.937 | 2 | turska          | | 0.669 | 2 | hairball |
+| 0.912 | 1 | krediili        | | 0.648 | 1 | flu2 |
 | 0.886 | 1 | silli           | | 0.584 | 2 | higherbiing |
-| 0.853 | 2 | rad_out         | | 0.514 | 1 | pehko |
+| 0.853 | 2 | rad_out         | | 0.498 | 1 | pehko |
 | 0.845 | 2 | viherio         | |       |   | |
 | 0.840 | 2 | kartonki        | |       |   | |
 | 0.838 | 1 | empt (noisy)    | |       |   | |
@@ -960,12 +960,29 @@ correlation, which weights quiet lead-in like the downbeat.
   - Particle travel is small: `InitialVelocity` 1.0 with `Friction 0.5` over
     `LifeTime 1.677` integrates to ~1.1 units, against a 9-unit hair.
 
-  What is left is that the emitter cloud subtends too much of the frame —
-  either the hair nodes span more world space than they should, or the camera
-  is not where we put it. The bright core lands within ~25px of the capture's,
-  which argues for scale rather than position. Next step is to test whether a
-  single uniform scale reconciles the two, which localises it to the camera;
-  if no single factor does, it is the emitter distribution.
+  `?probe=1` then measures the geometry itself rather than inferring it from
+  pixels — camera position, emitter bounding box, and the fraction of the
+  frame the cloud subtends:
+
+      emitters 80   extent 12.8 x 14.5 x 13.6   centre (1.12,-1.01,-0.53)
+      camera (14.56,-4.95,-2.14)   distance 14.1   frameFraction 1.205
+
+  So the cloud subtends **120% of the frame width** where the capture's is
+  roughly 70%. Two more eliminations:
+  - The CAMERA IS RIGHT. Evaluating pehko.lws's camera envelopes directly at
+    t=4.766 gives (14.56, -4.95, -2.14), matching the renderer's world matrix
+    exactly. One camera, no ParentItem, static `ZoomFactor 2.410001`.
+  - The NULL IS RIGHT and nearly still: its X channel oscillates within
+    +/-0.45 over the part and all three scale channels are a flat 1.0, so the
+    tuft is a near-static radial burst, which is what we draw.
+
+  That leaves the cloud's own size. `HairLength 10` / `NodesPerHair 10` gives
+  `len = 1.0` and a tip 9.0 units from the root, so with the camera 15.5 units
+  away the NEAR edge of the cloud is only ~6.5 units out and projects
+  enormously — a 1.6-unit sprite there subtends ~14 deg, a third of the 45 deg
+  fov. The suspect is therefore the sprite scale or the strand length at this
+  distance, not the frame loop, the camera or the emitter count. **Task #16
+  was mis-framed and is retitled accordingly.**
 * **empt is not reproducible run-to-run** (0.838 / 0.850 / -0.013 observed) —
   its stamping draws from the shared MSVC stream, so anything that consumes a
   rand() before it shifts every stamp. Do not read small empt deltas as signal.

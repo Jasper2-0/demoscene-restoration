@@ -897,6 +897,7 @@ const bgVao = gl.createVertexArray();
   }
 
   let textured = 0, hairLines = 0, particleCount = 0, camIndex = 0, zoomAt = 0, fovX = 0;
+  let probeInfo = null;
   const emptRand = msvcRand();
   let emptTex = null, emptAlphaTex = null;
   if (/^empt$/i.test(SCENE)) {
@@ -1386,6 +1387,30 @@ const bgVao = gl.createVertexArray();
     }
   }
 
+  // ?probe=1 reports the geometry that decides how big things land on screen:
+  // where the camera is, how far the emitters spread in WORLD units, and what
+  // fraction of the frame that spread subtends. Reading scale off pixels is
+  // guesswork — this is the quantity itself, and it separates "the cloud is
+  // the wrong size" from "the camera is in the wrong place".
+  if (qs.get('probe') && hairNodes.length) {
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const p of hairNodes) for (let i = 0; i < 3; i++) {
+      lo[i] = Math.min(lo[i], p[i]); hi[i] = Math.max(hi[i], p[i]);
+    }
+    const mid = lo.map((v, i) => (v + hi[i]) / 2);
+    const cam = [camWorld[12], camWorld[13], camWorld[14]];
+    const dist = Math.hypot(cam[0] - mid[0], cam[1] - mid[1], cam[2] - mid[2]);
+    const span = Math.max(...hi.map((v, i) => v - lo[i]));
+    probeInfo = {
+      emitters: hairNodes.length,
+      extent: hi.map((v, i) => +(v - lo[i]).toFixed(2)),
+      centre: mid.map((v) => +v.toFixed(2)),
+      camera: cam.map((v) => +v.toFixed(2)),
+      distance: +dist.toFixed(2),
+      frameFraction: +(2 * Math.atan(span / 2 / dist) / fovX).toFixed(3),
+    };
+  }
+
   };   // end renderAt
 
   // Feedback parts replay a short window of frames so the trail exists; the
@@ -1442,6 +1467,7 @@ const bgVao = gl.createVertexArray();
   gl.finish();
 
   window.__lapsusInfo = {
+    probe: probeInfo,
     scene: SCENE, t: T, camera: camIndex, objects: drawables.length,
     triangles: drawables.reduce((a, d) => a + d.mesh.count / 3, 0),
     texturedGroups: textured, hairLines, particleCount,
