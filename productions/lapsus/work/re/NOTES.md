@@ -1041,8 +1041,51 @@ correlation, which weights quiet lead-in like the downbeat.
       emitters 80   extent 12.8 x 14.5 x 13.6   centre (1.12,-1.01,-0.53)
       camera (14.56,-4.95,-2.14)   distance 14.1   frameFraction 1.205
 
-  So the cloud subtends **120% of the frame width** where the capture's is
-  roughly 70%. Two more eliminations:
+  I read that as "the cloud subtends 120% of the frame where the capture's is
+  roughly 70%". **That was WRONG — I eyeballed the capture instead of
+  measuring it.** Measured coverage at t=4.766:
+
+  | threshold | ours | capture |
+  |---|---|---|
+  | >= 64 (bright core) | 6.0% | 5.9% |
+  | >= 32 | 20.9% | 15.6% |
+  | >= 16 (faint haze) | 40.6% | 29.5% |
+
+  The bright structure matches almost exactly and BOTH bounding boxes span the
+  frame. The entire error is a faint LOW-LEVEL FLOOR:
+
+      ours     pure-black(<4)  7.1%   median 12   p90 49   mean 22.9
+      capture  pure-black(<4) 54.8%   median  1   p90 45   mean 15.5
+
+  Same p90, wildly different median — we spread the same energy across the
+  whole frame where the capture concentrates it and leaves half of it at true
+  zero. It is purely an accumulation artifact (a single frame, `?fb=0`, has
+  only 0.2% of pixels >= 16) and it scales exactly with the replay window:
+
+      0.25s -> black 48.8%, p90 31        1.00s -> black 15.9%, p90 48
+      0.50s -> black 32.3%, p90 42        1.50s -> black  7.1%, p90 49
+
+  No window satisfies both — short gets the black fraction right and the
+  highlights too dim, long gets the highlights right and builds the floor — so
+  this is wrong in KIND, not degree.
+
+  The mechanism is QUANTISATION. A black quad at alpha 0.05 gives steady state
+  `F = A / 0.05 = 20A` for a per-frame addition A, and our floor of ~12 is
+  exactly that fixed point. The capture's floor of ~1 means the original's
+  per-frame contribution to those pixels fell below half an LSB and quantised
+  to ZERO in the 8-bit back buffer, never accumulating at all; ours sits just
+  above the threshold and integrates up. Ruled out: MSAA — rendering with
+  `antialias: false` is identical (black 7.1%, median 12, p90 49), so our
+  accumulation really is 8-bit.
+
+  Left, and now specific: why our sprites put more energy into their faint
+  outer region than the original's. Prime suspect is the HALF-TEXEL INSET —
+  §11.2.4 samples `(W-1)/TW` from a `+0.5/TW` origin, i.e. the engine crops
+  the outermost half-texel of every tile, while we sample the full [0,1] range
+  and so pull in the edge texels of a 32x32 sprite magnified to ~100px.
+
+  Superseded below, but the measurements are sound and worth keeping. Two more
+  eliminations:
   - The CAMERA IS RIGHT. Evaluating pehko.lws's camera envelopes directly at
     t=4.766 gives (14.56, -4.95, -2.14), matching the renderer's world matrix
     exactly. One camera, no ParentItem, static `ZoomFactor 2.410001`.
@@ -1055,8 +1098,9 @@ correlation, which weights quiet lead-in like the downbeat.
   away the NEAR edge of the cloud is only ~6.5 units out and projects
   enormously — a 1.6-unit sprite there subtends ~14 deg, a third of the 45 deg
   fov. The suspect is therefore the sprite scale or the strand length at this
-  distance, not the frame loop, the camera or the emitter count. **Task #16
-  was mis-framed and is retitled accordingly.**
+  distance, not the frame loop, the camera or the emitter count. **That
+  conclusion is superseded by the coverage measurements above: the cloud size
+  is right and the defect is the accumulation floor.**
 * **empt is not reproducible run-to-run** (0.838 / 0.850 / -0.013 observed) —
   its stamping draws from the shared MSVC stream, so anything that consumes a
   rand() before it shifts every stamp. Do not read small empt deltas as signal.
