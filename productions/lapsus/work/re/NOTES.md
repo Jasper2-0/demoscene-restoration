@@ -833,7 +833,7 @@ certify a frame.
 | r | phase | part | | r | phase | part |
 |---|---|---|---|---|---|---|
 | 0.999 | 1 | hulluolli       | | 0.839 | 2 | kartonki |
-| 0.996 | 2 | kuubiotekniikka | | 0.838 | 1 | empt (noisy) |
+| 0.996 | 2 | kuubiotekniikka | | 0.833 | 1 | empt (noisy) |
 | 0.993 | 1 | pene            | | 0.821 | 1 | flu2 |
 | 0.974 | 1 | krediili        | | 0.782 | 1 | paleksi |
 | 0.970 | 2 | diskojea        | | 0.773 | 2 | hedi |
@@ -841,7 +841,7 @@ certify a frame.
 | 0.938 | 2 | turska          | | 0.740 | 2 | morko |
 | 0.899 | 2 | kaivoalieni     | | 0.737 | 2 | higherbiing |
 | 0.890 | 2 | rad_out         | | 0.673 | 2 | hairball |
-| 0.884 | 2 | viherio         | | 0.536 | 1 | pehko |
+| 0.884 | 2 | viherio         | | 0.541 | 1 | pehko |
 | 0.843 | 1 | silli           | |       |   | |
 
 Median 0.515 -> **0.843** over this pass. What moved it, in order of size:
@@ -1230,6 +1230,29 @@ correlation, which weights quiet lead-in like the downbeat.
   explains why the bright cores match (coverage >= 64 is 6.0% against 5.9%):
   values above ~10 decay correctly under either rule.
 
+  **FIXED 2026-08-14.** The decay now runs as an explicit shader pass with
+  `floor()` in a ping-pong pair of RGBA8 FBOs, and the floor is gone:
+
+      black       7.1% -> 53.5%   (capture 54.8%)
+      median        12 -> 2       (capture 1)
+      mean        23.5 -> 14.7    (capture 15.5)
+      p90           51 -> 41      (capture 45)
+
+  The tonal distribution now matches the capture on every statistic. `r` moves
+  only 0.536 -> 0.541, which says the residual is SPATIAL — the right amount
+  of energy, not quite in the right places — and that is a different question
+  from the one this fixes.
+
+  The first attempt at this was reverted as unresolved after
+  GL_INVALID_OPERATION on the first render into a non-default framebuffer.
+  Bisecting with per-stage `glGetError` found it in one run: `renderAt` sets
+  uniforms on `prog` BEFORE it ever binds it, which is safe only because
+  `prog` is current from module scope — and `accDecay` had left `accProg`
+  current. `gl.uniform*` on a program that is not current is
+  INVALID_OPERATION. Worth recording as a method note: "revert, it is
+  unresolved" was the wrong call there; ten minutes of bisection beat another
+  round of hypothesising.
+
   **The fix is a ping-pong FBO** — not for the frame-loop structure, which is
   already right, but because the default framebuffer gives no control over
   blend rounding, whereas an RGBA8 FBO pair lets the decay be an explicit
@@ -1242,8 +1265,7 @@ correlation, which weights quiet lead-in like the downbeat.
   pass, and needs only to find what in the main render path objects to a
   non-default target.
 
-  Still unexplained by anything simpler: why our sprites put more energy into
-  their faint outer region than the original's. The prior prime suspect was the HALF-TEXEL INSET —
+  Resolved — see above. What remains on pehko is spatial, not tonal. The prior prime suspect was the HALF-TEXEL INSET —
   §11.2.4 samples `(W-1)/TW` from a `+0.5/TW` origin, i.e. the engine crops
   the outermost half-texel of every tile, while we sample the full [0,1] range
   and so pull in the edge texels of a 32x32 sprite magnified to ~100px — now
