@@ -51,6 +51,37 @@ Starting a new restoration:
 node tools/fetch/scaffold.mjs <demozoo-id> --slug <slug>
 ```
 
+## Verifying a port
+
+Two repo-level tools, both driven by one small per-production adapter
+(`tools/inspect/ADAPTER.md`), so adding a production means implementing that
+contract and nothing else.
+
+```sh
+node tools/serve.mjs <production>          # watch it
+node tools/inspect/sweep.mjs <production>  # score the whole timeline, raise issues
+node tools/inspect/serve.mjs <production>  # scrub it beside the reference
+node tools/inspect/issues.mjs <production> # dry run: what would go to GitHub Issues
+```
+
+**sweep** walks the timeline against the reference capture, scores every
+sample on correlation *and* RMSE — "is this the same picture" and "is it the
+same brightness" answer different questions and disagree usefully — and writes
+`work/verify/inspect/{run.json,issues.md,worst.png}`. Findings are thresholded
+and grouped per part rather than dumped as numbers.
+
+**inspect/serve** opens the inspector: the port beside its reference, with what
+is on screen (objects, triangles, textured groups, camera, GL errors) and the
+geometry and images the part references. Its timeline is drawn from the
+sweep's `run.json`, so clicking a bad sample drives the live demo to it.
+
+**inspect/issues** syncs findings to GitHub Issues, and is **dry run by
+default** — a sweep re-runs on every change, a tracker is public and
+permanent. Each issue carries a `sweep-key` in its body, so re-running
+updates or closes in place instead of duplicating, and an issue without that
+key (i.e. one a human opened) is never touched. Filed issues carry
+`sweep`, `prod:<name>` and `sev:*` labels.
+
 ## What is deliberately not in this repository
 
 - **Original release archives** (`originals/`) — copyrighted works; manifests
