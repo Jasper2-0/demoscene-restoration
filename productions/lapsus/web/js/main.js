@@ -127,39 +127,29 @@ const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer: true });
 if (!gl) throw new Error('WebGL2 required');
 
+// PER-VERTEX lighting and texgen, because that is where the fixed-function
+// pipeline does both. glShadeModel is never called anywhere in the binary, so
+// it keeps its GL_SMOOTH default: GL lights each VERTEX, emits a primary and a
+// secondary colour, and Gouraud-interpolates them across the triangle. It also
+// generates GL_SPHERE_MAP coordinates per vertex and interpolates those.
+//
+// Doing either per fragment is strictly "better" and therefore wrong here. A
+// per-pixel highlight stays round and tight across a large triangle where the
+// original's spreads and distorts between its corners, and a per-pixel sphere
+// map curves where the original's is linear across each face. On coarse
+// geometry — kartonki's blades, morko's plates — that is a visible difference,
+// not a subtle one, and it always errs toward looking too clean.
 const VS = `#version 300 es
 in vec3 aPos; in vec3 aNormal; in vec2 aUV; in vec2 aUV1; in vec2 aUV2;
 uniform mat4 uMV, uProj;
-out vec3 vN, vP; out vec2 vUV, vUV1, vUV2;
-void main(){ vec4 p = uMV * vec4(aPos,1.0); vP = p.xyz;
-  vN = mat3(uMV) * aNormal; vUV = aUV; vUV1 = aUV1; vUV2 = aUV2; gl_Position = uProj * p; }`;
-// Fixed-function-equivalent lighting, per RENDER.md §8: per-light diffuse
-// only (no per-light ambient), light-model ambient from the scene, and the
-// LWO surface's own diffuse coefficient. No hardcoded fill light — pene has
-// AmbientIntensity 0, so anything facing away from its single distant light
-// is genuinely black, and an invented ambient floor would wash it out.
-const FS = `#version 300 es
-precision highp float;
-in vec3 vN, vP; in vec2 vUV, vUV1, vUV2; out vec4 o;
 uniform vec3 uColor, uAmbient;
-uniform sampler2D uTex;
-uniform bool uHasTex, uUnlit, uTwoSided;
-uniform float uDiffuse, uAlpha;
+uniform bool uUnlit, uTexGen0;
+uniform float uSpec, uShine;
 #define MAXL 8
 uniform int uNumLights;
 uniform vec3 uLightDir[MAXL];        // eye space, pointing TOWARD the light
 uniform vec3 uLightColor[MAXL];
-uniform sampler2D uEnv;              // RIMG reflection image
-uniform bool uHasEnv;
-uniform float uRefl;
-uniform float uSpec, uShine;         // specularity, shininess
-uniform sampler2D uTex1;             // second texture unit
-uniform bool uHasTex1, uTex1Add;     // unit-1 env: GL_ADD when true, else MODULATE
-uniform bool uPass1;                 // mask-7 second pass: additive LUMI only
-uniform bool uTexGen0;               // unit-0 GL_SPHERE_MAP texgen (mask 0x80)
-uniform bool uFogOn; uniform vec3 uFogColor; uniform vec2 uFogRange;
-// GL_SPHERE_MAP exactly as the fixed-function pipeline derives it, from the
-// eye-space normal and the eye vector.
+out vec3 vCol, vSpecCol, vP; out vec2 vUV, vUV1, vUV2, vUVenv;
 vec2 sphereMap(vec3 n, vec3 p){
   vec3 u = normalize(p);
   vec3 r = u - 2.0 * n * dot(n, u);
@@ -167,87 +157,93 @@ vec2 sphereMap(vec3 n, vec3 p){
   return vec2(r.x/m + 0.5, r.y/m + 0.5);
 }
 void main(){
+  vec4 p = uMV * vec4(aPos, 1.0); vP = p.xyz;
+  vec3 n = normalize(mat3(uMV) * aNormal);      // GL_NORMALIZE equivalent
+  vUV1 = aUV1; vUV2 = aUV2;
+  vec2 sm = sphereMap(n, p.xyz);
+  vUVenv = sm;
+  vUV = uTexGen0 ? sm : aUV;
+  if (uUnlit) { vCol = uColor; vSpecCol = vec3(0.0); }
+  else {
+    vec3 diff = vec3(0.0), spec = vec3(0.0);
+    vec3 V = vec3(0.0, 0.0, 1.0);                // infinite viewer
+    for (int i = 0; i < MAXL; i++) {
+      if (i >= uNumLights) break;
+      diff += uLightColor[i] * max(dot(n, uLightDir[i]), 0.0);
+      if (uSpec > 0.0) {
+        vec3 H = normalize(uLightDir[i] + V);
+        spec += uLightColor[i] * uSpec * pow(max(dot(n, H), 0.0), uShine);
+      }
+    }
+    vCol = uAmbient + uColor * diff;             // 1*lmAmbient + K*sum(N.L)*Lc
+    vSpecCol = spec;
+  }
+  gl_Position = uProj * p;
+}`;
+// Fixed-function-equivalent lighting, per RENDER.md §8: per-light diffuse
+// only (no per-light ambient), light-model ambient from the scene, and the
+// LWO surface's own diffuse coefficient. No hardcoded fill light — pene has
+// AmbientIntensity 0, so anything facing away from its single distant light
+// is genuinely black, and an invented ambient floor would wash it out.
+const FS = `#version 300 es
+precision highp float;
+// vCol / vSpecCol are the fixed-function PRIMARY and SECONDARY colours, both
+// computed per vertex in VS and Gouraud-interpolated here. vUV already carries
+// unit 0's texgen result when mask 0x80 selected it, and vUVenv the sphere map
+// for the mask-0x81 unit-1 reflection.
+in vec3 vCol, vSpecCol, vP; in vec2 vUV, vUV1, vUV2, vUVenv; out vec4 o;
+uniform vec3 uColor;
+uniform sampler2D uTex;
+uniform bool uHasTex;
+uniform float uAlpha;
+uniform sampler2D uEnv;              // RIMG reflection image
+uniform bool uHasEnv;
+uniform sampler2D uTex1;             // second texture unit
+uniform bool uHasTex1, uTex1Add;     // unit-1 env: GL_ADD when true, else MODULATE
+uniform bool uPass1;                 // mask-7 second pass: additive LUMI only
+uniform bool uFogOn; uniform vec3 uFogColor; uniform vec2 uFogRange;
+void main(){
   // Mask 7 (COLR+DIFF+LUMI) draws a SECOND additive pass carrying only the
   // LUMI texture, on its own UV set (RENDER.md §4.5, mat[+0x60] = 1).
-  // Pass 1 (mask 7) is NOT a bare additive blit (RENDER.md §13.4): it
-  // modulates by glColor, samples its OWN third UV set, writes depth, and is
-  // still fogged — material[+0x6a] is never written by the SURF builder, so
-  // fog stays on. That last one bites higherbiing, the only one of the three
-  // mask-7 parts with FogType 1.
+  // Pass 1 is NOT a bare additive blit (RENDER.md §13.4): it modulates by
+  // glColor, samples its OWN third UV set, writes depth, and is still fogged —
+  // material[+0x6a] is never written by the SURF builder, so fog stays on.
+  // That last one bites higherbiing, the only mask-7 part with FogType 1.
   vec3 pass1 = uColor * texture(uTex1, vUV2).rgb;
-  vec3 n = normalize(vN);                       // GL_NORMALIZE equivalent
-  // NO back-face normal flip. GL_LIGHT_MODEL_TWO_SIDE (0x0b52) is never
-  // passed to glLightModel* anywhere in the binary, so it keeps its GL_FALSE
-  // default: the fixed-function pipeline lights every fragment with the
-  // front-face normal and never computes a back-face colour. A double-sided
-  // LWO surface (SIDE 3) therefore turns off CULLING only — its back faces
-  // are lit as if they were front faces, which is why they read as flat or
-  // wrongly-shaded in the capture rather than correctly shaded from behind.
-  // uTwoSided still drives gl.cullFace on the JS side; only the flip goes.
-  // MASK 0x80 — a reflection image and NOTHING else. The engine binds the
-  // sphere map to texture unit ZERO (0x42bd1e: setTexCount(1),
-  // setTexture(unit 0, refl), setTexGen(unit 0, SPHERE_MAP)), and unit 0's env
-  // mode is unconditionally GL_MODULATE (§4.4 @0x40c231). So on these surfaces
-  // the reflection MULTIPLIES the lit colour; it is only ADDED when it lands on
-  // unit 1, which happens for mask 0x81 (a colour texture as well).
-  vec2 uv0 = uTexGen0 ? sphereMap(n, vP) : vUV;
   // PRIMARY COLOUR FIRST, then the texture stages — the order the
   // fixed-function pipeline runs in, and it matters because the material's
   // GL_AMBIENT is not the diffuse colour. The SURF builder stores
   // 0x437f0000 = 255.0 into material[+0x04/+0x08/+0x0c] unconditionally
-  // (0x42b90b-0x42b937), so **GL_AMBIENT = (1,1,1) for every surface in the
-  // demo**, and GL_EMISSION is never written. Only GL_DIFFUSE carries K.
+  // (0x42b90b-0x42b937), so GL_AMBIENT = (1,1,1) for every surface in the
+  // demo, and GL_EMISSION is never written. Only GL_DIFFUSE carries K.
   // Folding the ambient into K (col = K*(amb + sum)) attenuated the light-model
   // ambient by the surface colour, which is wrong wherever AmbientIntensity is
   // non-zero — paleksi 0.515, rad_out 0.54, viherio 0.22 (RENDER.md §13.2.1).
-  vec3 col;
-  if (uUnlit) {
-    col = uColor;                               // glColor4f(K), lighting off
-  } else {
-    vec3 diff = vec3(0.0);
-    for (int i = 0; i < MAXL; i++) {
-      if (i >= uNumLights) break;
-      diff += uLightColor[i] * max(dot(n, uLightDir[i]), 0.0);
-    }
-    col = uAmbient + uColor * diff;             // 1*lmAmbient + K*sum(N.L)*Lc
-  }
-  // Unit 0 is always GL_MODULATE, and it modulates the whole primary colour —
-  // the ambient term included.
-  if (uHasTex) col *= texture(uTex, uv0).rgb;
+  vec3 col = vCol;
+  // MASK 0x80 — a reflection image and NOTHING else. The engine binds the
+  // sphere map to texture unit ZERO (0x42bd1e: setTexCount(1),
+  // setTexture(unit 0, refl), setTexGen(unit 0, SPHERE_MAP)), and unit 0's env
+  // mode is unconditionally GL_MODULATE (§4.4 @0x40c231). So on these surfaces
+  // the reflection MULTIPLIES the lit colour; it is only ADDED when it lands
+  // on unit 1, which happens for mask 0x81 (a colour texture as well).
+  // Unit 0 modulates the whole primary colour, the ambient term included.
+  if (uHasTex) col *= texture(uTex, vUV).rgb;
   // Unit 1: GL_MODULATE for a DIFF texture (mask 5), GL_ADD for LUMI (mask 3).
   if (uHasTex1) {
     vec3 t1 = texture(uTex1, vUV1).rgb;
     if (uTex1Add) col += t1; else col *= t1;
   }
-  // GL_SPHERE_MAP on the eye-space reflection vector, added on top: the
-  // engine puts the RIMG reflection on texture unit 1 with env mode GL_ADD
-  // (RENDER.md §4, mask 0x81), which is why these surfaces read as glowing.
-  //
-  // The texel is added UNSCALED. LWO reflectivity does not attenuate it — it
-  // only decides whether the sphere-map bit is set at all: RENDER.md records
-  // that mask bit 0x80 is cleared unless surface reflectivity > 0.95. So REFL
-  // is a threshold, not a coefficient, and multiplying by it here was
-  // inventing an attenuation the fixed-function pipeline cannot express.
-  if (uHasEnv) col += texture(uEnv, sphereMap(n, vP)).rgb;
-  // Specular, added AFTER the texture — the engine enables
+  // GL_SPHERE_MAP added on top: the engine puts the RIMG reflection on unit 1
+  // with env mode GL_ADD (RENDER.md §4, mask 0x81), which is why these
+  // surfaces read as glowing. The texel is added UNSCALED — LWO reflectivity
+  // does not attenuate it, it only decides whether the sphere-map bit is set
+  // at all (mask bit 0x80 is cleared unless reflectivity > 0.95). REFL is a
+  // threshold, not a coefficient.
+  if (uHasEnv) col += texture(uEnv, vUVenv).rgb;
+  // Specular added AFTER the texture: the engine enables
   // GL_SEPARATE_SPECULAR_COLOR, so the highlight is not modulated by the
-  // texture the way the diffuse term is (RENDER.md §4.5). Only when the
-  // surface is lit and specularity > 0; the material specular is a grey of
-  // that specularity.
-  if (!uUnlit && uSpec > 0.0) {
-    // INFINITE VIEWER. GL_LIGHT_MODEL_LOCAL_VIEWER (0x0b51) is never passed to
-    // glLightModel* anywhere in the binary, so it keeps its GL_FALSE default
-    // and the fixed-function pipeline uses the constant eye vector (0,0,1)
-    // instead of the direction to each point. The half-vector is then constant
-    // across a surface for a given light, which is a visibly flatter and
-    // larger highlight than a local viewer gives.
-    vec3 V = vec3(0.0, 0.0, 1.0);
-    for (int i = 0; i < MAXL; i++) {
-      if (i >= uNumLights) break;
-      vec3 H = normalize(uLightDir[i] + V);
-      col += uLightColor[i] * uSpec * pow(max(dot(n, H), 0.0), uShine);
-    }
-  }
+  // texture the way the diffuse term is (RENDER.md §4.5).
+  col += vSpecCol;
   // Fog last: GL_LINEAR over [min,max], the factor running the full 0->1.
   // GL_FOG_DENSITY is never set and FogMin/MaxAmount are ignored, so this is
   // an unclamped linear ramp — not the GL_EXP that METHOD.md warns about.
