@@ -1181,6 +1181,22 @@ correlation, which weights quiet lead-in like the downbeat.
   so its steady state amplifies a per-frame residual by 5x where pehko's 5%
   quad amplifies it by 20x.
 
+  Also eliminated: **8-bit texture-environment quantisation**. 2000-era
+  hardware evaluated GL_MODULATE in 8-bit fixed point, so a sprite whose
+  contribution fell below half an LSB produced exactly zero and never reached
+  the blender — the obvious way for the original to avoid a floor that a float
+  pipeline builds. Quantising the product to `floor(c*255 + 0.5)/255` changes
+  nothing at all (black 7.1%, median 12, p90 51, identical), so our per-sprite
+  contributions are genuinely above the threshold and would have accumulated
+  on the original hardware too. Reverted — speculative hardware modelling with
+  no measured effect and no support in the binary.
+
+  Also confirmed NOT timing: after the TCB spacing fix pehko's partclock curve
+  is FLAT (peak-to-trough 0.052 across +/-0.3s), so unlike flu2 and
+  kaivoalieni its residual is not an animation offset. pehko did still gain
+  from that fix — 0.459 -> 0.536 — because its emitters ride the hair, which
+  rides the null's envelopes.
+
   Still unexplained: why our sprites put more energy into their faint outer
   region than the original's. The prior prime suspect was the HALF-TEXEL INSET —
   §11.2.4 samples `(W-1)/TW` from a `+0.5/TW` origin, i.e. the engine crops
