@@ -131,9 +131,35 @@ export async function serve(root, { spa = false, caseExact = true, routes = null
         res.writeHead(404); res.end('not found'); return;
       }
     }
+    const type = MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
+    // BYTE RANGES. Without them a media element cannot seek: Chrome will
+    // silently refuse to set currentTime beyond what it has streamed, so any
+    // harness that jumps to a point in a demo lands back at zero. Everything
+    // here is served from memory, so a range is just a slice.
+    const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
+    if (range) {
+      const last = body.length - 1;
+      let start = range[1] === '' ? last - Number(range[2]) + 1 : Number(range[1]);
+      let end = range[2] === '' || range[1] === '' ? last : Number(range[2]);
+      start = Math.max(0, start); end = Math.min(last, end);
+      if (start > end) {
+        res.writeHead(416, { 'Content-Range': `bytes */${body.length}` });
+        res.end(); return;
+      }
+      res.writeHead(206, {
+        'Content-Type': type,
+        'Content-Length': end - start + 1,
+        'Content-Range': `bytes ${start}-${end}/${body.length}`,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store',
+      });
+      res.end(body.subarray(start, end + 1));
+      return;
+    }
     res.writeHead(200, {
-      'Content-Type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream',
+      'Content-Type': type,
       'Content-Length': body.length,
+      'Accept-Ranges': 'bytes',
       'Cache-Control': 'no-store',
     });
     res.end(body);
