@@ -788,6 +788,7 @@ const bgVao = gl.createVertexArray();
       const blk = s.blocks.find((b) => b.channel === 'COLR') ?? s.blocks[0];
       const bDiff = s.blocks.find((b) => b.channel === 'DIFF') ?? null;
       const bLumi = s.blocks.find((b) => b.channel === 'LUMI') ?? null;
+      const bTran = s.blocks.find((b) => b.channel === 'TRAN') ?? null;
       // The surface's texture MASK (RENDER.md §4.5) is built from which of the
       // eight name slots are non-empty; bit 0x80 is the reflection image and is
       // cleared unless reflectivity > 0.95. `mask 0x80` — reflection and
@@ -845,12 +846,26 @@ const bgVao = gl.createVertexArray();
         // krediili's credit sprites carry TRAN ~= 1.0 with LUMI = 1: treating
         // that as alpha = 1 - TRAN made them alpha ~= 0 and the whole part
         // rendered black, where the capture shows a bright plume.
+        // RENDER.md §4.5: transparency > 0 **or a TTEX present** gives blend
+        // mode 3 and depth mode 2. The TTEX arm was missing, so the two
+        // TRAN-block surfaces in the archive (dezz.lwo is one — flu2's title
+        // overlay) were classified opaque and sorted with the opaque group.
+        //
+        // The transparency IMAGE itself is correctly not loaded: FUN_0042cf90
+        // forwards (surface, &colourName, &alphaName, filterMode) to
+        // TextureManager::get and "the alpha name is always the empty temp",
+        // so a surface never gets a separate alpha image — only Pictures do,
+        // through drawPicture's explicit alpha argument. A TTEX therefore
+        // changes the surface's BLEND CLASS and nothing else, and
+        // material[+0x38] is forced to 0 when one is present, so the surface
+        // is alpha-blended at alpha 1.
         blendMode: (s.additiveTransparency ?? 0) > 0.95 ? 1
                  : (s.transparency ?? 0) > 0.95 ? 1
-                 : (s.transparency ?? 0) > 0 ? 3 : 0,
-        // LWO TRAN is transparency, so alpha is its complement. SIDE 3 is
-        // double-sided: culling off and normals flipped on back faces.
-        alpha: (s.transparency ?? 0) > 0.95 ? 1 : 1 - (s.transparency ?? 0),
+                 : ((s.transparency ?? 0) > 0 || bTran) ? 3 : 0,
+        // LWO TRAN is transparency, so alpha is its complement — except with a
+        // TTEX, where material[+0x38] = 0 and the surface is opaque.
+        alpha: bTran ? 1
+             : (s.transparency ?? 0) > 0.95 ? 1 : 1 - (s.transparency ?? 0),
         twoSided: (s.sides ?? 1) === 3,
         refl: s.reflection ?? 0,
         // Specular gate, read at 0x42ca0f-0x42ca62:
