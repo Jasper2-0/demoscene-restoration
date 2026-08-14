@@ -824,7 +824,7 @@ kartonki 0.691, hedi 0.458, morko 0.346).
 
 ---
 
-## §15 Standing (2026-08-14) — median r 0.840, all 21 parts rendering
+## §15 Standing (2026-08-14) — median r 0.843, all 21 parts rendering
 
 `node work/verify/allparts.mjs`. Each part rendered at its midpoint and
 whole-frame luma-correlated against the capture. Use it to rank work, never to
@@ -832,31 +832,38 @@ certify a frame.
 
 | r | phase | part | | r | phase | part |
 |---|---|---|---|---|---|---|
-| 0.999 | 1 | hulluolli       | | 0.754 | 1 | syrjakyla |
-| 0.993 | 1 | pene            | | 0.737 | 2 | higherbiing |
-| 0.979 | 2 | kuubiotekniikka | | 0.732 | 2 | morko |
-| 0.971 | 2 | diskojea        | | 0.714 | 2 | hedi |
-| 0.954 | 2 | made            | | 0.709 | 1 | paleksi |
-| 0.937 | 2 | turska          | | 0.690 | 2 | kaivoalieni |
-| 0.912 | 1 | krediili        | | 0.669 | 2 | hairball |
-| 0.886 | 1 | silli           | | 0.648 | 1 | flu2 |
-| 0.853 | 2 | rad_out         | | 0.462 | 1 | pehko |
-| 0.845 | 2 | viherio         | |       |   | |
-| 0.840 | 2 | kartonki        | |       |   | |
-| 0.838 | 1 | empt (noisy)    | |       |   | |
+| 0.999 | 1 | hulluolli       | | 0.839 | 2 | kartonki |
+| 0.996 | 2 | kuubiotekniikka | | 0.838 | 1 | empt (noisy) |
+| 0.993 | 1 | pene            | | 0.821 | 1 | flu2 |
+| 0.974 | 1 | krediili        | | 0.782 | 1 | paleksi |
+| 0.970 | 2 | diskojea        | | 0.773 | 2 | hedi |
+| 0.954 | 2 | made            | | 0.754 | 1 | syrjakyla |
+| 0.938 | 2 | turska          | | 0.740 | 2 | morko |
+| 0.899 | 2 | kaivoalieni     | | 0.737 | 2 | higherbiing |
+| 0.890 | 2 | rad_out         | | 0.673 | 2 | hairball |
+| 0.884 | 2 | viherio         | | 0.536 | 1 | pehko |
+| 0.843 | 1 | silli           | |       |   | |
 
-Median 0.515 -> **0.840** over this pass. What moved it, in order of size:
+Median 0.515 -> **0.843** over this pass. What moved it, in order of size:
 
-1. **The hair root moves.** Simulating with the root pinned where the null ends
+1. **TCB tangents need the non-uniform key-spacing correction.** Kochanek-
+   Bartels tangents come from the chords either side of a key and are only
+   comparable when the spans are equal length; otherwise each must be rescaled
+   by `2*dt / (dt_this + dt_other)`. We used raw chords, which skews the curve
+   toward the longer span — and skew in a position or rotation channel does not
+   look like a curve error, it looks like the part running early or late.
+   flu2 0.648 -> 0.821, kaivoalieni 0.690 -> 0.899, and eight more parts moved.
+   Found with `verify/partclock.mjs`; see §15.3.
+2. **The hair root moves.** Simulating with the root pinned where the null ends
    up converges to a fixed point that has no `dt` in it, so the strands settle
    and stop. Found because RENDER.md §11.1 says "same dt => different hair" and
    a dt sweep returned byte-identical frames — the notes described a property
    our port did not have. krediili 0.531 -> 0.901.
-2. **mp3#2 alignment re-measured**, 106.96s -> 106.720s (§15.1 below).
+3. **mp3#2 alignment re-measured**, 106.96s -> 106.720s (§15.1 below).
    Whole phase-2 tail.
-3. **Fixed-function light-model defaults** — infinite viewer, no back-face
+4. **Fixed-function light-model defaults** — infinite viewer, no back-face
    normal flip. Both established by what the binary never calls.
-4. **PROJ 5 UV mapping**, **LW_MorphMixer**, **texture mask 0x80 on unit 0**,
+5. **PROJ 5 UV mapping**, **LW_MorphMixer**, **texture mask 0x80 on unit 0**,
    **Pehko suppresses the hair pass**, **Picture quads are not V-flipped**.
 
 ### §15.1 The phase-2 clock
