@@ -1850,7 +1850,15 @@ function accBlit() {
     syrjakyla:  { in: [0.5, 1, 255, 255, 255], out: [2.0, 3] },
     paleksi:    { in: [0.5, 1, 255, 255, 255], out: [2.0, 3] },
     pehko:      { in: [1.0, 3], out: [1.0, 3] },
-    hulluolli:  { in: [1.0, 3] },
+    // ENGINE.md §5's phase-1 table, read off the binary: black 4.0 BOTH ways.
+    // The fade-out was missing entirely, which is why hulluolli scored r 0.998
+    // with RMSE 69 — the right picture at the wrong brightness for its last
+    // four seconds, and issue #7.
+    hulluolli:  { in: [4.0, 3], out: [4.0, 3] },
+    // Part_LoadPart2 has the +0x74 fader: mode 1, white, 2.0s. So the loading
+    // screen does not cut in, it emerges from a full-white additive flash that
+    // decays over two seconds. Missing entirely before.
+    loadpart2:  { in: [2.0, 1, 255, 255, 255] },
     morko:      { in: [0.5, 1, 255, 255, 255] },
   };
 
@@ -2183,6 +2191,7 @@ function accBlit() {
       phase2Loaded ??= load(sceneParts(PHASE2)).then(() => { phase2Ready = true; });
       window.__lapsusNow = { phase, t, part: cur, local };
       drawLoadingScreen(await loadingPic('loadpart2'));
+      applyFades(cur, local, dur);
       setStatus('');
       const trackDone = audio.ended ||
         (audio.duration > 0 && audio.currentTime >= audio.duration - 0.05);
