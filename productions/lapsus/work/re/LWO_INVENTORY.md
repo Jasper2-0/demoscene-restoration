@@ -100,7 +100,23 @@ this reason).
 **Surfaces carry real shading parameters** — COLR/DIFF/SPEC/REFL/TRAN/LUMI/
 GLOS plus SMAN smoothing angles and `SIDE` (1 = single-sided, 3 =
 double-sided). Whether dm2000 honours any of these or bakes its own is a
-question for `re/RENDER.md`; `RIMG` (reflection image) and `REFL` on 55
+question for `re/RENDER.md` — **answered for SMAN: it does not.** The chunk is
+compared at 0x426e9a and its float stored to `surface[+0x60]` at 0x4270c8, and
+nothing ever reads that field again; the only four float reads of a `+0x60`
+member in the binary are `[ESI + 0x60]` inside the object world-matrix rebuild
+(0x40fa90-0x40faeb), which is `LW::Object`, a different struct. So smoothing
+angles are **parsed and dead**, and every surface is smoothed uniformly. This
+matters because 21 of the 73 surfaces carry no SMAN at all — in LightWave that
+means faceted — so a port that "correctly" honoured the chunk would facet a
+third of the archive and be wrong.
+
+Still open in the same area: where the engine GENERATES its normals is not
+documented anywhere in re/. LWO ships none, `glNormalPointer` is fed a
+stride-48 array with the normal at +0x10, and the builder that fills it has
+not been located. Our port accumulates area-weighted face normals per vertex,
+which is a guess at the same result, not a verified match.
+
+Also; `RIMG` (reflection image) and `REFL` on 55
 surfaces hint at environment mapping, which pairs with the `envshit1.tga`
 texture name.
 

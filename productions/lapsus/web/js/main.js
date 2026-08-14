@@ -339,8 +339,20 @@ function projectUV(x, y, z, blk) {
 
 // Build pos+normal+uv from an LWO layer, split into one index group per
 // surface so each can bind its own texture. LWO ships no normals, so they are
-// accumulated per-vertex from face normals (area weighted). Smoothing groups
-// (SMAN) are ignored at this stage.
+// accumulated per-vertex from face normals (area weighted).
+//
+// SMAN (smoothing angle) is ignored, and that is a MATCH, not a shortcut.
+// The chunk is parsed — FUN_00426a90 compares it at 0x426e9a and stores the
+// float to surface[+0x60] at 0x4270c8 — and then nothing ever reads it: the
+// only four float reads of a +0x60 field in the whole binary are
+// [ESI + 0x60] inside the object world-matrix rebuild (0x40fa90-0x40faeb),
+// which is LW::Object, a different struct. So smoothing angles are inert in
+// dm2000 and every surface is smoothed uniformly regardless.
+//
+// This was worth checking rather than assuming either way: 52 of the 73
+// surfaces carry SMAN, with angles from 49 to 863 degrees, and 21 carry none
+// at all — which in LightWave means faceted. Honouring that would have
+// faceted a third of the archive's surfaces and been wrong.
 function meshFromLayer(layer, obj) {
   const P = layer.points, n = P.length / 3;
   const nrm = new Float32Array(P.length);
