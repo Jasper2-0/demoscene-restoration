@@ -82,6 +82,15 @@ function corr(a, b) {
   ma /= N; mb /= N;
   let d = 0, sa = 0, sb = 0;
   for (let i = 0; i < N; i++) { const u = a[i] - ma, v = b[i] - mb; d += u * v; sa += u * u; sb += v * v; }
+  // A FLAT FRAME HAS NO VARIANCE, so Pearson's r is 0/0 and reads 0 — which
+  // brands a PERFECT match as a total failure. empt ends on black: it matches
+  // the capture exactly (RMSE 0.0) and scored r 0.000, and that number became
+  // the gate's headline "worst instant". When BOTH frames are flat the only
+  // question correlation could answer is whether they are flat at the same
+  // level, so answer that instead. One flat and one not is a real mismatch and
+  // still scores 0.
+  const varA = sa / N, varB = sb / N;
+  if (varA < 0.25 && varB < 0.25) return Math.abs(ma - mb) <= 1.0 ? 1 : 0;
   return d / Math.sqrt(sa * sb || 1);
 }
 /** RMSE: "is it the same brightness". */

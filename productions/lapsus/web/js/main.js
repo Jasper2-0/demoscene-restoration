@@ -1637,25 +1637,44 @@ function accBlit() {
       const r01 = () => emptRand() * (1 / 32767);
       const stamp = (x, y, op) =>
         drawPicture(emptTex, Math.trunc(x), Math.trunc(y), 256, 256, op);
+      // The engine sets the picture's material TRANSPARENCY, so the alpha it
+      // draws with is 1 - that (RENDER.md §12.1). Passing the raw rand as
+      // opacity is distributionally identical for a uniform variate — which is
+      // exactly why it survived every aggregate score — but it is the wrong
+      // value per stamp, and in phase C the difference stops being cosmetic.
+      const alphaOf = (transparency) => Math.max(0, Math.min(1, 1 - transparency));
       if (T < 1.3) {                                    // phase A
         drawFade('in', 3, 1 - 0.1);                     // black veil at alpha 0.1
         const X = 8 * T - 8, A = X * X;
         const N = Math.max(1, Math.trunc((X - 2.0) * 3.0));
         for (let i = 0; i < N; i++)
-          stamp((r01() - 0.5) * A + 50.0, (r01() - 0.5) * A + 180.0, r01());
+          stamp((r01() - 0.5) * A + 50.0, (r01() - 0.5) * A + 180.0, alphaOf(r01()));
       } else if (T < 9.3) {                             // phase B
         drawFade('in', 3, 1 - 0.1);
         const J = 5.759998321533203;                    // = X^2 at t0 = 1.3
-        stamp((r01() - 0.5) * J + 50.0, (r01() - 0.5) * J + 180.0, r01());
+        stamp((r01() - 0.5) * J + 50.0, (r01() - 0.5) * J + 180.0, alphaOf(r01()));
       } else {                                          // phase C
         const d = T - 9.3;
         drawFade('in', 3, 1 - (0.9 - 0.05 * d));        // veil deepens with d
         const Y = 8 * d + 2.4, A2 = 1.5 * Y * Y;
+        // B2 GROWS: 0.4d + 0.12, so transparency passes 1 at about d = 2.2 and
+        // the stamps clamp to invisible. THE PART STOPS EMITTING while its
+        // feedback trail decays to black — which is what the capture does and
+        // what we were not doing. Without this the spray keeps stamping at full
+        // strength to the end: at local 11.26 our mean luma was 32.3 against
+        // the reference's 1.8, and at 12.32, 28.7 against 0.0.
+        const B2 = 0.05 * Y;
         const N = Math.max(1, Math.trunc(28 * d + 1.4));
         for (let i = 0; i < N; i++) {
           const ang = 0.7853981852531433 + 2.094395160675049 * (r01() - 0.5);
           const rr = (r01() - 0.1) * A2;
-          stamp(50.0 + rr * Math.cos(ang), 180.0 - rr * Math.sin(ang), r01());
+          // THE DOUBLE rand() IS LITERAL — 0x405ab6 tests, 0x405ada supplies
+          // the value, and the test call's result is discarded. Y > 0 always so
+          // the zero branch is unreachable, but the call still happens and
+          // shifts the shared MSVC stream for everything after it.
+          r01();
+          stamp(50.0 + rr * Math.cos(ang), 180.0 - rr * Math.sin(ang),
+                alphaOf(r01() + B2));
         }
       }
     }
