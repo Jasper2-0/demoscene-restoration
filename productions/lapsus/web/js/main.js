@@ -1161,9 +1161,20 @@ const bgVao = gl.createVertexArray();
     if (!txt || /^\s*$/.test(txt) || /not found/i.test(txt)) continue;
     const h = parseHair(txt);
     if (!h.hairCount || !h.nodesPerHair) continue;
+    // The hair null is ANIMATED, so the simulation has to follow it through
+    // time rather than pin it where it ends up. worldMatrix is re-evaluated at
+    // every step, exactly as HairMesh::update re-derives it each frame.
+    const matAt = (t) => worldMatrix(nullObj, t);
     const w = worldMatrix(nullObj, T);
     const root = [w[12], w[13], w[14]];
-    const strands = simulate(buildStrands(h, hairRand), root, h.gravity, T);
+    // The step size is the one thing about the hair that cannot be read out of
+    // the binary: the engine steps with the real elapsed QPC time, so the shape
+    // is a function of the frame rate the demo happened to run at (§11.1 — same
+    // dt same image, different dt visibly different hair). ?hairdt= exists so
+    // verify/hairdt.mjs can MEASURE that frame rate against the capture instead
+    // of leaving 1/60 as an unexamined assumption.
+    const hairDt = Number(qs.get('hairdt')) || 1 / 60;
+    const strands = simulate(buildStrands(h, hairRand), matAt, h.gravity, T, hairDt);
     // One system per node, over ALL nodes — the engine's loop is
     // `for node in strand[+0x18..0x1c]` with no skip, so `HairCount 8` x
     // `NodesPerHair 10` is 80 systems, not 72. Node 0 is the anchor, which

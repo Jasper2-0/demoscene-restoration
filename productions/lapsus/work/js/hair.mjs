@@ -115,10 +115,49 @@ export function stepHair(strands, root, gravity, dt) {
   }
 }
 
-/** Simulate from rest to `time`, stepping at `dt` (the original free-ran). */
-export function simulate(strands, root, gravity, time, dt = 1 / 60) {
+/**
+ * Simulate from rest to `time`, stepping at `dt` (the original free-ran).
+ *
+ * `frame` is either a fixed root position or, correctly, a function
+ * `t -> world matrix of the hair null at time t`. THE ROOT HAS TO MOVE. Every
+ * shipped hair null is animated, and `HairMesh::update` re-derives the world
+ * matrix each frame (FUN_00424100, hair+0xbc == 0 -> FUN_0040f9f0) before
+ * stepping, so P is wherever the null is NOW. Dragging that anchor through
+ * space is the entire source of the motion — it is what hair dynamics ARE.
+ *
+ * Holding the root fixed does not merely lose the animation, it changes the
+ * answer completely, and in a way that hides itself: the integrator's fixed
+ * point is "segment parallel to (gravity + T*stiffness)", a condition with no
+ * dt in it. A stationary tuft therefore converges to a dt-INDEPENDENT
+ * equilibrium within a couple of hundred steps and then stops moving, so the
+ * simulation quietly stops being a simulation and RENDER.md §11.1's "same dt
+ * => same image, different dt => visibly different hair" reads as false. That
+ * contradiction is what exposed the bug: a dt sweep produced identical frames
+ * to four decimal places, which is not a property the real integrator has.
+ */
+export function simulate(strands, frame, gravity, time, dt = 1 / 60) {
+  const matAt = typeof frame === 'function' ? frame : null;
+  const fixed = matAt ? null : frame;
   const steps = Math.max(0, Math.round(time / dt));
-  for (let i = 0; i < steps; i++) stepHair(strands, root, gravity, dt);
+  for (let i = 0; i < steps; i++) {
+    const t = Math.min(time, (i + 1) * dt);
+    let root = fixed;
+    if (matAt) {
+      const M = matAt(t);
+      root = [M[12], M[13], M[14]];
+      // Rdir = M3x3 . strand.dir (0x42d276-0x42d33c) — the strand directions
+      // rotate with the null, so a spinning null whips the hair around.
+      for (const st of strands) {
+        const d = st.baseDir ?? (st.baseDir = st.dir.slice());
+        st.dir = [
+          M[0] * d[0] + M[4] * d[1] + M[8] * d[2],
+          M[1] * d[0] + M[5] * d[1] + M[9] * d[2],
+          M[2] * d[0] + M[6] * d[1] + M[10] * d[2],
+        ];
+      }
+    }
+    stepHair(strands, root, gravity, dt);
+  }
   return strands;
 }
 
