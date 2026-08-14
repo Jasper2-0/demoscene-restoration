@@ -1435,6 +1435,36 @@ function accBlit() {
              twoSided: false, refl: 0, envTex: null, blendMode: 0 };
       passes.push({ o, part, mat });
     }
+    // SEED THE PERSISTENT SHININESS FROM THIS PART'S OWN STEADY STATE.
+    //
+    // GL_SHININESS carries across draws AND across frames (see applyShininess),
+    // so what an over-128 surface inherits depends on everything drawn before
+    // it. The live player resolves that after one frame. A harness that renders
+    // ONE frame of ONE part does not — and GL's cold default of 0 is the WORST
+    // possible seed, because (N.H)^0 = 1 puts the full specular on every lit
+    // pixel rather than a highlight.
+    //
+    // That is why kartonki measured 3.4x too bright at local 2.0s through
+    // score1 and almost unchanged through the gate: score1 renders one frame
+    // cold, the gate renders many samples in one page and was warm from
+    // whatever ran before it. Two harnesses, two different seeds, and neither
+    // matching the engine — the same shape of bug as issue #26, one layer down.
+    // It also means the "16 parts identical" evidence for the rejection model
+    // was measured warm and could not have exposed this.
+    //
+    // The draw sequence repeats every frame, so the converged start state is
+    // simply the last value this same order accepts. Compute it without
+    // drawing, which makes a single-frame render match the steady state and
+    // makes both harnesses agree by construction.
+    if (SHIN_MODEL !== 'clamp' && !qs.has('shine')) {
+      const opaque = passes.filter((p) => (p.mat.blendMode ?? 0) === 0);
+      const blend = [...passes].reverse().filter((p) => (p.mat.blendMode ?? 0) !== 0);
+      for (const { mat } of [...opaque, ...blend]) {
+        if (mat.unlit) continue;               // unlit branch issues no glMaterial at all
+        const req = (mat.spec ?? 0) > 0 ? (mat.shine ?? 16) : 1;
+        if (req >= 0 && req <= 128) shininessState = req;
+      }
+    }
     for (const blended of (DRAW_OBJECTS ? [false, true] : [])) {
       for (const { o, part, mat } of (blended ? [...passes].reverse() : passes)) {
         const d = o.d;
