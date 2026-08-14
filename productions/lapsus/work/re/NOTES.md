@@ -1197,6 +1197,21 @@ correlation, which weights quiet lead-in like the downbeat.
   from that fix — 0.459 -> 0.536 — because its emitters ride the hair, which
   rides the null's envelopes.
 
+  And the replay window is NOT too long — the opposite. Scoring pehko across
+  windows after all the fixes:
+
+      window  0.15  r=0.450  black 57.6%     0.75  r=0.519  black 22.2%
+              0.25  r=0.460  black 48.3%     1.00  r=0.530  black 15.6%
+              0.35  r=0.473  black 40.9%     1.50  r=0.536  black  7.1%
+              0.50  r=0.493  black 32.2%
+
+  `r` rises monotonically with window length while the black fraction moves
+  steadily AWAY from the capture's 54.8%. A 0.15s window nails the black
+  fraction (57.6%) and scores worst. So the correlation is carried by the
+  bright structure, the floor costs less than truncating the trail does, and
+  the 1.50s derived from ln(0.01)/ln(1-alpha) is right. Shortening it to
+  "fix" the floor would be fitting one statistic at the expense of the image.
+
   Still unexplained: why our sprites put more energy into their faint outer
   region than the original's. The prior prime suspect was the HALF-TEXEL INSET —
   §11.2.4 samples `(W-1)/TW` from a `+0.5/TW` origin, i.e. the engine crops
