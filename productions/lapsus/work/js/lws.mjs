@@ -287,8 +287,23 @@ export function evalEnvelope(env, t) {
   // offset. With the full chord at both ends the Hermite basis degenerates to
   // exactly linear, which is what the capture shows.
   const chord = k1.v - k0.v;
-  const d0 = prev ? tan(k0, k0.v - prev.v, chord, 1) : chord;
-  const d1 = nxt ? tan(k1, chord, nxt.v - k1.v, -1) : chord;
+  let d0 = prev ? tan(k0, k0.v - prev.v, chord, 1) : chord;
+  let d1 = nxt ? tan(k1, chord, nxt.v - k1.v, -1) : chord;
+  // NON-UNIFORM KEY SPACING. Kochanek-Bartels tangents are built from the
+  // chords on either side of a key, which are only comparable when the two
+  // spans are the same length; when they are not, each tangent has to be
+  // rescaled by 2*dt / (dt_this + dt_other) or the curve is skewed toward the
+  // longer span. Skew in a position or rotation channel does not look like a
+  // curve error when you watch it — it looks like the part is running early
+  // or late.
+  //
+  // That is exactly what verify/partclock.mjs measured, and the correlation
+  // with the data is total: pene (0% of channels unevenly spaced) and
+  // hairball (8%) peak at dt = 0, while flu2 (100%) peaks at +0.1s and
+  // kaivoalieni (59%) at -0.1s — opposite signs, because the sign follows
+  // whether the spacing grows or shrinks across the key.
+  if (prev) d0 *= 2 * dt / ((k0.t - prev.t) + dt);
+  if (nxt) d1 *= 2 * dt / (dt + (nxt.t - k1.t));
   const u2 = u * u, u3 = u2 * u;
   return (2 * u3 - 3 * u2 + 1) * k0.v + (u3 - 2 * u2 + u) * d0
        + (-2 * u3 + 3 * u2) * k1.v + (u3 - u2) * d1;
