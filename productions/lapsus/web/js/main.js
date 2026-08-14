@@ -755,6 +755,88 @@ function drawPicture(tex, alphaTex, x, y, w, h, opacity) {
   gl.useProgram(prog);
 }
 
+const ACC_VS = `#version 300 es
+const vec2 P[3] = vec2[3](vec2(-1.0,-1.0), vec2(3.0,-1.0), vec2(-1.0,3.0));
+void main(){ gl_Position = vec4(P[gl_VertexID], 0.0, 1.0); }`;
+const ACC_FS = `#version 300 es
+precision highp float; out vec4 o;
+uniform sampler2D uSrc; uniform float uKeep;
+void main(){
+  vec3 c = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0).rgb;
+  o = vec4(floor(c * 255.0 * uKeep) / 255.0, 1.0);
+}`;
+const BLIT_FS = `#version 300 es
+precision highp float; out vec4 o;
+uniform sampler2D uSrc;
+void main(){ o = vec4(texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0).rgb, 1.0); }`;
+const mkProg = (fs) => { const p = gl.createProgram();
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, ACC_VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p; };
+const accProg = mkProg(ACC_FS), blitProg = mkProg(BLIT_FS);
+const acc = { fb: [], tex: [], cur: 0, ready: false };
+function accInit() {
+  if (acc.ready) return;
+  for (let i = 0; i < 2; i++) {
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, canvas.width, canvas.height, 0,
+      gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const f = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+    const d = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, d);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, canvas.width, canvas.height);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, d);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    acc.fb.push(f); acc.tex.push(t);
+  }
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  acc.ready = true;
+}
+function accDecay(keep) {
+  const src = acc.cur, dst = 1 - acc.cur;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fb[dst]);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+  gl.bindVertexArray(null);
+  gl.useProgram(accProg);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, acc.tex[src]);
+  gl.uniform1i(gl.getUniformLocation(accProg, 'uSrc'), 0);
+  gl.uniform1f(gl.getUniformLocation(accProg, 'uKeep'), keep);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+  for (const u of [0, 1, 2, 3]) { gl.activeTexture(gl.TEXTURE0 + u); gl.bindTexture(gl.TEXTURE_2D, null); }
+  gl.activeTexture(gl.TEXTURE0);
+  // Hand the main program back. renderAt sets uniforms on `prog` before it
+  // ever binds it — that is safe only because `prog` is current from module
+  // scope, and gl.uniform* on a program that is not current is
+  // GL_INVALID_OPERATION.
+  gl.useProgram(prog);
+  gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
+  acc.cur = dst;
+}
+function accBlit() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+  gl.bindVertexArray(null);
+  gl.useProgram(blitProg);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, acc.tex[acc.cur]);
+  gl.uniform1i(gl.getUniformLocation(blitProg, 'uSrc'), 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  gl.useProgram(prog);
+}
+
 const bgProg = gl.createProgram();
 gl.attachShader(bgProg, sh(gl.VERTEX_SHADER, BG_VS));
 gl.attachShader(bgProg, sh(gl.FRAGMENT_SHADER, BG_FS));
@@ -955,6 +1037,9 @@ const bgVao = gl.createVertexArray();
   // clears exactly once in the whole process, and Viherio's strobe gates the
   // CLEAR rather than the draw. No FBO is needed — the default framebuffer
   // persists across draw calls within a page load.
+  const FEEDBACK = { silli: 0.20, pehko: 0.05, empt: 0.10 };
+  const fbAlpha = FEEDBACK[SCENE] ?? null;
+  let useAcc = false;
   const renderAt = async (T, clearColour) => {
 
   // ---- per-part camera / fog overrides (RENDER.md §7).
@@ -1024,12 +1109,9 @@ const bgVao = gl.createVertexArray();
   // whole process. A single-frame renderer has no history to accumulate, so
   // it clears anyway and stamps the quad — the trail itself needs a
   // ping-pong FBO and a real frame loop.
-  const FEEDBACK = { silli: 0.20, pehko: 0.05, empt: 0.10 };
-  const fbAlpha = FEEDBACK[SCENE] ?? null;
   // Silli clears DEPTH only; Pehko and Empt clear nothing once running.
   if (clearColour) gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   else gl.clear(gl.DEPTH_BUFFER_BIT);
-
   // ---- backdrop image, before the 3D and with depth disabled
   let bgTex = null;
   if (scene.backdropImage) {
@@ -1054,13 +1136,12 @@ const bgVao = gl.createVertexArray();
     gl.useProgram(prog);
   }
 
-  if (fbAlpha != null) drawFade('in', 3, 1 - fbAlpha);   // black quad at fbAlpha
+  if (fbAlpha != null && !useAcc) drawFade('in', 3, 1 - fbAlpha);
 
   gl.uniformMatrix4fv(uProj, false, proj);
   gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
   gl.uniform1i(uEnv, 2);
   gl.uniform1i(gl.getUniformLocation(prog, 'uTex1'), 1);
-
   // ---- LW_MorphMixer displacement, before anything reads the geometry.
   // Weight = the MorfForm envelope sampled at localTime, and a target is
   // dropped entirely unless |w| > 0.01 (FUN_0041be60 @0x41beb4 against
@@ -1107,7 +1188,6 @@ const bgVao = gl.createVertexArray();
     gl.uniform3f(uFogColor, fc[0], fc[1], fc[2]);
     gl.uniform2f(uFogRange, scene.fog.minDist ?? 0, scene.fog.maxDist ?? 100);
   }
-
   // ---- opaque first, then blended (RENDER.md 8 draw order)
   textured = 0;
   // Depth sort: key is the camera-space Z of each object's bounding-sphere
@@ -1206,7 +1286,6 @@ const bgVao = gl.createVertexArray();
     }
   }
   gl.disable(gl.BLEND); gl.depthMask(true);
-
   // ---- hair. `AddNullObject Hair_<name>` binds that null to
   // data/hairs/<name>.txt; every strand shares ONE root, the null's world
   // origin, so the animated nulls drive the hair purely by parenting.
@@ -1337,7 +1416,6 @@ const bgVao = gl.createVertexArray();
     gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
     gl.useProgram(prog);
   }
-
   // ---- Part_Empt: no LW::Scene at all — its content IS this stamping
   // routine (RENDER.md §12.1). Three mutually exclusive phases whose timers
   // run in sequence and sum to 1.3 + 8.0 + 3.7 = 13.0s, exactly its slot.
@@ -1370,7 +1448,6 @@ const bgVao = gl.createVertexArray();
       }
     }
   }
-
   // ---- particles. Part_Pehko clones one system per hair node. The systems
   // were already advanced above, in lockstep with the hair, because each one
   // is re-anchored to its node every frame before being updated — so all that
@@ -1466,7 +1543,6 @@ const bgVao = gl.createVertexArray();
       frameFraction: +(2 * Math.atan(span / 2 / dist) / fovX).toFixed(3),
     };
   }
-
   };   // end renderAt
 
   // Feedback parts replay a short window of frames so the trail exists; the
@@ -1501,10 +1577,14 @@ const bgVao = gl.createVertexArray();
   }
   if (win) {
     const dt = 1 / 60, n = Math.max(1, Math.round(win / dt));
+    useAcc = fbAlpha != null;
+    if (useAcc) accInit();
     for (let i = n; i >= 0; i--) {
       const t = Math.max(0, T - i * dt);
-      await renderAt(t, i === n);          // clear only on the first of the window
+      if (useAcc) { accDecay(i === n ? 0 : 1 - fbAlpha); await renderAt(t, false); }
+      else await renderAt(t, i === n);
     }
+    if (useAcc) { accBlit(); useAcc = false; }
   } else {
     await renderAt(T, true);
   }
