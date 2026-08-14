@@ -85,3 +85,29 @@ execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', ours, '-i', ref,
 console.log(`  ours ${path.relative(fromRepo('.'), ours)}`);
 console.log(`  ref  ${path.relative(fromRepo('.'), ref)}`);
 console.log(`  sbs  ${path.relative(fromRepo('.'), sbs)}`);
+
+// A FLAT REFERENCE IS NOT A COMPARISON. Parts near the end of the capture, and
+// parts sampled inside a fade, can land on a frame the reference holds at solid
+// black — hedi's default midpoint does exactly this, 2.3s before the capture
+// ends. The side-by-side then shows our picture against nothing, which reads as
+// a catastrophic mismatch and is really an absent measurement. allparts.mjs
+// already guards its own scores this way; say it here too, because this tool is
+// what people look at when they want to SEE the difference.
+// `format=yuv420p` is REQUIRED: the frame we just wrote is RGB, and signalstats
+// silently emits nothing at all rather than erroring on it. Range rather than
+// stddev because not every ffmpeg build reports YSTD, but every one reports
+// YMIN/YMAX.
+try {
+  const out = execFileSync('ffmpeg', ['-v', 'error', '-i', ref, '-vf',
+    'format=yuv420p,signalstats,metadata=print:file=-',
+    '-f', 'null', '-'], { encoding: 'utf8' });
+  const y = (k) => Number(new RegExp(`signalstats\\.${k}=([\\d.]+)`).exec(out)?.[1]);
+  const [lo, hi] = [y('YMIN'), y('YMAX')];
+  if (Number.isFinite(lo) && Number.isFinite(hi) && hi - lo < 4) {
+    console.log(`\n  !! the REFERENCE frame is FLAT (luma ${lo}..${hi}) — there is no` +
+      ` picture at ${captureTime.toFixed(2)}s to compare against.` +
+      `\n     Any score at this instant is meaningless, and the side-by-side will` +
+      `\n     look like a total mismatch when it is really an absent measurement.` +
+      `\n     Pick a local time inside the capture's picture, or check the offset.`);
+  }
+} catch { /* the frames are already written; a missing stat is not a failure */ }
