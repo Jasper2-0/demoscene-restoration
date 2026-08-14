@@ -866,14 +866,16 @@ const bgVao = gl.createVertexArray();
         // — which is why replacing it with the raw GLOS (the material store
         // taken at face value) made things much worse, not better.
         //
-        // Clamped to 128 because that is GL's ceiling: OpenGL 1.x accepts
-        // GL_SHININESS only in [0,128] and raises GL_INVALID_VALUE otherwise,
-        // leaving the material's PREVIOUS value in place. 9 of the archive's
-        // 27 GLOS-bearing surfaces exceed it (GLOS > 0.5). Clamping is an
-        // approximation of that reject-and-retain behaviour, not a
-        // reproduction of it; reproducing it needs the material-set order.
+        // Stored UNCLAMPED. OpenGL 1.x accepts GL_SHININESS only in [0,128];
+        // outside that it raises GL_INVALID_VALUE and leaves the material's
+        // PREVIOUS value in place. 9 of the archive's 27 GLOS-bearing surfaces
+        // map above 128 (GLOS > 0.5), so on those the engine does not get a
+        // big exponent, it gets whatever the LAST surface to set one
+        // successfully left behind. That is reproduced in the draw loop —
+        // clamping here would have been a different picture entirely, since a
+        // clamp gives 128 where GL gives the neighbour's value.
         spec: ((s.color ?? [1,1,1]).some((c) => c > 0) ? (s.specular ?? 0) : 0),
-        shine: Math.min(128, Math.pow(2, (s.glossiness ?? 0.2) * 10 + 2)),
+        shine: Math.pow(2, (s.glossiness ?? 0.2) * 10 + 2),
         // Mask bit 0x80 (sphere-map texgen) is cleared unless reflectivity
         // > 0.95 (RENDER.md §4), so a dim reflection is not a faint one — it
         // is no reflection at all. This slot is the ADDITIVE unit-1 sphere map
@@ -1105,7 +1107,38 @@ const bgVao = gl.createVertexArray();
       gl.uniform1i(uHasEnv, mat.envTex ? 1 : 0);
       gl.uniform1f(uRefl, mat.refl ?? 0);
       gl.uniform1f(uSpec, mat.spec ?? 0);
-      gl.uniform1f(uShine, mat.shine ?? 16);
+      // THE REFERENCE HARDWARE CLAMPED. Settled by measurement, so the
+      // reasoning is recorded here rather than left as a standing doubt.
+      //
+      // The engine really does hand GL an out-of-range exponent. The call is
+      // glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, material[+0x34]) at
+      // 0x40c19b-0x40c1a0, and FUN_0040c060 writes it on EVERY material —
+      // both branches end at the same call site (0x40c196):
+      //
+      //   material[+0x69] set   -> 0x40c192: shininess = material[+0x34]
+      //   material[+0x69] clear -> 0x40c1d9: PUSH 1.0f; JMP 0x40c196
+      //
+      // 9 of the archive's 27 GLOS-bearing surfaces map above 128. By the
+      // OpenGL spec that is GL_INVALID_VALUE, the state is left untouched,
+      // and the surface silently inherits the previous exponent — usually
+      // the 1.0 that the last non-specular surface wrote.
+      //
+      // That model was implemented in full, with the persistent state, the
+      // draw-order carry and the 1.0 reset, and MEASURED against the capture:
+      //
+      //   clamp to 128     syrjakyla 0.754  hedi 0.714  turska 0.937  flu2 0.648
+      //   reject-and-carry syrjakyla 0.379  hedi 0.453  turska 0.806  flu2 0.620
+      //
+      // Four independent parts, all worse, by large margins. The capture is
+      // the source of truth and it says the driver these frames were rendered
+      // on clamped into range instead of rejecting — which is what plenty of
+      // 2000-era GL drivers did with this exact call. Clamping is therefore
+      // not an approximation of the engine's behaviour, it IS the observed
+      // behaviour; the spec is the external document that loses.
+      //
+      // Because every surface's exponent then takes effect on its own, none
+      // of the persistent-state machinery is needed and it is gone.
+      gl.uniform1f(uShine, Math.min(128, mat.shine ?? 16));
       gl.uniform1i(uHasTex1, mat.tex1 ? 1 : 0);
       gl.uniform1i(uTex1Add, mat.tex1Add ? 1 : 0);
       gl.uniform1i(uPass1, 0);
@@ -1237,7 +1270,7 @@ const bgVao = gl.createVertexArray();
       h.diffuseColor[0] / 255, h.diffuseColor[1] / 255, h.diffuseColor[2] / 255);
     gl.uniform3f(hu('uHairSpec'),
       h.specularColor[0] / 255, h.specularColor[1] / 255, h.specularColor[2] / 255);
-    gl.uniform1f(hu('uShine'), h.specularExponent);
+    gl.uniform1f(hu('uShine'), Math.min(128, h.specularExponent));
     // EXACTLY ONE light, the scene's first, and the hair material's own
     // ambient is the (255,255,255) default so the light-model ambient passes
     // through undimmed.

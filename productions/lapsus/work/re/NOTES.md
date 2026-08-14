@@ -891,10 +891,32 @@ correlation, which weights quiet lead-in like the downbeat.
   0.845. Worth recording WHY it survived: per-fragment lighting is strictly
   "better" and errs toward looking too clean, so nothing about the output
   looked broken.
-* **GL_SHININESS > 128.** 9 of the archive's 27 GLOS-bearing surfaces map to an
-  exponent above GL's ceiling. Real GL raises GL_INVALID_VALUE and keeps the
-  material's PREVIOUS shininess; we clamp. Reproducing it needs the
-  material-set order.
+* ~~GL_SHININESS > 128.~~ **SETTLED 2026-08-14 — the reference hardware
+  CLAMPED.** 9 of the archive's 27 GLOS-bearing surfaces map above GL's
+  ceiling, and the engine really does hand them to GL:
+  `glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, material[+0x34])` at
+  0x40c19b-0x40c1a0. Both branches of FUN_0040c060 reach that same call site
+  (0x40c196) — `material[+0x69]` set takes 0x40c192 and passes the surface's
+  exponent, clear takes 0x40c1d9 which pushes 1.0f and jumps in — so a
+  non-specular surface RESETS the state to 1.0 rather than leaving it alone.
+  By the spec, an out-of-range value is GL_INVALID_VALUE, the state is
+  untouched, and the surface inherits whatever stands.
+
+  That model was implemented in full — persistent state, draw-order carry,
+  1.0 reset — and measured:
+
+  |  | syrjakyla | hedi | turska | flu2 |
+  |---|---|---|---|---|
+  | clamp to 128 | 0.754 | 0.714 | 0.937 | 0.648 |
+  | reject-and-carry | 0.379 | 0.453 | 0.806 | 0.620 |
+
+  Four independent parts, all worse, by large margins. The capture is the
+  source of truth, so the driver these frames were rendered on clamped into
+  range instead of rejecting — which is what plenty of 2000-era GL drivers
+  did with this call. Clamping is not an approximation of the behaviour, it
+  IS the observed behaviour; here the OpenGL spec is the external document
+  that loses to the demo. The persistent-state machinery is deleted, since
+  under clamping every surface's exponent takes effect on its own.
 * **pehko 0.514 and higherbiing 0.584** are now the two weakest. pehko is a
   no-clear feedback part approximated by replaying a decay window instead of
   owning a real frame loop — the honest fix is a ping-pong FBO and a real
