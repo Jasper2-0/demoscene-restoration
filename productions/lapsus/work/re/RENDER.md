@@ -2953,7 +2953,7 @@ third unit — it is one unit sampling a different set on a later pass, which is
 `glClientActiveTexture`. minigl models it that way: a mesh holds N UV sets and
 each draw selects which sets feed unit 0 and unit 1.
 
-## 15. paleksi — four negative results, and what is actually left
+## 15. paleksi — negative results and the camera-parenting root cause
 
 paleksi sweeps at median r 0.531 with r swinging 0.18 / 0.30 / 0.84 / 0.53
 across four samples, while its MEAN LUMA matches the capture closely (67.9 vs
@@ -2987,18 +2987,68 @@ Correlation is normalised, so a broad additive term barely moves it — which is
 also why RMSE is the more sensitive statistic for this surface and r the more
 sensitive one for its geometry.
 
-### What is left
+### The additive/reflection path is not the fault
 
 The surface is **additive** (`ADTR 1` > 0.95 → blend mode 1, depth mode 2 —
 §4.5) and carries a **spherical reflection map** (`RFOP 2`, `RIMG` =
 Shock1Brown1.jpg) with **no colour texture**, so mask 0x80 applies: the sphere
 map lands on unit 0 under `GL_MODULATE` and *is* the surface's only texture.
 Its whole appearance is therefore the reflection, accumulated additively, with
-depth writes off — a configuration in which DRAW ORDER decides the picture and
-the engine's sort is per-object rather than per-triangle (§4 steps 5-8).
+depth writes off. The earlier conclusion that draw order therefore decided the
+picture was backwards: `GL_ONE, GL_ONE` accumulation is commutative, and with
+depth writes disabled no earlier blended triangle can occlude a later one.
 
-Both visible differences fit that and not lighting: a red-brown glow across
-the top where the capture is black (additive accumulation of a brown
-reflection map), and black polygonal holes at lower left where the capture is
-solid (the ordering, or the depth mode, dropping faces). Next work belongs
-there.
+A CPU diagnostic renderer was calibrated against the saved WebGL frame at
+local 3.612: it reproduced the current output at **r 0.9944 / RMSE 5.75** over
+the whole frame. That makes the following one-variable tests useful even
+though they are not substitutes for the browser gates:
+
+| hypothesis / perturbation | local 3.612 result against reference |
+|---|---|
+| binary state: unit-0 sphere map under MODULATE, additive framebuffer, depth writes off | **r 0.9366 / RMSE 16.44** after the camera fix below |
+| reverse all three objects and every triangle | only **2 of 921,600 RGB channels** changed, each by 1 code value |
+| enable depth writes | **r 0.7594 / RMSE 39.25** |
+| misclassify mask 0x80 as an additive texture stage | **r 0.2822 / RMSE 166.96**, mean luma 219.1 vs 66.3 |
+| flip the sphere-map image vertically | **r 0.3946 / RMSE 50.39** |
+| reverse face culling | **r 0.5635 / RMSE 62.03** |
+
+The final normals are also no longer an open branch. `FUN_00442c20`
+@0x442c20 zeroes the normals in the final stride-0x30 render buffer,
+accumulates the raw cross product of every triangle-index triple into its
+three indexed vertices, then normalises each result. The surface-group builder
+maps one render vertex per original point within the surface before it writes
+the fan-triangulated indices and calls that function at 0x41ed9a. For
+`pallo_01` this is the port's area-weighted, per-fan-triangle,
+per-point/per-surface construction.
+
+### Root cause: the part's local camera write was applied in world space
+
+`forced_0x4072b0` (`targeted2.c`) calls `Scene::tick`, obtains camera 0, adds
+`0.5*S` to the camera item's position field at `camera+0x4c`, clears the
+camera's matrix-valid byte, and only then calls `Scene::render`. The write is
+therefore to **camera-local X**. `paleksi.lws` parents that camera to object
+`10000001`, the animated Null, so the subsequent matrix rebuild rotates the
+kick through the parent.
+
+The port instead did this in the opposite order: it built the fully parented
+camera world matrix and then executed `camWorld[12] += camShift[0]`. At local
+3.612, where the kick is +0.424114, that put the camera at
+`(8.38750, -0.03829, -1.84763)` instead of the binary-faithful
+`(8.05924, -0.03846, -1.43449)`. This is why the overlay was correctly timed
+(it reads the same scalar independently) while the reflected lattice was in
+the wrong places.
+
+Holding every render-path choice fixed and changing only that composition
+point moved the calibrated 3.612 frame from **r 0.2975 / RMSE 59.19** to
+**r 0.9366 / RMSE 16.44** against the reference. Across the four sweep times,
+the calibrated diagnostic moved from **median r 0.5234 / RMSE 59.19** to
+**median r 0.8327 / RMSE 35.59** (per-sample r after:
+0.2224 / 0.9366 / 0.8327 / 0.5234). The official pre-fix browser sweep is
+0.5308 / 58.58; the official post-fix gates still have to be run in an
+environment permitted to bind the harness's localhost listener.
+
+This is the dominant fault, not a claim that every paleksi sample is now
+solved. The first diagnostic sample remains r 0.2224. A corrected-camera phase
+scan over local 1.054..1.554 stayed flat at r 0.125..0.232 (best 1.054,
+r 0.2319 versus aligned r 0.2224), so that residual is not explained by a
+small timing offset either. Record it; do not let the 3.612 fix spread to it.
