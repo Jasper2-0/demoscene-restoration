@@ -1002,8 +1002,29 @@ correlation, which weights quiet lead-in like the downbeat.
   (`dezz.lwo`, luminosity 1.0 hence unlit, COLR + TRAN) sits ~15-20px left of
   the capture's.
 
-  Characterised by DISTRIBUTION rather than mean, which changes what the
-  defect is. Shard region (left 380px) at t=4.5:
+  **flu2 is TWO independent defects, not one.** `work/verify/partclock.mjs`
+  holds the capture frame fixed and sweeps the render time — the instrument
+  that found the 240ms phase-2 clock error, aimed at a single part:
+
+      flu2   dt -0.3 -0.2 -0.1  0.0 +0.1 +0.2 +0.3
+             r  .402 .443 .526 .648 .770 .566 .351   -> sharp peak at +0.1s
+      pene   dt -0.3 -0.2 -0.1  0.0 +0.1 +0.2 +0.3
+             r  .922 .941 .971 .993 .968 .949 .937   -> peak exactly at 0.0
+
+  So phase 1's clock origin is right (pene, r 0.993, peaks at zero) and flu2
+  alone renders ~0.1s early — worth **0.648 -> 0.770** on its own. That is not
+  the schedule: ENGINE.md's table has flu2 at 14.0/9.0 and pene at 23.0, and
+  pene confirms it. Nor is it a custom part clock: `FUN_00405b60` is only a
+  vtable stub, so Part_Flu2 uses the GENERIC vf2 and passes localTime through
+  untouched. The remaining candidate is our ENVELOPE INTERPOLATION for flu2's
+  two objects — a TCB error looks exactly like a small time shift.
+
+  The tonal gap is SEPARATE and survives the offset: at dt=+0.1 the
+  distribution barely moves (p50 16 -> 17, mean 41.3 -> 45.0) while r jumps
+  0.12. Both are real and want different work.
+
+  The tonal half, characterised by DISTRIBUTION rather than mean, which
+  changes what that defect is. Shard region (left 380px) at t=4.5:
 
       ours     black 34.9%   p50  16  p75  44  p90 123  p99 255   mean 41.3
       capture  black 30.2%   p50  58  p75  98  p90 139  p99 215   mean 61.3
