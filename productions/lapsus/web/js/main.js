@@ -2167,15 +2167,44 @@ function accBlit() {
   const inspect = qs.has('inspect');
 
   if (single) {
-    // ---- verification path, unchanged: one part, one instant, then stop.
+    // ---- verification path: one part, one instant, then stop.
     const part = await makePart(SCENE);
     const win = fbWindowFor(SCENE, T);
     await replay(part, T, win);
+    // THE SCHEDULED FADE APPLIES HERE TOO (issue #26).
+    //
+    // The adapter path below has called applyFades since the sweep was built,
+    // for the reason its own comment gives: without it a frame is compared
+    // against a reference that is MID-FADE, and every faded part reports a
+    // brightness fault that does not exist. That fix was never propagated to
+    // this path, so score1 / frame / channels / phase all measured un-faded
+    // frames against faded references — the two harnesses in this repo
+    // disagreed about what "the frame" is.
+    //
+    // It cost a confident and wrong finding: "kartonki is 3.7x too bright in
+    // its first second". Applying its own scheduled fade cuts RMSE 8.26 -> 2.22
+    // at local 0.4s and moves r by 0.003, because correlation is invariant to
+    // exactly the affine level change a fade produces. That split is also the
+    // tell — a fault huge in RMSE and invisible in r is a LEVEL difference, so
+    // it has to come from something scaling the whole frame.
+    //
+    // Worst exposure is the heavily-faded parts: hulluolli is black 4.0 BOTH
+    // ways on a 9.531s part, i.e. 8 of its 9.5 seconds sit inside a fade.
+    //
+    // An explicit ?fadein= / ?fadeout= still wins, and ?nofade=1 opts out
+    // entirely — rendering a part unfaded is genuinely useful for separating
+    // content from level, the same way ?fb=0 separates content from
+    // accumulation. What is wrong is doing it silently, by default.
     const fadeIn = qs.get('fadein'), fadeOut = qs.get('fadeout');
-    if (fadeIn) { const [v, mode, r, g, b] = fadeIn.split(',').map(Number);
-      drawFade('in', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
-    if (fadeOut) { const [v, mode, r, g, b] = fadeOut.split(',').map(Number);
-      drawFade('out', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
+    if (fadeIn || fadeOut) {
+      if (fadeIn) { const [v, mode, r, g, b] = fadeIn.split(',').map(Number);
+        drawFade('in', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
+      if (fadeOut) { const [v, mode, r, g, b] = fadeOut.split(',').map(Number);
+        drawFade('out', mode ?? 3, v, [r ?? 0, g ?? 0, b ?? 0]); }
+    } else if (qs.get('nofade') !== '1') {
+      const ent = [...PHASE1, ...PHASE2].find(([n]) => n.toLowerCase() === SCENE.toLowerCase());
+      applyFades(SCENE.toLowerCase(), T, ent ? ent[2] : Infinity);
+    }
     gl.finish();
     window.__lapsusInfo = part.info(T);
     window.__lapsusReady = true;
