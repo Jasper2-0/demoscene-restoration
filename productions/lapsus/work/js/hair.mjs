@@ -122,14 +122,77 @@ export function simulate(strands, root, gravity, time, dt = 1 / 60) {
   return strands;
 }
 
-/** Flatten to GL_LINES positions: root->node0, node0->node1, ... */
-export function toLines(strands, root) {
-  const out = [];
+/**
+ * Per-vertex SHADING normals (RENDER.md §11.1, 0x42d40a and 0x42d6f0).
+ *
+ *   n = normalize( (Lp - V) - T̂ · dot(T̂, Lp - V) )
+ *
+ * i.e. the component of "vertex to light" perpendicular to the strand
+ * tangent, where the tangent is the strand direction at the root and the
+ * previous segment elsewhere. This is a lighting construction, not geometry:
+ * a line has no surface normal, and this particular choice is what makes
+ * fixed-function GL_LINES look like lit hair. It depends on the light
+ * position, so it is recomputed every frame — it cannot be baked with the
+ * strand.
+ */
+export function shadeNormals(strands, root, lightPos) {
+  const perp = (toLight, tan) => {
+    const tl = Math.hypot(...tan) || 1;
+    const t = [tan[0] / tl, tan[1] / tl, tan[2] / tl];
+    const d = t[0] * toLight[0] + t[1] * toLight[1] + t[2] * toLight[2];
+    const n = [toLight[0] - t[0] * d, toLight[1] - t[1] * d, toLight[2] - t[2] * d];
+    const l = Math.hypot(...n) || 1;
+    return [n[0] / l, n[1] / l, n[2] / l];
+  };
+  const toL = (p) => [lightPos[0] - p[0], lightPos[1] - p[1], lightPos[2] - p[2]];
   for (const st of strands) {
-    let prev = root;                       // node[0] IS the root
+    // node[0] sits at the root and its tangent is the strand direction.
+    st.nodes[0].nrm = perp(toL(root), st.dir);
+    let P = root;
     for (let i = 1; i < st.nodes.length; i++) {
-      out.push(...prev, ...st.nodes[i].pos); prev = st.nodes[i].pos;
+      const D = st.nodes[i].pos;
+      st.nodes[i].nrm = perp(toL(D), [D[0] - P[0], D[1] - P[1], D[2] - P[2]]);
+      P = D;
     }
   }
-  return new Float32Array(out);
+  return strands;
+}
+
+/**
+ * Expand to triangles for WIDE lines. The engine draws GL_LINES after
+ * `glLineWidth(3.0f)` (0x424173), and WebGL2 clamps line width to 1 on every
+ * implementation — so drawing gl.LINES here renders a third of the original's
+ * coverage. On krediili and hairball, which are nothing but hair (1000 and
+ * 1020 strands) blended (ONE, ONE), that is most of the image.
+ *
+ * Each segment becomes two triangles, widened in SCREEN SPACE by the vertex
+ * shader. The widening axis follows GL's own wide-line rule rather than the
+ * usual perpendicular-to-segment quad: a non-antialiased wide line is
+ * rasterised as a rectangle offset along y when the segment is x-major and
+ * along x when it is y-major. (GL_LINE_SMOOTH, 0x0b20, never appears in the
+ * binary, so the aliased rule is the right one.)
+ *
+ * Layout per vertex, 10 floats: pos(3) normal(3) otherEnd(3) side(1).
+ */
+export function toLineVerts(strands, root) {
+  const segs = strands.reduce((a, st) => a + Math.max(0, st.nodes.length - 1), 0);
+  const out = new Float32Array(segs * 6 * 10);
+  let o = 0;
+  const put = (p, n, q, side) => {
+    out[o++] = p[0]; out[o++] = p[1]; out[o++] = p[2];
+    out[o++] = n[0]; out[o++] = n[1]; out[o++] = n[2];
+    out[o++] = q[0]; out[o++] = q[1]; out[o++] = q[2];
+    out[o++] = side;
+  };
+  const Z = [0, 0, 1];
+  for (const st of strands) {
+    let prev = root, prevN = st.nodes[0].nrm ?? Z;   // node[0] IS the root
+    for (let i = 1; i < st.nodes.length; i++) {
+      const cur = st.nodes[i].pos, curN = st.nodes[i].nrm ?? Z;
+      put(prev, prevN, cur, -1); put(prev, prevN, cur, +1); put(cur, curN, prev, -1);
+      put(cur, curN, prev, -1);  put(prev, prevN, cur, +1); put(cur, curN, prev, +1);
+      prev = cur; prevN = curN;
+    }
+  }
+  return out;
 }

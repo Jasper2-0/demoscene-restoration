@@ -32,7 +32,7 @@ addEventListener('error', (e) => {
 import { parseLWS, evalEnvelope, MORPH_EPSILON } from '../../work/js/lws.mjs';
 import { parseLWO } from '../../work/js/lwo.mjs';
 import { decodeTGA } from '../../work/js/tga.mjs';
-import { parseHair, buildStrands, simulate, toLines, msvcRand } from '../../work/js/hair.mjs';
+import { parseHair, buildStrands, simulate, shadeNormals, toLineVerts, msvcRand } from '../../work/js/hair.mjs';
 import { parseParticles, simulateSystem, frameOf, billboard } from '../../work/js/particles.mjs';
 
 const ROOT = new URL('../../', import.meta.url).href;
@@ -617,17 +617,63 @@ window.__lapsusFade = drawFade;
 // Shading normals are recomputed per frame from the first light and are
 // shading-only; drawn here with the file's DiffuseColor under the additive
 // blend, which is what carries the look.
+// Hair (RENDER.md §4.6 / §11.1). The hair is LIT — the draw at 0x424150 does
+// hair[+0x108]->vf2(0), installing the scene's FIRST light as GL_LIGHT0, then
+// FUN_0040c060 sets a material built from the .txt's DiffuseColor /
+// SpecularColor / SpecularExponent, and glNormalPointer supplies the shading
+// normals computed in §11.1. It is not the flat constant colour this shader
+// used to emit.
+//
+// The vertex shader also does the WIDE-LINE expansion for glLineWidth(3), by
+// GL's aliased wide-line rule: widen along y for an x-major segment, along x
+// for a y-major one.
 const HAIR_VS = `#version 300 es
-in vec3 aPos; uniform mat4 uMV, uProj;
-void main(){ gl_Position = uProj * uMV * vec4(aPos,1.0); }`;
+in vec3 aPos; in vec3 aNormal; in vec3 aOther; in float aSide;
+uniform mat4 uMV, uProj; uniform vec2 uViewport; uniform float uLineWidth;
+out vec3 vN, vP;
+void main(){
+  vec4 e = uMV * vec4(aPos, 1.0);
+  vP = e.xyz; vN = mat3(uMV) * aNormal;
+  vec4 a = uProj * e;
+  vec4 b = uProj * uMV * vec4(aOther, 1.0);
+  vec2 half_ = uViewport * 0.5;
+  vec2 sa = a.xy / a.w * half_;
+  vec2 sb = b.xy / b.w * half_;
+  vec2 d = abs(sb - sa);
+  vec2 off = (d.x >= d.y) ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
+  a.xy += off * aSide * uLineWidth * 0.5 / half_ * a.w;
+  gl_Position = a;
+}`;
+// Material defaults from FUN_0040bef0 that the hair path does NOT override:
+// ambient stays (255,255,255) and emission 0, so the primary colour is
+// lmAmbient + diffuse*(N.L). Specular is separate (GL_SEPARATE_SPECULAR_COLOR)
+// and uses the same infinite viewer as the main shader. Fog stays enabled.
 const HAIR_FS = `#version 300 es
-precision highp float; out vec4 o; uniform vec3 uHairColor;
-void main(){ o = vec4(uHairColor, 1.0); }`;
+precision highp float;
+in vec3 vN, vP; out vec4 o;
+uniform vec3 uHairColor, uHairSpec, uAmbient, uLightColor, uLightDir;
+uniform float uShine;
+uniform bool uFogOn; uniform vec3 uFogColor; uniform vec2 uFogRange;
+void main(){
+  vec3 n = normalize(vN);
+  vec3 col = uAmbient + uHairColor * uLightColor * max(dot(n, uLightDir), 0.0);
+  vec3 H = normalize(uLightDir + vec3(0.0, 0.0, 1.0));
+  col += uHairSpec * uLightColor * pow(max(dot(n, H), 0.0), uShine);
+  if (uFogOn) {
+    float f = clamp((uFogRange.y + vP.z) / (uFogRange.y - uFogRange.x), 0.0, 1.0);
+    col = mix(uFogColor, col, f);
+  }
+  o = vec4(col, 1.0);
+}`;
 const hairProg = gl.createProgram();
 gl.attachShader(hairProg, sh(gl.VERTEX_SHADER, HAIR_VS));
 gl.attachShader(hairProg, sh(gl.FRAGMENT_SHADER, HAIR_FS));
 gl.bindAttribLocation(hairProg, 0, 'aPos');
+gl.bindAttribLocation(hairProg, 1, 'aNormal');
+gl.bindAttribLocation(hairProg, 2, 'aOther');
+gl.bindAttribLocation(hairProg, 3, 'aSide');
 gl.linkProgram(hairProg);
+if (!gl.getProgramParameter(hairProg, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(hairProg));
 
 // Particles (RENDER.md §11): GL_QUADS billboards, additive, depth test on
 // with depthMask(FALSE). Only Part_Pehko uses the system, cloning ONE system
@@ -1100,6 +1146,14 @@ const bgVao = gl.createVertexArray();
   // this is a draw suppression, not a skip: the strands must still be stepped.
   const hairSuppressed = /^pehko$/i.test(SCENE);
   const hairNodes = [];        // emitter positions for the particle systems
+  // ONE rand() stream across every hair mesh in the scene, in creation order.
+  // The engine never calls srand, so the CRT's initial seed of 1 stands and
+  // each HairMesh ctor continues the sequence the previous one left off at —
+  // it does not restart. Giving each mesh its own generator made every mesh
+  // built from the same file identical, which matters most in hairball: it
+  // has TWO `Hair_furball` nulls, and they are supposed to be two different
+  // random tufts, not one drawn twice.
+  const hairRand = msvcRand();
   for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
     const name = nullObj.name.replace(/^Hair_/, '');
     let txt;
@@ -1109,18 +1163,25 @@ const bgVao = gl.createVertexArray();
     if (!h.hairCount || !h.nodesPerHair) continue;
     const w = worldMatrix(nullObj, T);
     const root = [w[12], w[13], w[14]];
-    const strands = simulate(buildStrands(h), root, h.gravity, T);
-    const verts = toLines(strands, root);
+    const strands = simulate(buildStrands(h, hairRand), root, h.gravity, T);
     // One system per node, over ALL nodes — the engine's loop is
     // `for node in strand[+0x18..0x1c]` with no skip, so `HairCount 8` x
     // `NodesPerHair 10` is 80 systems, not 72. Node 0 is the anchor, which
     // the simulation never moves, so its world position is the root itself.
-    if (hairSuppressed)
+    if (hairSuppressed) {
       for (const st of strands)
         for (let i = 0; i < st.nodes.length; i++)
           hairNodes.push(i === 0 ? root : st.nodes[i].pos);
-    if (hairSuppressed) continue;
-    hairLines += verts.length / 6;
+      continue;                                  // DAT_004a900c = 1: no draw
+    }
+    // Shading normals need the FIRST light's world position (Scene::update
+    // 0x4151be assigns hair[+0x108] = *scene[+0x48] unconditionally), and they
+    // change every frame because they point at the light.
+    const L0 = scene.lights[0];
+    const lw = L0 ? worldMatrix(L0, T) : null;
+    shadeNormals(strands, root, lw ? [lw[12], lw[13], lw[14]] : [0, 0, 0]);
+    const verts = toLineVerts(strands, root);
+    hairLines += verts.length / (10 * 6);        // 6 verts x 10 floats per segment
 
     gl.useProgram(hairProg);
     const vao = gl.createVertexArray();
@@ -1128,18 +1189,41 @@ const bgVao = gl.createVertexArray();
     const vb = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vb);
     gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-    gl.uniformMatrix4fv(gl.getUniformLocation(hairProg, 'uMV'), false, view);
-    gl.uniformMatrix4fv(gl.getUniformLocation(hairProg, 'uProj'), false, proj);
-    gl.uniform3f(gl.getUniformLocation(hairProg, 'uHairColor'),
+    const S = 10 * 4;                            // stride: 10 floats
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 12);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, S, 24);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, S, 36);
+    const hu = (n) => gl.getUniformLocation(hairProg, n);
+    gl.uniformMatrix4fv(hu('uMV'), false, view);
+    gl.uniformMatrix4fv(hu('uProj'), false, proj);
+    gl.uniform2f(hu('uViewport'), canvas.width, canvas.height);
+    gl.uniform1f(hu('uLineWidth'), 3.0);         // glLineWidth(3.0f) @0x424173
+    gl.uniform3f(hu('uHairColor'),
       h.diffuseColor[0] / 255, h.diffuseColor[1] / 255, h.diffuseColor[2] / 255);
-    gl.disable(gl.CULL_FACE);
-    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-    gl.depthMask(true);
-    // NB the engine sets glLineWidth(3); WebGL2 implementations generally
-    // clamp line width to 1, so the hair renders thinner than the original.
-    gl.lineWidth(3);
-    gl.drawArrays(gl.LINES, 0, verts.length / 3);
+    gl.uniform3f(hu('uHairSpec'),
+      h.specularColor[0] / 255, h.specularColor[1] / 255, h.specularColor[2] / 255);
+    gl.uniform1f(hu('uShine'), h.specularExponent);
+    // EXACTLY ONE light, the scene's first, and the hair material's own
+    // ambient is the (255,255,255) default so the light-model ambient passes
+    // through undimmed.
+    gl.uniform3f(hu('uAmbient'), ambC[0]*ambI, ambC[1]*ambI, ambC[2]*ambI);
+    gl.uniform3fv(hu('uLightDir'), new Float32Array(lightDirs.slice(0, 3).length
+      ? lightDirs.slice(0, 3) : [0, 0, 1]));
+    gl.uniform3fv(hu('uLightColor'), new Float32Array(lightCols.slice(0, 3).length
+      ? lightCols.slice(0, 3) : [1, 1, 1]));
+    gl.uniform1i(hu('uFogOn'), scene.fog?.type ? 1 : 0);
+    if (scene.fog?.type) {
+      const fc = scene.fog.color ?? [0, 0, 0];
+      gl.uniform3f(hu('uFogColor'), fc[0], fc[1], fc[2]);
+      gl.uniform2f(hu('uFogRange'), scene.fog.minDist ?? 0, scene.fog.maxDist ?? 100);
+    }
+    gl.disable(gl.CULL_FACE);                    // material noCull = 1
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);   // Additive 1
+    gl.depthMask(true);                          // depth mode 3: test + write
+    // Wide lines are expanded to triangles in HAIR_VS — see toLineVerts. A
+    // gl.lineWidth(3) call here would be silently clamped to 1.
+    gl.drawArrays(gl.TRIANGLES, 0, verts.length / 10);
     gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
     gl.useProgram(prog);
   }
