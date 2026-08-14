@@ -2138,12 +2138,12 @@ function accBlit() {
       await (phase2Loaded ??= load(sceneParts(PHASE2)));
       await startPhase(2);
       handingOver = false;
-      requestAnimationFrame(() => frame());
       return;
     }
     if (phase === 2 && t > 112.0) { setStatus('the end'); stopped = true; return; }
 
     window.__lapsusNow = { phase, t, part: cur, local };
+    const drawT0 = performance.now();
     if (LOADING_PIC[cur]) {
       drawLoadingScreen(await loadingPic(cur));
       applyFades(cur, local, dur);
@@ -2154,7 +2154,63 @@ function accBlit() {
         applyFades(cur, local, dur);
       }
     }
-    requestAnimationFrame(() => frame());
+    // What one live frame actually costs, for work/verify/livetrace.mjs. Frame
+    // INTERVAL cannot answer this: vsync hides every part that still has
+    // headroom, and only tells you which parts are already too late.
+    window.__lapsusFrameMs = performance.now() - drawT0;
+    window.__lapsusFrames = (window.__lapsusFrames ?? 0) + 1;
+    updateStats(window.__lapsusFrameMs);
+  }
+
+  // THE NEXT FRAME IS SCHEDULED FIRST, and that is the whole point.
+  //
+  // frame() is async. Scheduling the next requestAnimationFrame at the END of
+  // it means the scheduling happens in a microtask AFTER the current rAF
+  // callback has already returned — the browser has closed that vsync's
+  // callback list, so the next frame lands on the vsync after it. One vsync
+  // is lost per frame, every frame, and the demo runs at exactly HALF the
+  // display rate no matter how little work it does: measured 29.9fps while
+  // the render itself took between 0.6ms and 8.6ms.
+  //
+  // Asking for the next frame before doing the work keeps the cadence. The
+  // guard is what makes that safe: if a frame ever does overrun, it skips the
+  // next tick instead of re-entering, so an overrun costs one frame rather
+  // than corrupting the state a half-finished frame was building.
+  // ?stats=1 — fps, render cost and the worst frame in the last second, on
+  // screen. Frame rate is a deliverable for this port (the original brought a
+  // period P3 and GeForce to their knees, and running it smoothly is much of
+  // the point), and "it feels slower" cannot be acted on while "the 1% low is
+  // 22ms in kartonki" can. It also catches what an average hides: the median
+  // frame here is a couple of milliseconds and the spikes are hundreds.
+  const STATS = qs.get('stats') === '1';
+  let statsEl = null;
+  if (STATS) {
+    statsEl = document.createElement('div');
+    statsEl.style.cssText = 'position:fixed;left:8px;top:8px;z-index:99;font:12px/1.4 ui-monospace,monospace;' +
+      'color:#8f8;background:rgba(0,0,0,.6);padding:6px 8px;white-space:pre;pointer-events:none';
+    document.body.appendChild(statsEl);
+  }
+  const statWin = [];
+  function updateStats(ms) {
+    if (!statsEl) return;
+    const now = performance.now();
+    statWin.push({ now, ms });
+    while (statWin.length && now - statWin[0].now > 1000) statWin.shift();
+    if (statWin.length < 2) return;
+    const sorted = statWin.map((x) => x.ms).sort((a, b) => a - b);
+    const p99 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99))];
+    const n = window.__lapsusNow;
+    statsEl.textContent =
+      `${statWin.length} fps   render ${sorted[sorted.length >> 1].toFixed(1)}ms  ` +
+      `worst ${p99.toFixed(1)}ms\n${n ? n.part : ''}  t=${n ? n.t.toFixed(2) : ''}`;
+  }
+
+  let rendering = false;
+  function tick() {
+    requestAnimationFrame(tick);
+    if (rendering || stopped) return;
+    rendering = true;
+    frame().catch((e) => console.error('frame', e)).finally(() => { rendering = false; });
   }
 
   // Autoplay needs a gesture in every current browser, so the first click
@@ -2194,7 +2250,7 @@ function accBlit() {
       boot();
     });
     await startPhase(1);
-    frame();
+    tick();
   };
   document.addEventListener('click', begin);
   document.addEventListener('keydown', begin);
