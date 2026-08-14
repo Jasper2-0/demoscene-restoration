@@ -963,8 +963,12 @@ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   remains open there is listed in §11.4.
 - **`Picture` mode argument** (0 for loading screens, 3 for part pictures) — the
   tiling/atlas logic behind it was not chased.
-- **`Part_Empt` (`forced_0x4057b0`, in `targeted1.c`), `Part_Viherio`
-  (`forced_0x4087a0`), `Part_Morko`, `Part_Radiosity`** were only skimmed.
+- ~~**`Part_Empt` (`forced_0x4057b0`), `Part_Viherio` (`forced_0x4087a0`),
+  `Part_Morko`, `Part_Radiosity`** were only skimmed.~~ **SETTLED 2026-08-14 for
+  Morko and Radiosity: they have NO custom `vf2`.** Read straight out of the
+  vtables (§12.12) — both dispatch to the generic `0x406e50`, as do Diskojea,
+  Hairball, Flu2, Kartonki, Made, Mela and Pene. There was nothing part-specific
+  to skim. Empt and Viherio do have their own and are documented in §12.1/§12.9.
   Viherio in particular runs a table-driven strobe (`DAT_00463c2c`…`0x463c64`,
   threshold `_DAT_0045a598`) that gates whether the scene is drawn at all in a
   given frame — worth a dedicated read before porting that part.
@@ -3052,3 +3056,47 @@ solved. The first diagnostic sample remains r 0.2224. A corrected-camera phase
 scan over local 1.054..1.554 stayed flat at r 0.125..0.232 (best 1.054,
 r 0.2319 versus aligned r 0.2224), so that residual is not explained by a
 small timing offset either. Record it; do not let the 3.612 fix spread to it.
+
+
+### 12.12 Which parts actually have a custom `vf2` — read from the vtables
+
+`work/src/Lapsus.exe` is **not packed**: three ordinary sections, `.text` at
+VA 0x401000 / file 0x1000, `.rdata` at VA 0x45a000 / file 0x5a000, `.data` at
+VA 0x463000 / file 0x63000, imagebase 0x400000. So the part vtables can be read
+directly out of the file rather than inferred from call sites — Ghidra's
+listing does not include `.rdata`, which is why this went unanswered.
+
+Each `Part_X` ctor is `MOV EAX,ECX; MOV [EAX], <vtbl>`, and the vtable's first
+three slots are `vf0` (create), `vf1` (destroy), `vf2` (draw). Confirmed by
+`Part_HigherBiing`, whose slot 2 is `0x4060b0` — its documented custom draw.
+
+| part | vtbl | vf0 | vf1 | vf2 | |
+|---|---|---|---|---|---|
+| Empt | 0x45a374 | 0x405570 | 0x405760 | **0x4057b0** | custom (§12.1) |
+| HigherBiing | 0x45a404 | 0x405f90 | 0x407fe0 | **0x4060b0** | custom (§12.2) |
+| Diskojea | 0x45a364 | 0x4053e0 | 0x407fe0 | 0x406e50 | generic |
+| Flu2 | 0x45a3d4 | 0x405b70 | 0x407fe0 | 0x406e50 | generic |
+| Hairball | 0x45a3e4 | 0x405cd0 | 0x407fe0 | 0x406e50 | generic |
+| Kartonki | 0x45a43c | 0x4064b0 | 0x407fe0 | 0x406e50 | generic |
+| Made | 0x45a47c | 0x406bd0 | 0x407fe0 | 0x406e50 | generic |
+| Mela | 0x45a48c | 0x406d30 | 0x407fe0 | 0x406e50 | generic |
+| **Morko** | 0x45a49c | 0x406ee0 | 0x407e00 | 0x406e50 | **generic** |
+| Pene | 0x45a514 | 0x4079d0 | 0x407fe0 | 0x406e50 | generic |
+| **Radiosity** | 0x45a524 | 0x407b30 | 0x407fe0 | 0x406e50 | **generic** |
+
+Morko's only peculiarity is a custom `vf1` at `0x407e00`, which frees the
+object at `+4` and, if non-null, one at `+8`. Its create only ever allocates the
+one Scene into `+4`, so the second free is defensive and never fires.
+
+**Consequence for the port.** Morko, Radiosity and Kartonki need no per-part
+behaviour — the port applying none to them is correct, and their remaining
+mismatches are in the shared machinery or the scene data, not in unread code.
+That closes a hypothesis that was standing against three separate issues.
+
+**Morko's actual peculiarity is its scene graph.** `morko.lws` is two long
+articulated chains — ~12 copies of `nivel1.lwo` each ("nivel" is Finnish for
+*joint*), every one `ParentItem`-ed to the previous, ending in the null `tgt1`
+/ `tgt2` — plus `nivel1paaB`, `luppakorva`, three lights and three cameras. A
+deep parent chain is where a per-link transform error compounds into a large
+displacement at the tip, which is what its frames show. That is where to look
+next, not at part code.
