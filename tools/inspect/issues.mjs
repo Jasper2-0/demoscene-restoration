@@ -179,7 +179,12 @@ for (const [key, issue] of wanted) {
   if (!ex) plan.create.push({ key, issue });
   else {
     const body = bodyFor(issue, partOf(issue.part));
-    if ((ex.body ?? '').trim() !== body.trim()) plan.update.push({ key, issue, ex, body });
+    // A STALE SEVERITY IS A REASON TO UPDATE, not just a stale body. Gating on
+    // the body alone meant an issue whose numbers had not moved kept whatever
+    // severity it was born with, however far the part had come.
+    const sev = (ex.labels ?? []).map((l) => l.name).filter((n) => n.startsWith('sev:'));
+    const sevStale = sev.length !== 1 || sev[0] !== `sev:${issue.sev}`;
+    if ((ex.body ?? '').trim() !== body.trim() || sevStale) plan.update.push({ key, issue, ex, body });
   }
 }
 for (const [key, ex] of mine) if (!wanted.has(key)) plan.close.push({ key, ex });
@@ -209,7 +214,20 @@ for (const { issue } of plan.create) {
 }
 for (const { ex, issue, body } of plan.update) {
   gh(['issue', 'edit', String(ex.number), '--title', titleFor(issue), '--body-file', '-'], body);
-  console.log(`  updated #${ex.number}`);
+  // SEVERITY MOVES. It was set at creation and never revisited, so an issue
+  // that improved from major to minor kept shouting for attention it no longer
+  // needed — pehko sat on sev:major for a day after the sweep had downgraded
+  // it. Re-label on every update.
+  const had = (ex.labels ?? []).map((l) => l.name).filter((n) => n.startsWith('sev:'));
+  const want = `sev:${issue.sev}`;
+  if (!had.includes(want) || had.length > 1) {
+    const args = ['issue', 'edit', String(ex.number), '--add-label', want];
+    for (const old of had.filter((n) => n !== want)) args.push('--remove-label', old);
+    gh(args);
+    console.log(`  updated #${ex.number}  (${had.join(',') || 'no sev'} -> ${want})`);
+  } else {
+    console.log(`  updated #${ex.number}`);
+  }
 }
 for (const { ex } of plan.close) {
   gh(['issue', 'close', String(ex.number), '--comment',
