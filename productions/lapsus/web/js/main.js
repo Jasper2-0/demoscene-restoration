@@ -771,15 +771,42 @@ const bgVao = gl.createVertexArray();
         alpha: (s.transparency ?? 0) > 0.95 ? 1 : 1 - (s.transparency ?? 0),
         twoSided: (s.sides ?? 1) === 3,
         refl: s.reflection ?? 0,
-        // RENDER.md §4.5: specular only when lit, specularity > 0 and the
-        // surface colour is non-black; material specular is a grey of the
-        // specularity. UNVERIFIED: how LWO GLOS maps to the GL shininess
-        // exponent. RENDER.md records "shininess = surface[+0x30]" but the
-        // loader's LWO GLOS -> that field scaling was not traced. Shipped
-        // GLOS values are 0.065..0.725, which as a raw exponent would give an
-        // almost flat highlight, so the x128 below is an ASSUMPTION.
+        // Specular gate, read at 0x42ca0f-0x42ca62:
+        //   lit AND (specularity > 0 OR surface[+0x48] != 0) AND |colour| > 0
+        // an OR, not the AND printed in RENDER.md §4.5 — the JZ at 0x42ca29
+        // SKIPS the [EBP+0x48] test when specularity passes. It makes no
+        // difference to the shipped data (+0x48 is the SPEC envelope
+        // reference and is null for every surface in the archive) but the
+        // note was wrong and is corrected in NOTES.md §14.
+        //
+        // Shininess is 2^(GLOS*10 + 2). The material builder's store at
+        // 0x42caa6 is a bare FLD/FSTP of surface[+0x30] with no multiply, so
+        // the conversion is not there — it is in the SURF parser, at the
+        // moment GLOS is read (0x426dcd-0x426de8):
+        //     FLD   double ptr [0x0045a3a8]   ; 2.0
+        //     FLD   float  ptr [ESP + 0x38]   ; raw GLOS from the file
+        //     FMUL  float  ptr [0x0045a580]   ; 10.0
+        //     FADD  float  ptr [0x0045a3c4]   ; 2.0
+        //     CALL  0x00430bc0                ; pow
+        //     FSTP  float ptr [EDI + 0x30]
+        // The three constants read 2.0 / 10.0 / 2.0 out of the binary, and
+        // 0x45ad34 / 0x45accc / 0x45a30c nearby read 0.95 / 255.0 / 0.0
+        // exactly as the notes predict, which is the check that the offsets
+        // are being read correctly. This is LightWave's own glossiness curve.
+        //
+        // The x128 that stood here was flagged as an assumption and was a
+        // decent numerical approximation of this curve over the shipped range
+        // — which is why replacing it with the raw GLOS (the material store
+        // taken at face value) made things much worse, not better.
+        //
+        // Clamped to 128 because that is GL's ceiling: OpenGL 1.x accepts
+        // GL_SHININESS only in [0,128] and raises GL_INVALID_VALUE otherwise,
+        // leaving the material's PREVIOUS value in place. 9 of the archive's
+        // 27 GLOS-bearing surfaces exceed it (GLOS > 0.5). Clamping is an
+        // approximation of that reject-and-retain behaviour, not a
+        // reproduction of it; reproducing it needs the material-set order.
         spec: ((s.color ?? [1,1,1]).some((c) => c > 0) ? (s.specular ?? 0) : 0),
-        shine: Math.max(1, (s.glossiness ?? 0.2) * 128),
+        shine: Math.min(128, Math.pow(2, (s.glossiness ?? 0.2) * 10 + 2)),
         // Mask bit 0x80 (sphere-map texgen) is cleared unless reflectivity
         // > 0.95 (RENDER.md §4), so a dim reflection is not a faint one — it
         // is no reflection at all. This slot is the ADDITIVE unit-1 sphere map
