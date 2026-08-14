@@ -2008,6 +2008,19 @@ function accBlit() {
     /** Draw one sample. Uses the same deterministic path the frame harness
      *  uses, NOT the live accumulator, so a sweep is reproducible. */
     async render({ part, local }) {
+      // The loading screens are parts too (Part_StartPart1 / Part_LoadPart2 are
+      // "clear + picture", ENGINE.md §7) and the capture shows them, so they
+      // are swept like anything else — but they have no .lws behind them and
+      // makePart would throw looking for one. Only the scheduled window is
+      // sampled, so the fact that loadpart2 is held far longer than its 1.5s
+      // in the player does not reach here.
+      if (LOADING_PIC[part]) {
+        drawLoadingScreen(await loadingPic(part));
+        applyFades(part, local, SCHEDULE.find((x) => x.name === part)?.dur ?? Infinity);
+        gl.finish();
+        return { scene: part, loadingScreen: LOADING_PIC[part], objects: 0,
+                 triangles: 0, texturedGroups: 0, glError: gl.getError() };
+      }
       const p = parts.get(part) ?? await (async () => {
         const made = await makePart(part); parts.set(part, made); return made;
       })();
@@ -2026,7 +2039,10 @@ function accBlit() {
     /** What is on screen: the inspector's right-hand panel. */
     state() { return window.__lapsusInfo ?? window.__lapsusNow ?? null; },
     /** Geometry and images this part references, collected at build time. */
-    assets(part) { return parts.get(part)?.assets?.() ?? null; },
+    assets(part) {
+      if (LOADING_PIC[part]) return ['pics/' + LOADING_PIC[part]];
+      return parts.get(part)?.assets?.() ?? null;
+    },
   };
   if (inspect) {
     // No autoplay and no click gate: the tooling drives every frame itself.
