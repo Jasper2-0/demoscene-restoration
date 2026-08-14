@@ -91,7 +91,7 @@ const M = {
 };
 
 // Item -> local matrix at time t, per RENDER.md §8.
-function localMatrix(item, t) {
+function localMatrix(item, t, positionOffset = null) {
   const mo = item.motion;
   // CAMERAS CARRY 6 CHANNELS, objects and lights carry 9 — the last three are
   // scale, which a camera has no use for. Requiring 9 here silently returned
@@ -101,7 +101,12 @@ function localMatrix(item, t) {
   // camera count.)
   if (!mo || mo.length < 6) return { m: M.ident(), s: 1 };
   const v = (c) => evalEnvelope(mo[c], t);
-  const [px, py, pz, h, p, b] = [0,1,2,3,4,5].map(v);
+  let [px, py, pz, h, p, b] = [0,1,2,3,4,5].map(v);
+  if (positionOffset) {
+    px += positionOffset[0] ?? 0;
+    py += positionOffset[1] ?? 0;
+    pz += positionOffset[2] ?? 0;
+  }
   const s = mo.length >= 9 ? (v(6) + v(7) + v(8)) / 3 : 1;   // per-axis scale collapsed
   let m = M.mul(M.translate(px, py, pz), M.rotY(h));
   m = M.mul(m, M.rotX(p));
@@ -109,8 +114,13 @@ function localMatrix(item, t) {
   return { m, s };
 }
 
-function worldMatrix(item, t, depth = 0) {
-  const { m, s } = localMatrix(item, t);
+function worldMatrix(item, t, depth = 0, positionOffset = null) {
+  // positionOffset is applied to this item's LOCAL position only. Paleksi's
+  // part code writes its camera-X kick into the camera item, invalidates the
+  // matrix, and only then Scene::render evaluates the camera's parent chain
+  // (forced_0x4072b0 @0x407384..0x4073ea). Applying the kick after this
+  // function would incorrectly treat it as a world-X displacement.
+  const { m, s } = localMatrix(item, t, positionOffset);
   if (!item.parentItem || depth > 32) return applyScale(m, s);
   const parent = worldMatrix(item.parentItem, t, depth + 1);
   return applyScale(M.mul(parent, m), s);
@@ -1186,10 +1196,9 @@ function accBlit() {
     const top = Math.tan(0.375 * fovX) * NEAR;   // fovY = 0.75*fovX AS AN ANGLE
     const proj = M.frustum(-right, right, -top, top, NEAR, FAR);
 
-    let camWorld = cam ? worldMatrix(cam, T) : M.ident();
-    if (camShift[0] || camShift[1] || camShift[2] || camOverwriteZ != null) {
+    let camWorld = cam ? worldMatrix(cam, T, 0, camShift) : M.ident();
+    if (camOverwriteZ != null) {
       camWorld = new Float32Array(camWorld);
-      camWorld[12] += camShift[0]; camWorld[13] += camShift[1]; camWorld[14] += camShift[2];
       if (camOverwriteZ != null) camWorld[14] += camOverwriteZ;
     }
     const view = M.mul(M.scale(1, 1, -1), M.invRigid(camWorld));
@@ -1300,7 +1309,16 @@ function accBlit() {
     // blended pass BACKWARD (far->near). It is per-OBJECT, not per-triangle, so
     // the original's transparency ordering is imperfect — reproduce it rather
     // than improve on it (RENDER.md §4 steps 5-8).
-    const objs = drawables.map((d) => {
+    // ?onlyobj=<substring> / ?skipobj=<substring> — draw one object, or drop
+    // one. A whole-frame score says the picture is wrong; it cannot say WHICH
+    // object is painting the wrong pixels, and on a scene with a dozen objects
+    // that is most of the work. Matches the item's file or name.
+    const idOf = (d) => String(d.item.file ?? d.item.name ?? '').toLowerCase();
+    const ONLYOBJ = (qs.get('onlyobj') ?? '').toLowerCase();
+    const SKIPOBJ = (qs.get('skipobj') ?? '').toLowerCase();
+    const objs = drawables.filter((d) =>
+        (!ONLYOBJ || idOf(d).includes(ONLYOBJ)) && (!SKIPOBJ || !idOf(d).includes(SKIPOBJ))
+      ).map((d) => {
       const mv = M.mul(view, worldMatrix(d.item, T));
       const c = d.mesh.centre;
       return { d, mv, z: mv[2]*c[0] + mv[6]*c[1] + mv[10]*c[2] + mv[14] };
