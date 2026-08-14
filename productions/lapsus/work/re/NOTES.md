@@ -948,7 +948,20 @@ correlation, which weights quiet lead-in like the downbeat.
   modulating by `NebulaMixed2.jpg`) render DARKER and more saturated than the
   capture's bright near-white metal — the same regression the mask-0x80 fix
   introduced (0.688 -> 0.639), never since recovered. So it is the mask-0x80
-  MODULATE path that wants re-reading, not flu2 specifically. Its overlay
+  MODULATE path that wants re-reading, not flu2 specifically.
+
+  Measured, so the next person starts from numbers: whole-frame mean luma is
+  **29.0 for ours against 44.2 for the capture** at t=4.5 — we are at 66%.
+  `NebulaMixed2.jpg` has mean luma **46.6/255 = 0.18**, and flu2 lights the
+  scene with two distant lights of intensity 2.0 and 0.5 and
+  `AmbientIntensity 0`. So the modulate path tops out around 2.5 x 0.18 = 0.45
+  on fully-lit faces, which is roughly what we draw and visibly less than the
+  capture's near-white metal. `texGen0` is correctly wired (`texGen0: mask80`),
+  so the sphere map IS being sampled — the question is the combiner or the
+  light path, not the texgen. Note also that fixed-function GL clamps the
+  primary colour to [0,1] BEFORE the texture stage, which would make the
+  result darker still, not brighter: so whatever explains the capture, it is
+  not something we are failing to clamp. Its overlay
   (`dezz.lwo`, luminosity 1.0 hence unlit, COLR + TRAN) sits ~15-20px left of
   the capture's.
 
