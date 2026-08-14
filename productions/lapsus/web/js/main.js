@@ -1362,7 +1362,15 @@ const bgVao = gl.createVertexArray();
   // Feedback parts replay a short window of frames so the trail exists; the
   // window only needs to cover the decay (0.8^n for Silli reaches ~1% in ~20
   // frames), not the whole part. Everything else renders exactly one frame.
-  const FB_WINDOW = { silli: 0.5, pehko: 0.5, empt: 0.5 };
+  // How long a trail lasts is NOT a free parameter — it follows from the black
+  // quad the part lays down each frame. A quad at alpha a leaves (1-a)^n of a
+  // frame after n more frames, so the trail is spent (under 1%) after
+  // ln(0.01)/ln(1-a) frames. All three parts were given a flat 0.5s, which
+  // contradicted the rule the comment above states, in both directions:
+  // Silli's 20% quad is done in 0.35s and was being over-replayed, while
+  // Pehko's 5% quad runs 1.50s and was being cut at a third of its length.
+  const fbWindow = (a) => Math.log(0.01) / Math.log(1 - a) / 60;
+  const FB_WINDOW = { silli: fbWindow(0.20), pehko: fbWindow(0.05), empt: fbWindow(0.10) };
   // Viherio is NOT continuous feedback: its strobe suppresses the clear only
   // inside 14 specific windows (table at 0x463c2c, every onset an exact
   // multiple of 0.110794005s on a 64-unit cycle of 7.090816327s). Treating it
