@@ -1007,6 +1007,91 @@ export class MiniGL {
     gl.drawArrays(gl.LINES, 0, positions.length / 3);
   }
 
+  // ---- retained geometry.
+  //
+  // The array draws above re-upload their vertices EVERY call, which is right
+  // for an immediate-mode caller replaying a few hundred vertices per effect.
+  // It is the wrong shape for a port with real meshes: Lapsus draws 50k
+  // triangles per object at 60fps, and re-uploading that per frame is the
+  // whole frame budget. These create the buffers once and draw them many
+  // times, with a VAO so the attribute setup leaves the draw loop too.
+  //
+  // Attribute locations belong to minigl's single program, so the VAO is only
+  // valid for this instance — which is also why the mesh handle is opaque and
+  // must be freed through deleteMesh rather than by the caller.
+
+  /**
+   * @param {object} m  { positions, indices, normals?, uv0?, uv1? } — typed
+   *                    arrays. `indices` may be Uint16Array or Uint32Array.
+   */
+  createMesh(m) {
+    const gl = this.gl;
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const attach = (data, loc, size) => {
+      if (!data || loc < 0) return null;
+      const b = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+      return b;
+    };
+    const pos = attach(m.positions, this.aPos, 3);
+    const nrm = attach(m.normals, this.aNormal, 3);
+    const uv0 = attach(m.uv0, this.aUV[0], 2);
+    const uv1 = attach(m.uv1, this.aUV[1], 2);
+    // Constant attributes for anything absent. enable/disable is VAO state, so
+    // it has to be set here rather than at draw time.
+    if (!m.normals && this.aNormal >= 0) gl.disableVertexAttribArray(this.aNormal);
+    if (!m.uv0 && this.aUV[0] >= 0) gl.disableVertexAttribArray(this.aUV[0]);
+    if (!m.uv1 && this.aUV[1] >= 0) gl.disableVertexAttribArray(this.aUV[1]);
+    if (this.aColor >= 0) gl.disableVertexAttribArray(this.aColor);
+
+    const ib = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    return {
+      vao, ib, pos, nrm, uv0, uv1,
+      count: m.indices.length,
+      type: m.indices instanceof Uint16Array ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
+      bytes: m.indices instanceof Uint16Array ? 2 : 4,
+    };
+  }
+
+  /** Replace positions and/or normals in place — for morph targets. */
+  updateMesh(mesh, { positions = null, normals = null } = {}) {
+    const gl = this.gl;
+    if (positions && mesh.pos) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, mesh.pos);
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
+    }
+    if (normals && mesh.nrm) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, mesh.nrm);
+      gl.bufferData(gl.ARRAY_BUFFER, normals, gl.DYNAMIC_DRAW);
+    }
+  }
+
+  /** Draw a retained mesh, or a range of it. */
+  drawMesh(mesh, count = mesh.count, offset = 0) {
+    const gl = this.gl;
+    this._applyCommonUniforms();
+    // No per-vertex colours on a retained mesh: glColor drives the primary,
+    // the same as the array path's `colors === null` branch.
+    gl.uniform1i(this.uUseVertexColor, 0);
+    gl.uniform4fv(this.uColor, this.curColor);
+    gl.bindVertexArray(mesh.vao);
+    gl.drawElements(gl.TRIANGLES, count, mesh.type, offset * mesh.bytes);
+    gl.bindVertexArray(null);
+  }
+
+  deleteMesh(mesh) {
+    const gl = this.gl;
+    for (const b of [mesh.pos, mesh.nrm, mesh.uv0, mesh.uv1, mesh.ib]) if (b) gl.deleteBuffer(b);
+    gl.deleteVertexArray(mesh.vao);
+  }
+
   drawElements(positions, uvs, indices, colors = null, normals = null, mode = null, uvs1 = null) {
     const gl = this.gl;
     this._applyCommonUniforms();

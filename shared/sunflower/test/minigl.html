@@ -179,6 +179,47 @@
   const sourceColorBlendPixel = readCenter();
   mgl.enableBlend(false);
 
+  // Retained geometry: positions, UVs and indices reaching the draw through a
+  // VAO built once, rather than uploaded per call. Same red texture, same
+  // replace env, so any difference is the buffer path itself.
+  mgl.activeTexture(0);
+  mgl.bindTexture(red);
+  mgl.enableTexture(true);
+  mgl.texEnv({ mode: 'replace' });
+  mgl.clear();
+  const quad = mgl.createMesh({
+    positions: new Float32Array([-1,-1,0,  1,-1,0,  1,1,0,  -1,1,0]),
+    uv0: new Float32Array([0,0, 1,0, 1,1, 0,1]),
+    normals: new Float32Array([0,0,1, 0,0,1, 0,0,1, 0,0,1]),
+    indices: new Uint16Array([0,1,2, 0,2,3]),
+  });
+  mgl.drawMesh(quad);
+  const retainedPixel = readCenter();
+
+  // GL_SEPARATE_SPECULAR_COLOR. The specular term is added AFTER the texture
+  // stages, so under a `replace` env it must still survive: a red texture lit
+  // by a white specular highlight reads white, not red. Folding specular into
+  // the primary colour instead — the obvious wrong implementation — would be
+  // replaced away by the texture and read [255,0,0].
+  mgl.material({ ambient: [0, 0, 0], diffuse: [0, 0, 0], specular: [1, 1, 1], shininess: 8 });
+  mgl.lightModelAmbient(0, 0, 0);
+  mgl.setLights([{ pos: [0, 0, 1, 0], diffuse: [0, 0, 0], specular: [1, 1, 1] }]);
+  mgl.enableLighting(true);
+  mgl.clear();
+  drawQuad({ uv0: [0.5, 0.5] });
+  const separateSpecularPixel = readCenter();
+
+  // ...and with no material set, the shim must behave exactly as it did before
+  // materials existed: colorMaterial on, no specular at all.
+  mgl.material(null);
+  mgl.lightModelAmbient(0.2, 0.2, 0.2);
+  mgl.setLights([{ pos: [0, 0, 1, 0], diffuse: [0, 0, 0] }]);
+  mgl.clear();
+  drawQuad({ uv0: [0.5, 0.5] });
+  const noMaterialPixel = readCenter();
+  mgl.enableLighting(false);
+  mgl.deleteMesh(quad);
+
   mgl.lineWidth(1);
   mgl.viewport(0, 0, 32, 32);
   mgl.lockArrays(0, 4);
@@ -194,6 +235,9 @@
     // MiniGL requests an opaque drawing buffer, so destination alpha remains 1.
     blend: { pixel: blendPixel, expected: [64, 0, 0, 255] },
     sourceColorBlend: { pixel: sourceColorBlendPixel, expected: [64, 64, 64, 255] },
+    retained: { pixel: retainedPixel, expected: [255, 0, 0, 255] },
+    separateSpecular: { pixel: separateSpecularPixel, expected: [255, 255, 255, 255] },
+    noMaterial: { pixel: noMaterialPixel, expected: [255, 0, 0, 255] },
   };
   const pass = Object.values(results).every(({ pixel, expected }) => closeTo(pixel, expected))
     && gl.getError() === gl.NO_ERROR;
