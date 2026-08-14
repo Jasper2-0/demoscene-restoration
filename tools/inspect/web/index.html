@@ -39,6 +39,17 @@
         <div class="h">issues here</div>
         <div id="issuesHere"></div>
       </div>
+      <div class="block" id="noteBlock">
+        <div class="h">what's wrong here?</div>
+        <textarea id="noteText" rows="4"
+          placeholder="e.g. the overlay is opaque — should be cut out by its _a companion"></textarea>
+        <div class="noteRow">
+          <label><input id="noteFile" type="checkbox" checked> file to GitHub</label>
+          <button id="noteSend">record</button>
+        </div>
+        <div id="noteStatus"></div>
+        <div id="noteList"></div>
+      </div>
     </aside>
   </main>
 
@@ -48,6 +59,8 @@
       <span><i class="sw ok"></i>r ≥ .75</span>
       <span><i class="sw mid"></i>.55–.75</span>
       <span><i class="sw bad"></i>&lt; .55</span>
+      <span><i class="sw iss"></i>open issue</span>
+      <span><i class="sw note"></i>note</span>
       <span class="spacer"></span>
       <span id="hint">click the timeline to scrub · ◀ ▶ step samples</span>
     </div>

@@ -70,7 +70,15 @@ function caseMismatch(root, rel) {
  * `requests` records every path served; `missing` every 404; `caseErrors`
  * every request that only resolved because the filesystem is case-insensitive.
  */
-export async function serve(root, { spa = false, caseExact = true } = {}) {
+/**
+ * `routes` lets a caller answer a few paths itself before the static handler
+ * sees them — `{ 'POST /_x/thing': async (req, res, body) => … }`. Added so a
+ * harness page can talk BACK to the tool that launched it (the inspector files
+ * notes this way) without standing up a second server on another origin and
+ * then needing CORS to reach it. Handlers own the response; anything they do
+ * not claim falls through to the file server unchanged.
+ */
+export async function serve(root, { spa = false, caseExact = true, routes = null } = {}) {
   const base = path.resolve(root);
   if (!fs.existsSync(base)) throw new Error(`serve: no such root ${base}`);
 
@@ -78,6 +86,21 @@ export async function serve(root, { spa = false, caseExact = true } = {}) {
 
   const server = http.createServer((req, res) => {
     const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
+    const route = routes?.[`${req.method} ${urlPath}`];
+    if (route) {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', async () => {
+        try {
+          const body = Buffer.concat(chunks).toString('utf8');
+          await route(req, res, body ? JSON.parse(body) : null);
+        } catch (e) {
+          res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: String(e.message ?? e) }));
+        }
+      });
+      return;
+    }
     let rel = urlPath.replace(/^\/+/, '');
     if (rel === '' || rel.endsWith('/')) rel += 'index.html';
     requests.push('/' + rel);

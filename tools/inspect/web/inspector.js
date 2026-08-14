@@ -22,7 +22,8 @@ const RUN = `${BASE}/work/verify/inspect/run${TAG ? `-${TAG}` : ''}.json`;
 const $ = (s) => document.querySelector(s);
 const demo = $('#demo');
 
-const state = { run: null, schedule: [], samples: [], idx: 0, ready: false };
+const state = { run: null, schedule: [], samples: [], idx: 0, ready: false,
+                tracker: [], notes: [] };
 
 // ---------------------------------------------------------------- boot
 $('#title').textContent = PROD;
@@ -51,6 +52,15 @@ await new Promise((res) => {
   tick();
 });
 state.schedule = demo.contentWindow.__demo.schedule();
+async function refreshTracker() {
+  try {
+    const t = await (await fetch('/_inspect/issues')).json();
+    state.tracker = t.issues ?? [];
+    if (t.error) $('#hint').textContent = `gh: ${t.error}`;
+  } catch { state.tracker = []; }
+  try { state.notes = await (await fetch('/_inspect/notes')).json(); } catch { state.notes = []; }
+}
+await refreshTracker();
 if (!state.samples.length) {
   // No sweep on disk: still usable as a scrubber, just without scores.
   state.samples = demo.contentWindow.__demo.plan(2);
@@ -64,7 +74,7 @@ const ctx = cv.getContext('2d');
 function layout() {
   const r = $('#timeline').getBoundingClientRect();
   cv.width = Math.max(600, Math.floor(r.width * devicePixelRatio));
-  cv.height = Math.floor(92 * devicePixelRatio);
+  cv.height = Math.floor(116 * devicePixelRatio);
   cv.style.width = '100%';
   draw();
 }
@@ -78,7 +88,7 @@ const xOf = (t) => { const [a, b] = tSpan(); return 8 + (t - a) / ((b - a) || 1)
 function draw() {
   const D = devicePixelRatio;
   ctx.clearRect(0, 0, cv.width, cv.height);
-  const barY = 6 * D, barH = 16 * D, plotY = 30 * D, plotH = 54 * D;
+  const barY = 6 * D, barH = 16 * D, plotY = 30 * D, plotH = 60 * D;
 
   // part bars, alternating so boundaries read at a glance
   state.schedule.forEach((p, i) => {
@@ -121,6 +131,37 @@ function draw() {
         ctx.fill();
       }
     }
+  }
+
+  // ---- ISSUE LANE. Issues are only useful on a timeline if they are ON it.
+  // The two kinds know their place differently: a sweep issue names a PART, so
+  // it spans that part's window; a note names an INSTANT, so it pins there.
+  const laneY = plotY + plotH + 6 * D, laneH = 8 * D;
+  for (const it of state.tracker) {
+    if (it.state !== 'OPEN' && !$('#showIssues').checked) continue;
+    const open = it.state === 'OPEN';
+    ctx.globalAlpha = open ? 1 : 0.28;
+    // note-backed issues are drawn from state.notes below, so skip them here
+    if (it.kind === 'note') { ctx.globalAlpha = 1; continue; }
+    if (it.from != null) {
+      const x0 = xOf(it.from), x1 = xOf(it.to);
+      ctx.fillStyle = it.sev === 'major' || it.sev === 'error' ? '#d6503f' : '#d1a13a';
+      ctx.fillRect(x0, laneY + (open ? 0 : 2 * D), Math.max(2 * D, x1 - x0),
+        open ? laneH : laneH - 4 * D);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Notes pin at their own instant, whether or not they were filed — an
+  // observation is worth seeing on the timeline the moment it is made, and
+  // waiting for a round trip to GitHub to show it would be backwards.
+  for (const n of state.notes) {
+    if (n.captureTime == null) continue;
+    const x = xOf(n.captureTime);
+    ctx.fillStyle = n.status === 'done' ? '#4a4a5e' : '#9a6ce6';
+    ctx.beginPath();
+    ctx.moveTo(x, laneY - 3 * D); ctx.lineTo(x + 4 * D, laneY + laneH);
+    ctx.lineTo(x - 4 * D, laneY + laneH); ctx.closePath(); ctx.fill();
   }
 
   // playhead
@@ -176,13 +217,73 @@ async function go(i) {
   const ref = `${BASE}/work/verify/inspect/frames/ref_${s.captureTime.toFixed(3)}.png`;
   $('#ref').src = ref;
 
+  // Everything filed against this part: the tracker where we have it (so an
+  // issue number is one click away) and the sweep's own findings otherwise.
+  const tracked = state.tracker.filter((x) => x.part === s.part);
   const here = (state.run?.issues ?? []).filter((x) => x.part === s.part);
-  $('#issuesHere').innerHTML = here.length
-    ? here.map((x) => `<div><i class="sev ${x.sev}"></i>${x.text}</div>`).join('')
-    : '<div style="color:var(--dim)">none for this part</div>';
+  $('#issuesHere').innerHTML = tracked.length
+    ? tracked.map((x) => `<div><i class="sev ${x.sev ?? 'minor'}"></i>` +
+        `<a href="${x.url}" target="_blank">#${x.number}</a> ${x.title}` +
+        `${x.state !== 'OPEN' ? ' <span style="color:var(--dim)">(closed)</span>' : ''}</div>`).join('')
+    : here.length
+      ? here.map((x) => `<div><i class="sev ${x.sev}"></i>${x.text}</div>`).join('')
+      : '<div style="color:var(--dim)">none for this part</div>';
+
+  const mine = state.notes.filter((n) => n.part === s.part);
+  $('#noteList').innerHTML = mine.length
+    ? mine.slice(0, 6).map((n) => `<div><b>${n.local}s</b> ${n.text.split('\n')[0]}` +
+        `${n.issue?.number ? ` · #${n.issue.number}` : ''}</div>`).join('')
+    : '';
 
   draw();
 }
+
+// ---- recording an observation.
+//
+// The point is not the text — it is that the text arrives with the frame
+// already attached. Everything the tool knows about this instant goes with it,
+// including the rendered pixels, so whoever picks it up is not re-deriving a
+// timestamp and hoping they land on the same frame.
+$('#noteSend').onclick = async () => {
+  const text = $('#noteText').value.trim();
+  const st = $('#noteStatus');
+  if (!text) { st.className = 'err'; st.textContent = 'say what is wrong first'; return; }
+  const s = state.samples[state.idx];
+  st.className = ''; st.textContent = 'recording…';
+  // Grab the canvas as it stands, in the iframe, before anything re-renders.
+  let ourPng = null;
+  try {
+    ourPng = demo.contentWindow.document.querySelector('canvas').toDataURL('image/png');
+  } catch { /* tainted or gone; the note is still worth having */ }
+  try {
+    const r = await fetch('/_inspect/note', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        part: s.part, local: s.local, captureTime: s.captureTime,
+        r: s.r ?? null, rmse: s.rmse ?? null, text,
+        info: await demo.contentWindow.__demo.state?.() ?? null,
+        assets: demo.contentWindow.__demo.assets?.(s.part) ?? null,
+        ourPng, file: $('#noteFile').checked,
+      }),
+    });
+    const out = await r.json();
+    if (out.error) throw new Error(out.error);
+    st.className = 'ok';
+    st.textContent = out.issue
+      ? (out.issue.action === 'comment' ? `recorded · commented on #${out.issue.number}`
+                                        : `recorded · opened ${out.issue.url}`)
+      : `recorded${out.issueError ? ` (github: ${out.issueError})` : ''}`;
+    $('#noteText').value = '';
+    await refreshTracker();
+    await go(state.idx);
+  } catch (e) {
+    st.className = 'err'; st.textContent = String(e.message ?? e);
+  }
+};
+// cmd/ctrl-enter sends, because a textarea swallows plain enter
+$('#noteText').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('#noteSend').click();
+});
 
 $('#prev').onclick = () => go(state.idx - 1);
 $('#next').onclick = () => go(state.idx + 1);

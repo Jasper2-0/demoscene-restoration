@@ -75,6 +75,17 @@ is on screen (objects, triangles, textured groups, camera, GL errors) and the
 geometry and images the part references. Its timeline is drawn from the
 sweep's `run.json`, so clicking a bad sample drives the live demo to it.
 
+**Notes.** The inspector's comment box turns "this looks wrong" into something
+actionable. You only say WHAT is wrong; the tool attaches WHERE from the frame
+in front of you — part, local and show time, the scores there, the renderer's
+own report of the frame, the resources that part uses, and **both frames saved
+to disk**, ours and the reference. Notes land in
+`work/verify/inspect/notes.json`, which is a machine-readable queue an agent
+can read directly, and optionally as a comment on that part's GitHub issue
+(or a new one labelled `observed`). Everything filed — sweep issues and notes
+alike — is **plotted on the timeline**: issues span their part, notes pin at
+their instant, closed ones dim rather than vanish.
+
 **inspect/issues** syncs findings to GitHub Issues, and is **dry run by
 default** — a sweep re-runs on every change, a tracker is public and
 permanent. Each issue carries a `sweep-key` in its body, so re-running

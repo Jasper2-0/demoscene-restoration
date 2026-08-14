@@ -69,3 +69,4 @@ productions/lapsus/work/verify/frames/
 
 # inspector sweep output: run.json/issues.md are regenerable, frames are bulky
 productions/*/work/verify/inspect/frames/
+productions/*/work/verify/inspect/notes/

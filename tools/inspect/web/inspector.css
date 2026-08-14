@@ -56,3 +56,20 @@ footer { border-top: 1px solid var(--line); background: var(--panel); }
 .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
   margin-right: 5px; vertical-align: -1px; }
 .sw.ok { background: var(--ok); } .sw.mid { background: var(--mid); } .sw.bad { background: var(--bad); }
+
+/* note box */
+textarea { width: 100%; background: #0e1216; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 4px; padding: 6px; font: inherit; resize: vertical; }
+textarea:focus { outline: none; border-color: var(--accent); }
+.noteRow { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.noteRow label { color: var(--dim); flex: 1; }
+#noteStatus { color: var(--dim); min-height: 16px; margin-top: 5px; }
+#noteStatus.ok { color: var(--ok); }
+#noteStatus.err { color: var(--bad); }
+#noteList { margin-top: 8px; }
+#noteList div { border-top: 1px solid var(--line); padding: 4px 0; color: var(--dim); }
+#noteList b { color: var(--ink); font-weight: 500; }
+#noteList a { color: var(--accent); text-decoration: none; }
+.sw.iss { background: #d6503f; } .sw.note { background: #9a6ce6; }
+#timeline { height: 116px; }
+#timeline canvas { height: 116px; }
