@@ -1915,13 +1915,17 @@ Two paths exist:
    The copy ctor shares the `Texture*`/`Material*` by pointer and sets
    `+0xd0 = 1` ("not the owner", checked by the dtor at 0x40d2a1); it copies
    every tunable but **default-constructs the `LW::Object` base**, so each clone
-   starts at the origin with an identity transform.
+   starts at the origin with an identity transform. It also copies the
+   prototype's `emitTimer` at 0x40d0cd–0x40d0d3. The prototype timer was zeroed
+   at 0x40ceb3 and has never been updated, so every Pehko clone starts at
+   **0.0**, not preloaded to `EmitInterval`; the first update cannot emit.
 
 Per frame, `Part_Pehko::vf2` `forced_0x407800`:
 
 ```
 DAT_004a900c = 1                                // 0x407806 — suppress Scene::render's hair pass
 part[+0x20]->vf1(0.95f)                         // 0x40781b — the black overlay (§12)
+                                                 // no glClear of either colour or depth
 Scene::update(localTime, dt)                    // 0x40782b — this runs the HairMesh sim
 Scene::render(getCamera(0))                     // 0x40783e
 for hair, for strand i, for node j:
@@ -1949,6 +1953,14 @@ for slot in pool:
 if (!emitting && alive < 1) { prevPosition = position; return false }
 return true
 ```
+
+There is no catch-up loop: 0x40d4f1–0x40d509 contains one comparison and one
+call to `emit`, followed immediately by the pool-update loop at 0x40d517. The
+cap is the fixed pool itself, checked at emit time by the first-null scan at
+0x40db6b–0x40db9f. It is per clone, because the copy ctor independently sizes
+and populates each clone's pool at 0x40cfc2–0x40d0bc. For Pehko this is 80 × 10
+= **800 maximum**, not a global 10 and not the uncapped
+`LifeTime/EmitInterval × 80 ≈ 1342`.
 
 > **Bug worth reproducing as a no-op:** `prevPosition` is written *only* in the
 > "system finished" branch (0x40d579–0x40d58f). While a system is emitting it
@@ -2037,6 +2049,18 @@ for **1.38–1.68 s**, during which the flipbook (§11.2.4) only ever reaches fr
 `floor(1.677 × 10) = 16` — **frames 17–39 of the 40 shipped JPEGs are never
 displayed**. (`tauno.txt`'s commented-out `LifeTime 5.0` would have used them.)
 
+Concrete checks at a 60 Hz port step: construction gives sizeX=sizeY=1.6
+(`0x40db9f–0x40dc1d` → ctor stores both at 0x40e5dc–0x40e5e7), hence billboard
+half-extents 0.8; the same update that emitted it applies Grow and leaves
+`1.6 × (1−1/60) = 1.573333`. At age 1.25, the draw must select
+`floor(1.25 × 10) = 12`; at the lifetime boundary it selects 16.
+For a concrete screen-space prediction at Pehko local 8.227, the root emitter
+is at camera-space depth 17.10695, the camera zoom is 2.410001, and a 640-pixel
+viewport therefore has 45.0811 pixels/world-unit at that plane. A just-emitted
+post-update sprite spans **70.93 px**, not a point; a zero-head-start particle
+at age 1.25 spans 0.45360 world units or **20.45 px** (the random age head-start
+makes same-age particles somewhat larger).
+
 #### 11.2.4 Draw — camera-facing billboards, `GL_QUADS`
 
 `ParticleSystem::render` `forced_0x40d5b0` @0x40d5b0. The bulk analysis never
@@ -2098,9 +2122,13 @@ glEnd()                                                     // 0x40db30
   a port that packs the atlas differently must use `f / cols`.
 - The UV span is `(W−1)/texSize` from a `+0.5/texSize` origin: a **half-texel
   inset on all four sides**, deliberate atlas-bleed avoidance.
-- *(inference)* `U × V ∝ −C`, so with `glFrontFace(GL_CW)` and culling enabled
-  (the material's `noCull` default is 0) the quads are front-facing toward the
-  viewer. A port that disables culling here will look the same.
+- Rows are uploaded top-down with no unpack flip (§5.2), so the four UV pairs
+  above must be preserved literally. Mapping `v1` to `p−U−V` flips every
+  directional `epes` frame vertically; that was a real port bug.
+- `U × V ∝ −C`, independent of `zRotation`: rotation spins both axes within
+  the billboard plane and cannot change the winding. Culling is enabled (the
+  material's `noCull` default is 0), but it does **not** discard a random half
+  of the sprites; the winding is consistent for the whole system.
 - The material is applied once per **system**, i.e. 80× per frame in Pehko with
   identical state. A port can hoist it out entirely.
 
@@ -2113,8 +2141,15 @@ glEnd()                                                     // 0x40db30
    **1** (`mov dword [eax+0x14], 1` at 0x43361b). The whole demo is therefore
    deterministic from seed 1 — but hair directions are drawn at *load* time and
    particle spawns at *run* time, so bit-exact reproduction requires matching
-   the entire global call order, not just the per-system logic. For a port,
-   matching the *distributions* is the practical target.
+   the entire global call order, not just the per-system logic. One important
+   prefix *is* statically exact: phase 1 constructs Krediili before Pehko, and
+   Krediili's `Hair_furballkr2` plus `Hair_furballkr1` contain 500+500 strands.
+   At three calls per strand (0x42393f/0x42395c/0x423979), Pehko's
+   `Hair_ruoksa` must start after exactly **3000 rand calls**. Starting it at
+   seed 1 changes all eight carrier directions and the whole cloud silhouette.
+   The later particle seed additionally includes frame-rate-dependent calls
+   made while Part_Empt runs, so matching the particle *distribution* remains
+   the practical target unless the original frame cadence is also reproduced.
 2. **The fast square-root table** at `DAT_00468f54` (0x468f54, 65536 × `uint32`
    = 256 KiB). It is **all zeros in the image** and is filled at startup by
    `FUN_0040a4a0` @0x40a4a0:

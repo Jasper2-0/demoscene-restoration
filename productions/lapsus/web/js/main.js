@@ -655,6 +655,19 @@ const texReady = (file, dir = TEXDIR, alphaFile = null) =>
 const hairCache = new Map();      // name -> parsed hair, or null if absent
 let taunoProto;                   // undefined = not tried yet, null = absent
 
+// Pehko is not the first consumer of the process-global MSVC rand() stream.
+// Demo::loadPhase appends the phase-1 schedule at 0x402908-0x403012, then
+// creates its unique parts in that order at 0x403017-0x40306e (vf0 at 0x403050),
+// so Krediili's two 500-strand HairMeshes are constructed before Pehko's
+// Hair_ruoksa. Hair construction makes exactly three rand() calls per strand
+// (0x42393f/0x42395c/0x423979): 2 * 500 * 3 = 3000 calls. Nothing else can
+// consume rand while that synchronous load is in progress. Starting Pehko at
+// seed 1 gave it the wrong eight carrier directions and therefore the wrong
+// large-scale cloud, even though every individual particle had the right
+// distribution. Runtime calls made by Empt remain frame-rate-dependent; only
+// this load-time prefix is statically exact.
+const PEHKO_LOAD_RAND_DRAWS = 3000;
+
 async function loadTexture(file, dir = TEXDIR, alphaFile = null) {
   const key = dir + file + (alphaFile ? '|' + alphaFile : '');
   if (texCache.has(key)) return texCache.get(key);
@@ -901,7 +914,7 @@ function accInit() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   acc.ready = true;
 }
-function accDecay(keep) {
+function accDecay(keep, clearDepth = true) {
   const src = acc.cur, dst = 1 - acc.cur;
   gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fb[dst]);
   gl.viewport(0, 0, canvas.width, canvas.height);
@@ -912,7 +925,7 @@ function accDecay(keep) {
   gl.uniform1i(gl.getUniformLocation(accProg, 'uSrc'), 0);
   gl.uniform1f(gl.getUniformLocation(accProg, 'uKeep'), keep);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
-  gl.clear(gl.DEPTH_BUFFER_BIT);
+  if (clearDepth) gl.clear(gl.DEPTH_BUFFER_BIT);
   for (const u of [0, 1, 2, 3]) { gl.activeTexture(gl.TEXTURE0 + u); gl.bindTexture(gl.TEXTURE_2D, null); }
   gl.activeTexture(gl.TEXTURE0);
   // No need to hand the mesh program back: minigl binds its own program and
@@ -1278,7 +1291,7 @@ function accBlit() {
     // ping-pong FBO and a real frame loop.
     // Silli clears DEPTH only; Pehko and Empt clear nothing once running.
     if (clearColour) gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    else gl.clear(gl.DEPTH_BUFFER_BIT);
+    else if (!/^pehko$/i.test(SCENE)) gl.clear(gl.DEPTH_BUFFER_BIT);
     // ---- backdrop image, before the 3D and with depth disabled
     let bgTex = null;
     if (scene.backdropImage) {
@@ -1621,7 +1634,11 @@ function accBlit() {
     // sub-frame jitter never is, and simulateSpan already holds the state when
     // the clock does not advance.
     const SIM_SEEK = 0.1;
-    if (!sim || T < sim.t - SIM_SEEK) sim = { t: 0, rand: msvcRand(), strands: new Map(), systems: [] };
+    if (!sim || T < sim.t - SIM_SEEK) {
+      const rand = msvcRand();
+      if (hairSuppressed) for (let i = 0; i < PEHKO_LOAD_RAND_DRAWS; i++) rand();
+      sim = { t: 0, rand, strands: new Map(), systems: [] };
+    }
     const simFrom = sim.t, simTo = Math.max(T, sim.t);
     const hairRand = sim.rand;
     // Part_Pehko's prototype system is built in Part_Pehko::create from the
@@ -1827,13 +1844,11 @@ function accBlit() {
         // CULLING STAYS ON. The particle material is built at 0x40cb69-0x40cbe5
         // with FUN_0040bef0's defaults for everything it does not set, and
         // `noCull` defaults to 0 — so the sprites are culled against
-        // glFrontFace(GL_CW) like everything else (§11.2). The billboard basis
-        // is A = R x C, B = A x C with R = (sin zRot, cos zRot, 0), so the
-        // quad's winding flips with the particle's random, freely-spinning
-        // zRotation: the engine discards roughly half of its own sprites.
-        // Disabling culling here doubled the per-frame additive contribution,
-        // which on a part whose fader is only 5% is amplified 20x into a
-        // visible floor over the whole frame (NOTES.md §15.2).
+        // glFrontFace(GL_CW) like everything else (§11.2). Rotation does NOT
+        // randomise the winding: A = R x C and B = A x C imply A x B is a
+        // negative multiple of C for every zRotation. Thus all non-degenerate
+        // quads have one camera-facing winding. Keep the traced culling state,
+        // but do not model it as a stochastic 50% particle rejection.
         gl.depthMask(false);
         gl.activeTexture(gl.TEXTURE0);
         for (const [f, list] of byFrame) {
@@ -1852,8 +1867,13 @@ function accBlit() {
             // the outermost half-texel of the tile. Sampling the full [0,1]
             // instead lands exactly on the tile boundary, where bilinear
             // filtering blends in the WRAPPED opposite edge — a faint halo
-            // around every one of 800 sprites, additively accumulated.
-            const uvs = [[e0,e1],[e1,e1],[e1,e0],[e0,e0]];
+            // around every sprite in the up-to-800-slot pools, additively
+            // accumulated.
+            // Rows are uploaded unflipped, just as in dm2000. The immediate-
+            // mode sequence at 0x40da6d-0x40db0f maps v0 to P-U-V / P+U-V
+            // and v1 to P+U+V / P-U+V. The old order reversed V on every
+            // directional flame frame.
+            const uvs = [[e0,e0],[e1,e0],[e1,e1],[e0,e1]];
             const cc = [q.r * q.alpha, q.g * q.alpha, q.b * q.alpha];
             for (const i of [0,1,2, 0,2,3]) {          // quad -> 2 triangles
               pos.push(...c[i]); uv.push(...uvs[i]); al.push(...cc);
@@ -1951,9 +1971,10 @@ function accBlit() {
     5.096524239, 5.539700031, 6.426052094];
   const VIHERIO_CYCLE = 7.090816326530613;
   function fbWindowFor(name, T) {
-    // ?fb= overrides the window so a feedback part can be drawn as a single
-    // frame (?fb=0), separating "the per-frame content is wrong" from "the
-    // accumulation is wrong" — different bugs the composite cannot tell apart.
+    // ?fb= overrides OUR replay window; ?fb=0 exposes one port frame. The
+    // video-derived reference still contains the original feedback history,
+    // so that side-by-side is useful diagnostically but is not a controlled
+    // single-frame comparison of both renderers.
     if (qs.has('fb')) return Number(qs.get('fb'));
     if (/^viherio$/i.test(name)) {
       const ph = T % VIHERIO_CYCLE;
@@ -1976,7 +1997,10 @@ function accBlit() {
       if (useAcc) accInit();
       for (let i = n; i >= 0; i--) {
         const t = Math.max(0, T - i * dt);
-        if (useAcc) { accDecay(i === n ? 0 : 1 - part.fbAlpha); await part.renderAt(t, false); }
+        if (useAcc) {
+          accDecay(i === n ? 0 : 1 - part.fbAlpha, !/^pehko$/i.test(part.name));
+          await part.renderAt(t, false);
+        }
         else await part.renderAt(t, i === n);
       }
       if (useAcc) { accBlit(); part.setAcc(false); }
@@ -2329,7 +2353,7 @@ function accBlit() {
       accInit();
       // Starting a new feedback part begins from black — the previous part's
       // image is not its trail.
-      accDecay(accOwner === part ? 1 - part.fbAlpha : 0);
+      accDecay(accOwner === part ? 1 - part.fbAlpha : 0, !/^pehko$/i.test(part.name));
       accOwner = part;
       part.setAcc(true);
       await part.renderAt(T, false);

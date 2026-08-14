@@ -46,8 +46,12 @@ export function parseParticles(text) {
   return p;
 }
 
-/** A fresh, empty system. `sinceEmit` starts full so it emits on step one. */
-export const createSystem = (p) => ({ live: [], sinceEmit: p.emitInterval });
+/**
+ * A fresh, empty system. The template ctor zeroes emitTimer at 0x40ceb3 and
+ * the Pehko clone copies that zero at 0x40d0cd-0x40d0d3, so the first update
+ * only accumulates dt; it does not emit immediately.
+ */
+export const createSystem = () => ({ live: [], sinceEmit: 0 });
 
 /**
  * ONE frame of one system. `origin` is the emitter position AT THIS INSTANT —

@@ -1123,14 +1123,13 @@ Traced and patched by Codex/GPT-5.6; gates run and committed here.
   and nothing else (mode 3 + depth mode 2, material[+0x38] forced to 0); that
   arm was missing and has been added — correct per §4.5, measurably inert.
 
-  pehko was assumed to need a real frame loop / ping-pong FBO. **That is not
-  the defect.** `?fb=0` renders a feedback part as a single frame, which
-  separates "the per-frame content is wrong" from "the accumulation is
-  wrong" — the composite image cannot tell them apart. The single frame
-  contains exactly **800** sprites, the 80 systems x pool of 10 that §11.2.2
-  predicts, and they are spread over far more of the screen than the
-  capture's, dimly. So the per-frame CONTENT is wrong and the accumulation is
-  a red herring.
+  **Superseded diagnosis.** `?fb=0` renders *our* feedback part as a single
+  frame, but the reference extracted from the video still contains the
+  original's accumulated history. Comparing those two pictures does not
+  isolate per-frame content. The reported 784 sprites were also not the
+  binary's literal steady state: 800 is only the 80-system × 10-slot ceiling,
+  and the port incorrectly preloaded every clone's emission timer. The binary
+  copies a zero timer at 0x40d0cd–0x40d0d3.
 
   Eliminated so far, each by reading rather than by trying:
   - The black veil is right. `FadeIn::draw(v)` mode 3 writes
@@ -1138,7 +1137,8 @@ Traced and patched by Codex/GPT-5.6; gates run and committed here.
     `part[+0x20]->vf1(0.95f)` really is a 5% veil, not 95%.
   - The replay order is right: fader first, then content, matching
     0x40781b -> 0x40782b -> 0x40783e.
-  - The sprite count is exactly right (800).
+  - The pool ceiling is exactly right (800); instantaneous occupancy is lower
+    and depends on the age jitter and replacement cadence.
   - Segment length is right: `node[i].len = HairLength / NodesPerHair` =
     10/10 = 1.0, so a strand reaches 9.0 units at node 9.
   - Sprite size is right: §11.2.4's corners are P +/- U +/- V with
@@ -1320,6 +1320,46 @@ Traced and patched by Codex/GPT-5.6; gates run and committed here.
   distance, not the frame loop, the camera or the emitter count. **That
   conclusion is superseded by the coverage measurements above: the cloud size
   is right and the defect is the accumulation floor.**
+
+  **2026-08-15 binary re-audit — remaining spatial cause found.** The particle
+  fields were right but the systems were attached to the wrong eight strands.
+  `rand()` is process-global, and phase 1 constructs Krediili before Pehko.
+  Krediili's two hair meshes contain 500 strands each; the hair ctor calls
+  `rand()` three times per strand at 0x42393f/0x42395c/0x423979. Pehko's
+  `Hair_ruoksa` therefore begins after exactly **3000 load-time calls**, not at
+  seed 1. Those calls change the carrier directions, hence the large-scale
+  cloud silhouette. Runtime particle randomness is later in the same stream
+  but also includes Part_Empt's frame-rate-dependent calls, so only the static
+  load prefix can be pinned without assuming the original cadence.
+
+  Three smaller port errors fell out of the same audit:
+  - each clone's `emitTimer` starts at zero (prototype zero at 0x40ceb3, copy at
+    0x40d0cd–0x40d0d3), not at `EmitInterval`;
+  - particle UVs were vertically reversed. The binary maps `(u0,v0)` to
+    `P−U−V` at 0x40da6d–0x40da80 and reaches `(u0,v1)` / `P−U+V` at
+    0x40daf3–0x40db0f; texture rows are uploaded unflipped;
+  - the shared feedback path cleared depth every step even for Pehko. Its vf2
+    has no `glClear` of either buffer anywhere in 0x407800–0x407982. The port
+    now preserves Pehko depth across its replay/live steps; with the isolated
+    accumulator's initially empty depth and no Pehko depth writers this is
+    normally pixel-inert, but it is the literal state transition.
+
+  Fixed-step numeric prediction, before image comparison: the old seed-1 plus
+  preloaded-timer model produces the reported **784** live particles at 8.227 s
+  exactly. At 60 Hz, zeroing only the timer predicts 778; applying the exact
+  3000-call load prefix as well predicts **781**, sizes 0.303037–1.573333 and
+  frame indices 0–16. These are deterministic port-model checks, not claimed
+  capture scores; browser verification was unavailable in the sandbox.
+
+  Negative results from the four requested field traces: update contains one
+  emit attempt and no catch-up loop (0x40d4f1–0x40d509); the fixed pool is per
+  clone (0x40cfc2–0x40d0bc) and the first-null scan enforces the cap at emit
+  time (0x40db6b–0x40db9f); size really is a 1.6-unit full width with
+  multiplicative `size *= 1 + dt*Grow` and a `<= 0.1` death test
+  (0x40d832–0x40d87a, 0x40e782–0x40e823); frame selection really is
+  `min(__ftol(age*FPS), frameCount-1)` (0x40d9b3–0x40d9ce), so frame 16 is the
+  shipped lifetime's maximum. None of those three suspicious descriptor
+  interpretations was the shape fault.
 * **empt is not reproducible run-to-run** (0.838 / 0.850 / -0.013 observed) —
   its stamping draws from the shared MSVC stream, so anything that consumes a
   rand() before it shifts every stamp. Do not read small empt deltas as signal.
