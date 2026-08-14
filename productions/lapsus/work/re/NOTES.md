@@ -821,3 +821,81 @@ Because of this, quote the median from the run in which the target parts were
 measured: **0.580** with `empt` at −0.013, or 0.639 with `empt` at 0.850. The
 four diagnosed parts were bit-identical across both runs (silli 0.580,
 kartonki 0.691, hedi 0.458, morko 0.346).
+
+---
+
+## §15 Standing (2026-08-14) — median r 0.838, all 21 parts rendering
+
+`node work/verify/allparts.mjs`. Each part rendered at its midpoint and
+whole-frame luma-correlated against the capture. Use it to rank work, never to
+certify a frame.
+
+| r | phase | part | | r | phase | part |
+|---|---|---|---|---|---|---|
+| 0.999 | 1 | hulluolli      | | 0.693 | 2 | kaivoalieni |
+| 0.993 | 1 | pene           | | 0.686 | 2 | viherio |
+| 0.979 | 2 | kuubiotekniikka| | 0.667 | 2 | hairball |
+| 0.974 | 2 | diskojea       | | 0.660 | 2 | morko |
+| 0.954 | 2 | made           | | 0.641 | 1 | flu2 |
+| 0.938 | 2 | turska         | | 0.600 | 2 | higherbiing |
+| 0.901 | 1 | krediili       | | 0.521 | 1 | paleksi |
+| 0.878 | 1 | silli          | | 0.514 | 1 | pehko |
+| 0.850 | 1 | empt (noisy)   | |       |   | |
+| 0.848 | 2 | rad_out        | |       |   | |
+| 0.843 | 2 | kartonki       | |       |   | |
+| 0.838 | 1 | empt           | |       |   | |
+| 0.748 | 1 | syrjakyla      | |       |   | |
+| 0.717 | 2 | hedi           | |       |   | |
+
+Median 0.515 -> **0.838** over this pass. What moved it, in order of size:
+
+1. **The hair root moves.** Simulating with the root pinned where the null ends
+   up converges to a fixed point that has no `dt` in it, so the strands settle
+   and stop. Found because RENDER.md §11.1 says "same dt => different hair" and
+   a dt sweep returned byte-identical frames — the notes described a property
+   our port did not have. krediili 0.531 -> 0.901.
+2. **mp3#2 alignment re-measured**, 106.96s -> 106.720s (§15.1 below).
+   Whole phase-2 tail.
+3. **Fixed-function light-model defaults** — infinite viewer, no back-face
+   normal flip. Both established by what the binary never calls.
+4. **PROJ 5 UV mapping**, **LW_MorphMixer**, **texture mask 0x80 on unit 0**,
+   **Pehko suppresses the hair pass**, **Picture quads are not V-flipped**.
+
+### §15.1 The phase-2 clock
+
+Every phase-2 part rendered 0.15-0.30s early and no phase-1 part did — a clock
+ORIGIN error, and phase 2's origin is one number. `work/verify/align.mjs`
+re-measures it with an onset-correlator (1ms amplitude envelope, 200ms moving
+mean subtracted so the score is driven by transients rather than loudness):
+
+    mp3#1   6.401 / 6.399 / 6.397   mean 6.399   (pinned 6.410, delta -0.011)
+    mp3#2 106.722 /106.720 /106.718 mean 106.720 (pinned 106.960, delta -0.240)
+
+Three disjoint 30s excerpts per track agreeing to 3ms. mp3#1 is the control:
+the same instrument reproduces the known-good phase-1 pin, so the 240ms belongs
+to track 2 and is not estimator bias. The old pin came from a 10ms log-energy
+correlation — log-energy is a compressive nonlinearity applied before the
+correlation, which weights quiet lead-in like the downbeat.
+
+### §15.2 Open — measured, not guessed
+
+* **Hair step size.** `work/verify/hairdt.mjs` sweeps dt across both hair parts
+  on the argument that one shared physical quantity (the capture machine's
+  frame period) cannot fit two independent scenes by accident. It does not
+  agree: krediili peaks at 1/25s, hairball at 1/12s, and the spread across the
+  whole sweep is only ~0.04 r. **Negative result — nothing adopted, 1/60
+  stands.** dt is not what is left in the hair.
+* **Lighting is per-fragment; the engine's is per-vertex.** `glShadeModel` is
+  never called, so shading is GL_SMOOTH and fixed-function evaluates lighting
+  at vertices and interpolates. Ours evaluates per pixel. Provable deviation,
+  not yet fixed; largest on coarse geometry.
+* **GL_SHININESS > 128.** 9 of the archive's 27 GLOS-bearing surfaces map to an
+  exponent above GL's ceiling. Real GL raises GL_INVALID_VALUE and keeps the
+  material's PREVIOUS shininess; we clamp. Reproducing it needs the
+  material-set order.
+* **paleksi 0.521, pehko 0.514** are the two weakest. pehko is a no-clear
+  feedback part approximated by replaying a decay window instead of owning a
+  real frame loop.
+* **empt is not reproducible run-to-run** (0.838 / 0.850 / -0.013 observed) —
+  its stamping draws from the shared MSVC stream, so anything that consumes a
+  rand() before it shifts every stamp. Do not read small empt deltas as signal.
