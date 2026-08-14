@@ -1394,6 +1394,13 @@ contributes.
 
 ## 10.8 The reflection path — what is measured, and what it rules out
 
+> **SOLVED 2026-08-15 — it was never the reflection path. See §10.8.1 below.**
+> The fault was `GL_SHININESS`: the engine hands GL an out-of-range exponent,
+> GL rejects the call, and the surface inherits a BROAD highlight. Everything
+> in this section's measurements is still correct; the conclusion it points at
+> ("something neutral is missing") was right, and the missing neutral term is
+> the separate specular spread over the whole surface rather than a few pixels.
+
 flu2's shards are the clean case: `Mesh059.lwo`, mask 0x80, REFL 1.0, no BLOK,
 RIMG = `NebulaMixed2.jpg`, so `col = lit x reflTexel` with nothing else in the
 way. It has never matched, and the colour is now measured rather than argued
@@ -1473,6 +1480,65 @@ The capture also has HALF AGAIN as much lit area at LOWER peak brightness —
 the same "more area, less contrast" signature that §10.6's clamp experiment
 showed on the same part. Whatever is missing lifts the mid-range and
 desaturates it at once, which a pure per-texel combiner cannot do on its own.
+
+### 10.8.1 SOLVED — `GL_SHININESS` overflows, GL rejects the call, and the surface inherits a BROAD highlight
+
+The paragraph above states the constraint exactly and it is worth keeping:
+*something lifts the mid-range and desaturates at once, and no per-texel
+combiner can do both*. Under fixed-function GL there is exactly one term that
+can — the separate specular, which `GL_SEPARATE_SPECULAR_COLOR` adds AFTER the
+texture stages and which is neutral grey by construction. The question was
+never which operator carries the reflection; it was how WIDE that highlight is.
+
+**The engine never clamps.** `material[+0x34]` is written straight from
+`surface[+0x30]` at 0x42caa6-0x42caaf, and that field is `pow(2, GLOS*10+2)`
+from 0x426dcd (constants read out of `.rdata` as 2.0/10.0/2.0). It reaches GL
+raw at 0x40c19b-0x40c1a0. flu2's `Meshsurf` has GLOS 0.525, so the engine calls
+`glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 152.2)`.
+
+The OpenGL spec caps `GL_SHININESS` at 128. 152.2 is `GL_INVALID_VALUE`, the
+call is IGNORED, and the exponent keeps whatever the last ACCEPTED call left.
+The engine supplies those too: the non-specular branch pushes 1.0 at 0x40c1d9
+and joins the same call site (0x40c196), so any surface with no specular writes
+a maximally broad exponent that the next overflowing surface then inherits.
+
+    +0x69 set   -> 0x40c192: shininess = material[+0x34]   (may be rejected)
+    +0x69 clear -> 0x40c1d9: PUSH 1.0f; JMP 0x40c196       (always accepted)
+
+`+0x69` itself is set when the LENGTH of the specular triple at
+`surface[+0x18/+0x1c/+0x20]` exceeds `[0x45a30c]`, which reads 0.0 — i.e. any
+non-black specular. That triple divided by `[0x45a5d4]`'s 1/255 is `GL_SPECULAR`,
+confirming the port's scalar replication: flu2 is (0.105, 0.105, 0.105).
+
+**Measured.** flu2 at local 5.59s, whole frame:
+
+| model | r | RMSE | luma (ref 51.5) |
+|---|--:|--:|--:|
+| clamp to 128 | 0.8445 | 34.89 | 31.8 |
+| `shine=1` by hand | 0.9331 | — | 51.0 |
+| reject-and-carry | **0.9559** | 21.51 | 58.9 |
+
+Note the traced state machine beats the hand-picked constant. On the metal
+alone (`channels.mjs --box=0,0,400,480`) the required correction goes from
+x(1.599, 1.735, 1.865) to x(0.992, 1.030, 1.041) — from strongly sloped to
+flat and unity, i.e. the cast is gone, not merely the level.
+
+**Why the earlier measurement said the opposite.** This model was implemented
+before and recorded as REFUTED: syrjakyla 0.754 -> 0.379, hedi 0.714 -> 0.453,
+turska 0.937 -> 0.806. Re-run today those deltas are -0.002, -0.003 and -0.002.
+The old run predates §15.4, which traced the LIGHT's specular colour to (I,I,I)
+— and light specular is precisely the term this exponent controls the breadth
+of, so the old test spread a highlight of the WRONG COLOUR over each surface
+and was measuring that instead. A negative result taken under a confound is not
+a negative result; see NOTES.md's standing rule.
+
+**Blast radius** (21 parts x 5 samples, against the same gate run with the
+clamp): flu2 0.709 -> 0.942. Sixteen parts identical to three decimals; turska,
+hedi, kartonki and syrjakyla each move by <= 0.003 — they are the other
+over-128 surfaces and their highlights genuinely widen a little. Gate median
+0.940 -> 0.942. That shape — the target moves a lot, everything else moves not
+at all — is what separates this from the fitted `shine=` sweep that had been
+tempting for weeks.
 
 ## 11. Hair and particles
 

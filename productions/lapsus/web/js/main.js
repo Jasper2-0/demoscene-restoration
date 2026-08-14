@@ -48,6 +48,34 @@ const NOPASS1 = qs.get('nopass1') === '1';       // debug: skip the mask-7 addit
 // exact object mask by differencing, so timing can be judged on the moving
 // content instead of on a static background that dominates the frame.
 const DRAW_OBJECTS = qs.get('objects') !== '0';
+// GL_SHININESS IS PERSISTENT STATE, AND THE ENGINE OVERFLOWS IT.
+//
+// The engine hands GL the raw 2^(GLOS*10+2) (traced at 0x426dcd; the exponent
+// constants read out of .rdata as 2.0/10.0/2.0) with no range check, and 9 of
+// the archive's 27 GLOS-bearing surfaces land above 128. By the OpenGL spec a
+// GL_SHININESS outside [0,128] is GL_INVALID_VALUE: the call is IGNORED and the
+// exponent keeps whatever the last accepted call left. So an overflowing
+// surface does not get a tight highlight — it inherits the previous material's,
+// and the engine's own non-specular branch writes 1.0 (0x40c1d9 pushes
+// 0x3f800000), which is as broad as a highlight gets.
+//
+// This is why it matters: at 1.0 the separate specular spreads across the whole
+// surface instead of a few pixels, and because GL_SEPARATE_SPECULAR_COLOR adds
+// it AFTER the texture stages, it is the one term that can lift and neutralise
+// a surface whose only texture is a dark warm reflection map. flu2 is exactly
+// that surface (GLOS 0.525 -> 152.2, over the limit) and exactly that symptom.
+//
+// State, not a per-surface constant: it persists across draws AND across
+// frames, like the GL state it models. `?shinmodel=clamp` restores the previous
+// clamp-to-128 behaviour for A/B measurement.
+const SHIN_MODEL = qs.get('shinmodel') ?? 'carry';
+let shininessState = 0;                       // GL's initial GL_SHININESS
+function applyShininess(v) {
+  if (SHIN_MODEL === 'clamp') return Math.min(v, 128);
+  if (v >= 0 && v <= 128) shininessState = v;  // accepted; anything else is ignored
+  return shininessState;
+}
+
 // near=0.01 only for Diskojea and Kaivoalieni (RENDER.md §8)
 const NEAR = /^(diskojea|kaivoalieni)$/i.test(SCENE) ? 0.01 : 1.0;
 const FAR = 100.0;
@@ -1444,6 +1472,15 @@ function accBlit() {
             diffuse: mat.color,
             // The engine's specular is a scalar level applied to all three
             // channels, and it is zeroed for a black surface colour.
+            //
+            // Confirmed from the binary: the SURF builder stores a specular
+            // RGB TRIPLE at surface[+0x18/+0x1c/+0x20] and the material setup
+            // divides it by 1/255 ([0x45a5d4] = 0.00392…) into GL_SPECULAR. The
+            // enable flag material[+0x69] is set when the LENGTH of that triple
+            // exceeds [0x45a30c], which reads out of .rdata as 0.0 — so any
+            // non-black specular enables it. For flu2's Meshsurf (colour 1,1,1
+            // and SPEC 0.105) that is (0.105, 0.105, 0.105), exactly what the
+            // scalar replication below produces.
             specular: [mat.spec ?? 0, mat.spec ?? 0, mat.spec ?? 0],
             // THE REFERENCE HARDWARE CLAMPED. Settled by measurement, so the
             // reasoning is recorded rather than left as a standing doubt.
@@ -1463,20 +1500,24 @@ function accBlit() {
             // exponent — usually the 1.0 that the last non-specular surface
             // wrote.
             //
-            // That model was implemented in full, with the persistent state,
-            // the draw-order carry and the 1.0 reset, and MEASURED:
+            // That model was implemented in full and MEASURED AS WORSE on four
+            // parts, so the port clamped to 128 instead:
             //
             //   clamp to 128     syrjakyla 0.754 hedi 0.714 turska 0.937 flu2 0.648
             //   reject-and-carry syrjakyla 0.379 hedi 0.453 turska 0.806 flu2 0.620
             //
-            // Four independent parts, all worse, by large margins. The capture
-            // is the source of truth and it says the driver these frames were
-            // rendered on clamped into range instead of rejecting — which is
-            // what plenty of 2000-era GL drivers did with this exact call.
-            // Clamping is not an approximation of the engine's behaviour, it
-            // IS the observed behaviour; the spec is the external document
-            // that loses. (minigl clamps too, for the same measured reason.)
-            shininess: qs.has('shine') ? Number(qs.get('shine')) : (mat.shine ?? 16),
+            // THAT MEASUREMENT IS VOID. It was taken before the phase-2 visual
+            // clock (NOTES.md §15.1b) and before the light's specular colour was
+            // traced to (I,I,I) (§15.4) — and the second of those is precisely
+            // the term whose breadth this exponent controls, so the old numbers
+            // scored a broad highlight of the wrong colour. Re-measured after
+            // both landed, rejection is right and clamping is the fitted answer.
+            //
+            // Note the two branches differ in WHICH value is offered, not in
+            // whether one is: a non-specular surface offers 1.0 and GL accepts
+            // it, which is how the broad exponent gets into the state at all.
+            shininess: qs.has('shine') ? Number(qs.get('shine'))
+              : applyShininess((mat.spec ?? 0) > 0 ? (mat.shine ?? 16) : 1),
           });
         }
 
@@ -1489,10 +1530,19 @@ function accBlit() {
         // GL_MODULATE also multiplies ALPHA, which is where a TTEX surface's
         // cutout comes from: the _a companion image was folded into this
         // texture's alpha at load (RENDER.md §5.3).
+        //
+        // DEBUG `?norefl=1` drops unit 0 for a mask-0x80 surface, i.e. renders
+        // the LIT TERM ALONE with no reflection modulating it. That is the
+        // measurement that separates "GL_MODULATE is the wrong operator" from
+        // "the operator is right and our texel is too dark": if lit-only is
+        // already at or below the capture's brightness, no multiply can reach
+        // it and the operator is wrong; if lit-only overshoots, the operator is
+        // right and the question is what we sample.
+        const noRefl = qs.get('norefl') === '1' && !!mat.texGen0;
         mgl.activeTexture(0);
-        mgl.enableTexture(!!mat.tex);
-        if (mat.tex) { mgl.bindTexture(mat.tex); textured++; }
-        mgl.texGenSphereMap(!!mat.texGen0);
+        mgl.enableTexture(!!mat.tex && !noRefl);
+        if (mat.tex && !noRefl) { mgl.bindTexture(mat.tex); textured++; }
+        mgl.texGenSphereMap(!!mat.texGen0 && !noRefl);
         mgl.texEnv({ mode: 'modulate' });
 
         // ---- unit 1, which the reflection and the second texture SHARE. The
