@@ -1199,7 +1199,7 @@ function accBlit() {
     let camWorld = cam ? worldMatrix(cam, T, 0, camShift) : M.ident();
     if (camOverwriteZ != null) {
       camWorld = new Float32Array(camWorld);
-      if (camOverwriteZ != null) camWorld[14] += camOverwriteZ;
+      camWorld[14] += camOverwriteZ;
     }
     const view = M.mul(M.scale(1, 1, -1), M.invRigid(camWorld));
 
@@ -1877,7 +1877,27 @@ function accBlit() {
     // screen does not cut in, it emerges from a full-white additive flash that
     // decays over two seconds. Missing entirely before.
     loadpart2:  { in: [2.0, 1, 255, 255, 255] },
-    morko:      { in: [0.5, 1, 255, 255, 255] },
+    // ---- phase 2 (ENGINE.md §5). ALL OF THIS WAS MISSING except morko's
+    // flash-in, so every phase-2 part cut hard in and out where the capture
+    // fades. Spotted on a rewatch, then read off the binary's table rather
+    // than timed by eye.
+    //
+    // The capture and the table agree independently, which is worth recording:
+    // watching it, Jasper named an opening fade for every phase-2 part EXCEPT
+    // kuubiotekniikka and viherio — and those are exactly the two the table
+    // gives no fade-in.
+    kuubiotekniikka: { out: [2.0, 3] },
+    diskojea:   { in: [1.0, 3], out: [1.0, 3] },
+    kartonki:   { in: [1.0, 3], out: [1.0, 3] },
+    hairball:   { in: [1.0, 3], out: [1.0, 3] },
+    higherbiing:{ in: [2.0, 3], out: [2.0, 3] },
+    viherio:    { out: [1.0, 3] },
+    morko:      { in: [0.5, 1, 255, 255, 255], out: [0.5, 3] },
+    turska:     { in: [1.0, 3], out: [1.0, 3] },
+    rad_out:    { in: [2.0, 3], out: [2.0, 3] },
+    kaivoalieni:{ in: [2.0, 3], out: [2.0, 3] },
+    made:       { in: [1.0, 3], out: [1.0, 3] },
+    hedi:       { in: [0.5, 3], out: [2.0, 3] },
   };
 
   // ---- the loading screens (ENGINE.md §7). Two of the 27 parts are not
