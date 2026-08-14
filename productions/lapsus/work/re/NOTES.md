@@ -1023,6 +1023,37 @@ correlation, which weights quiet lead-in like the downbeat.
   distribution barely moves (p50 16 -> 17, mean 41.3 -> 45.0) while r jumps
   0.12. Both are real and want different work.
 
+  **The offsets are PER-PART and point in opposite directions**, so they are
+  not a clock:
+
+      pene         peak +0.0   r 0.993
+      hairball     peak +0.0   r 0.669
+      flu2         peak +0.1   r 0.648 -> 0.770
+      kaivoalieni  peak -0.1   r 0.690 -> 0.751
+
+  Four things ruled out for those offsets, all cheap:
+  - **The phase-1 clock** — pene peaks exactly at zero at r 0.993.
+  - **The schedule** — ENGINE.md has flu2 14.0/9.0 and pene 23.0, and pene
+    confirms the table.
+  - **A custom part clock** — `FUN_00405b60` is only a vtable stub, so
+    Part_Flu2 uses the generic vf2 and passes localTime through untouched.
+  - **Spline type, TCB parameters and frame rate.** Only 5 keys in the whole
+    archive are spantype 3 (Linear) and all 5 are in `rad_out.lws`; every
+    other key is spantype 0. Tension/continuity/bias are ZERO on all 54 flu2,
+    326 kaivoalieni, 33 pene and 166 hairball keys, so TCB degenerates to
+    Catmull-Rom for all of them — the same maths that gets pene and hairball
+    exactly right. And every scene is `FramesPerSecond 30`.
+
+  So two parts evaluate late/early under interpolation that is provably
+  correct for two others. UNRESOLVED, but bounded: it is per-part, it is worth
+  0.06-0.12 r where it occurs, and it is independent of the shading defects.
+  Running partclock across the rest of the tail is the cheap next step.
+
+  Separately, `rad_out.lws`'s 5 spantype-3 keys are a real unhandled case —
+  they carry -1 / -1 / 0.755 in the parameter slots, which are not TCB
+  parameters on a Linear span. rad_out scores 0.853, so the effect is small,
+  but we currently interpolate them as if they were TCB.
+
   The tonal half, characterised by DISTRIBUTION rather than mean, which
   changes what that defect is. Shard region (left 380px) at t=4.5:
 
