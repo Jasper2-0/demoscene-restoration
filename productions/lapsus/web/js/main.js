@@ -116,11 +116,11 @@ const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer:
 if (!gl) throw new Error('WebGL2 required');
 
 const VS = `#version 300 es
-in vec3 aPos; in vec3 aNormal; in vec2 aUV; in vec2 aUV1;
+in vec3 aPos; in vec3 aNormal; in vec2 aUV; in vec2 aUV1; in vec2 aUV2;
 uniform mat4 uMV, uProj;
-out vec3 vN, vP; out vec2 vUV, vUV1;
+out vec3 vN, vP; out vec2 vUV, vUV1, vUV2;
 void main(){ vec4 p = uMV * vec4(aPos,1.0); vP = p.xyz;
-  vN = mat3(uMV) * aNormal; vUV = aUV; vUV1 = aUV1; gl_Position = uProj * p; }`;
+  vN = mat3(uMV) * aNormal; vUV = aUV; vUV1 = aUV1; vUV2 = aUV2; gl_Position = uProj * p; }`;
 // Fixed-function-equivalent lighting, per RENDER.md §8: per-light diffuse
 // only (no per-light ambient), light-model ambient from the scene, and the
 // LWO surface's own diffuse coefficient. No hardcoded fill light — pene has
@@ -128,7 +128,7 @@ void main(){ vec4 p = uMV * vec4(aPos,1.0); vP = p.xyz;
 // is genuinely black, and an invented ambient floor would wash it out.
 const FS = `#version 300 es
 precision highp float;
-in vec3 vN, vP; in vec2 vUV, vUV1; out vec4 o;
+in vec3 vN, vP; in vec2 vUV, vUV1, vUV2; out vec4 o;
 uniform vec3 uColor, uAmbient;
 uniform sampler2D uTex;
 uniform bool uHasTex, uUnlit, uTwoSided;
@@ -157,7 +157,12 @@ vec2 sphereMap(vec3 n, vec3 p){
 void main(){
   // Mask 7 (COLR+DIFF+LUMI) draws a SECOND additive pass carrying only the
   // LUMI texture, on its own UV set (RENDER.md §4.5, mat[+0x60] = 1).
-  if (uPass1) { o = vec4(texture(uTex1, vUV1).rgb, 1.0); return; }
+  // Pass 1 (mask 7) is NOT a bare additive blit (RENDER.md §13.4): it
+  // modulates by glColor, samples its OWN third UV set, writes depth, and is
+  // still fogged — material[+0x6a] is never written by the SURF builder, so
+  // fog stays on. That last one bites higherbiing, the only one of the three
+  // mask-7 parts with FogType 1.
+  vec3 pass1 = uColor * texture(uTex1, vUV2).rgb;
   vec3 n = normalize(vN);                       // GL_NORMALIZE equivalent
   if (uTwoSided && !gl_FrontFacing) n = -n;
   // MASK 0x80 — a reflection image and NOTHING else. The engine binds the
@@ -167,22 +172,33 @@ void main(){
   // the reflection MULTIPLIES the lit colour; it is only ADDED when it lands on
   // unit 1, which happens for mask 0x81 (a colour texture as well).
   vec2 uv0 = uTexGen0 ? sphereMap(n, vP) : vUV;
-  vec3 base = uColor * (uHasTex ? texture(uTex, uv0).rgb : vec3(1.0));
+  // PRIMARY COLOUR FIRST, then the texture stages — the order the
+  // fixed-function pipeline runs in, and it matters because the material's
+  // GL_AMBIENT is not the diffuse colour. The SURF builder stores
+  // 0x437f0000 = 255.0 into material[+0x04/+0x08/+0x0c] unconditionally
+  // (0x42b90b-0x42b937), so **GL_AMBIENT = (1,1,1) for every surface in the
+  // demo**, and GL_EMISSION is never written. Only GL_DIFFUSE carries K.
+  // Folding the ambient into K (col = K*(amb + sum)) attenuated the light-model
+  // ambient by the surface colour, which is wrong wherever AmbientIntensity is
+  // non-zero — paleksi 0.515, rad_out 0.54, viherio 0.22 (RENDER.md §13.2.1).
+  vec3 col;
+  if (uUnlit) {
+    col = uColor;                               // glColor4f(K), lighting off
+  } else {
+    vec3 diff = vec3(0.0);
+    for (int i = 0; i < MAXL; i++) {
+      if (i >= uNumLights) break;
+      diff += uLightColor[i] * max(dot(n, uLightDir[i]), 0.0);
+    }
+    col = uAmbient + uColor * diff;             // 1*lmAmbient + K*sum(N.L)*Lc
+  }
+  // Unit 0 is always GL_MODULATE, and it modulates the whole primary colour —
+  // the ambient term included.
+  if (uHasTex) col *= texture(uTex, uv0).rgb;
   // Unit 1: GL_MODULATE for a DIFF texture (mask 5), GL_ADD for LUMI (mask 3).
   if (uHasTex1) {
     vec3 t1 = texture(uTex1, vUV1).rgb;
-    if (uTex1Add) base += t1; else base *= t1;
-  }
-  vec3 col;
-  if (uUnlit) {
-    col = base;
-  } else {
-    vec3 lit = uAmbient;
-    for (int i = 0; i < MAXL; i++) {
-      if (i >= uNumLights) break;
-      lit += uLightColor[i] * max(dot(n, uLightDir[i]), 0.0);
-    }
-    col = base * lit;
+    if (uTex1Add) col += t1; else col *= t1;
   }
   // GL_SPHERE_MAP on the eye-space reflection vector, added on top: the
   // engine puts the RIMG reflection on texture unit 1 with env mode GL_ADD
@@ -210,6 +226,7 @@ void main(){
   // Fog last: GL_LINEAR over [min,max], the factor running the full 0->1.
   // GL_FOG_DENSITY is never set and FogMin/MaxAmount are ignored, so this is
   // an unclamped linear ramp — not the GL_EXP that METHOD.md warns about.
+  if (uPass1) col = pass1;
   if (uFogOn) {
     float f = clamp((uFogRange.y + vP.z) / (uFogRange.y - uFogRange.x), 0.0, 1.0);
     col = mix(uFogColor, col, f);
@@ -394,6 +411,7 @@ function meshFromLayer(layer, obj) {
     attach(0, posBuf, 3); attach(1, nrmBuf, 3);
     attach(2, uvFor(bColr), 2);
     attach(3, uvFor(bSecond ?? bColr), 2);
+    attach(4, uvFor(bPass1 ?? bSecond ?? bColr), 2);
     const ib = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(list), gl.STATIC_DRAW);
@@ -444,6 +462,7 @@ gl.bindAttribLocation(prog, 0, 'aPos');
 gl.bindAttribLocation(prog, 1, 'aNormal');
 gl.bindAttribLocation(prog, 2, 'aUV');
 gl.bindAttribLocation(prog, 3, 'aUV1');
+gl.bindAttribLocation(prog, 4, 'aUV2');
 
 // RENDER.md §8: RGBA8, REPEAT/REPEAT, LINEAR mag, LINEAR_MIPMAP_NEAREST min
 // (no trilinear — the mip popping is original), and rows are NOT flipped.
@@ -1002,7 +1021,8 @@ const bgVao = gl.createVertexArray();
       gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
       // mask 7: second, additive pass carrying only the LUMI texture
       if (mat.texPass1 && !NOPASS1) {
-        gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.depthMask(false);
+        gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+        gl.depthMask(true);                       // pass 1 WRITES depth
         gl.uniform1i(uPass1, 1);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mat.texPass1);
         gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0);
