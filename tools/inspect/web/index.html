@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>inspector</title>
+<link rel="stylesheet" href="inspector.css">
+<div id="app">
+  <header>
+    <b id="title">inspector</b>
+    <span id="meta"></span>
+    <span class="spacer"></span>
+    <label>show <input id="showIssues" type="checkbox" checked> issues</label>
+    <label>show <input id="showRef" type="checkbox" checked> reference</label>
+    <button id="prev" title="previous sample">◀</button>
+    <button id="next" title="next sample">▶</button>
+  </header>
+
+  <main>
+    <section id="stage">
+      <div class="pane">
+        <div class="paneLabel">ours</div>
+        <iframe id="demo" title="demo"></iframe>
+      </div>
+      <div class="pane" id="refPane">
+        <div class="paneLabel">reference</div>
+        <img id="ref" alt="reference frame">
+      </div>
+    </section>
+
+    <aside id="side">
+      <div class="block">
+        <div class="h">on screen</div>
+        <div id="where"></div>
+        <table id="info"></table>
+      </div>
+      <div class="block">
+        <div class="h">resources</div>
+        <div id="assets" class="assets"></div>
+      </div>
+      <div class="block" id="issueBlock">
+        <div class="h">issues here</div>
+        <div id="issuesHere"></div>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    <div id="timeline"></div>
+    <div id="legend">
+      <span><i class="sw ok"></i>r ≥ .75</span>
+      <span><i class="sw mid"></i>.55–.75</span>
+      <span><i class="sw bad"></i>&lt; .55</span>
+      <span class="spacer"></span>
+      <span id="hint">click the timeline to scrub · ◀ ▶ step samples</span>
+    </div>
+  </footer>
+</div>
+<script type="module" src="inspector.js"></script>

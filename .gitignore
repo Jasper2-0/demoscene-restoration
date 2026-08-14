@@ -66,3 +66,6 @@ productions/sonnet/work/baked/tex_2x/*
 .codex/
 # Rendered comparison frames (regenerable via work/verify/frame.mjs).
 productions/lapsus/work/verify/frames/
+
+# inspector sweep output: run.json/issues.md are regenerable, frames are bulky
+productions/*/work/verify/inspect/frames/

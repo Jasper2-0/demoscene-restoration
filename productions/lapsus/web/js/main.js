@@ -859,6 +859,11 @@ const bgVao = gl.createVertexArray();
       else if (!/^empt$/i.test(SCENE)) throw new Error(`no scene ${SCENE}.lws`);
     }
     const drawables = [];
+    // What this part uses, for the inspector's resource panel: the geometry it
+    // loads and every image any of its surfaces references. Collected while
+    // the part is built, because that is the only place the truth is known —
+    // a list maintained by hand goes stale the first time a path shape changes.
+    const assets = new Set();
     for (const obj of scene.objects) {
       if (!obj.file) continue;                              // null objects: transform only
       // Object paths come in three shapes, exactly like the texture refs:
@@ -871,6 +876,8 @@ const bgVao = gl.createVertexArray();
       const url = ROOT + 'work/unpacked/lapsus_dat/data/lwo/'
         + obj.file.replace(/\\/g, '/').split('/').pop();
       const lwo = parseLWO(new Uint8Array(await (await fetch(url)).arrayBuffer()));
+      assets.add('lwo/' + url.split('/').pop());
+      for (const c of lwo.clips) if (c.file) assets.add(c.file.replace(/\\/g, '/').split('/').slice(-2).join('/'));
       // surface name -> { texture, color, unlit }
       const mats = new Map();
       for (const s of lwo.surfaces) {
@@ -1313,6 +1320,7 @@ const bgVao = gl.createVertexArray();
     // The simulation still RUNS — Scene::update ticks it and Pehko reads the
     // node positions to place its particle systems — but nothing is drawn. So
     // this is a draw suppression, not a skip: the strands must still be stepped.
+    if (scene.backdropImage) assets.add(String(scene.backdropImage).split('/').slice(-2).join('/'));
     const hairSuppressed = /^pehko$/i.test(SCENE);
     const hairNodes = [];        // emitter positions for the particle systems
     // ONE rand() stream across every hair mesh in the scene, in creation order.
@@ -1339,7 +1347,7 @@ const bgVao = gl.createVertexArray();
     if (hairSuppressed) {
       try {
         const t = await (await fetch(DATA + 'particles/tauno/tauno.txt')).text();
-        if (t && !/not found/i.test(t)) parP = parseParticles(t);
+        if (t && !/not found/i.test(t)) { parP = parseParticles(t); assets.add('particles/tauno/tauno.txt'); }
       } catch {}
     }
     for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
@@ -1347,6 +1355,7 @@ const bgVao = gl.createVertexArray();
       let txt;
       try { txt = await (await fetch(DATA + 'hairs/' + name + '.txt')).text(); } catch { continue; }
       if (!txt || /^\s*$/.test(txt) || /not found/i.test(txt)) continue;
+      assets.add('hairs/' + name + '.txt');
       const h = parseHair(txt);
       if (!h.hairCount || !h.nodesPerHair) continue;
       // The hair null is ANIMATED, so the simulation has to follow it through
@@ -1579,6 +1588,7 @@ const bgVao = gl.createVertexArray();
 
     return {
       name: SCENE, fbAlpha, renderAt,
+      assets: () => [...assets].sort(),
       setAcc: (v) => { useAcc = v; },
       info: (T) => ({
         probe: probeInfo,
@@ -1675,7 +1685,36 @@ const bgVao = gl.createVertexArray();
     morko:      { in: [0.5, 1, 255, 255, 255] },
   };
 
+  const ui = document.getElementById('ui');
+  const setStatus = (s) => { if (ui) ui.textContent = s; };
+  const parts = new Map();
+  const load = async (names) => {
+    for (const n of names) {
+      if (parts.has(n)) continue;
+      setStatus(`loading ${n}…`);
+      try { parts.set(n, await makePart(n)); }
+      catch (e) { console.warn('part failed:', n, e); parts.set(n, null); }
+    }
+  };
+  const loadAll = () => load([...PHASE1, ...PHASE2].map((p) => p[0]));
+
+  const clampF = (x) => Math.max(0, Math.min(1, x));
+  /** Draw the part's scheduled fades at local time `t`, the way the sequencer
+   *  computes them (ENGINE.md §4): a fade-in ramps (t)/dur, a fade-out ramps
+   *  (t - (dur - fadeDur))/fadeDur. */
+  function applyFades(name, t, partDur) {
+    const f = FADES[name];
+    if (!f) return;
+    if (f.in) { const [dur, mode, r, g, b] = f.in;
+      const v = clampF(t / dur);
+      if (v < 1) drawFade('in', mode, v, [(r ?? 0) / 255, (g ?? 0) / 255, (b ?? 0) / 255]); }
+    if (f.out && Number.isFinite(partDur)) { const [dur, mode, r, g, b] = f.out;
+      const v = clampF((t - (partDur - dur)) / dur);
+      if (v > 0) drawFade('out', mode, v, [(r ?? 0) / 255, (g ?? 0) / 255, (b ?? 0) / 255]); }
+  }
+
   const single = qs.has('scene') && qs.has('t');
+  const inspect = qs.has('inspect');
 
   if (single) {
     // ---- verification path, unchanged: one part, one instant, then stop.
@@ -1693,25 +1732,90 @@ const bgVao = gl.createVertexArray();
     return;
   }
 
+  // ---- INSPECTOR ADAPTER (tools/inspect/ADAPTER.md).
+  //
+  // The repo-level tooling is deliberately production-agnostic: it knows how to
+  // sweep a timeline against a reference capture and how to draw an inspector,
+  // but nothing about Lapsus. Everything specific lives behind this object, so
+  // adding a production to the tooling means implementing this contract and
+  // nothing else.
+  //
+  // The one genuinely Lapsus-shaped thing it has to express is that the demo
+  // has TWO clocks — one per MP3, with a load between them — so a plan entry
+  // carries both the part-local time we render and the CAPTURE time that
+  // frame should be compared against. A production with a single clock just
+  // returns captureTime = offset + t.
+  const prod = await (await fetch(ROOT + 'prod.json')).json();
+  const trk = prod.captures[0].trackOffsetsMs;
+  const OFFSETS = { 1: trk['data/mjuusik/1.mp3'] / 1000, 2: trk['data/mjuusik/2.mp3'] / 1000 };
+  const SCHEDULE = [
+    ...PHASE1.map(([name, start, dur]) => ({ name, phase: 1, start, dur })),
+    ...PHASE2.map(([name, start, dur]) => ({ name, phase: 2, start, dur })),
+  ].filter((p) => p.name !== 'startpart1');   // 1s, entirely its own fade
+
+  window.__demo = {
+    id: 'lapsus',
+    // Every part, in show order, with the capture window it maps to.
+    schedule: () => SCHEDULE.map((p) => ({
+      ...p, captureStart: OFFSETS[p.phase] + p.start,
+    })),
+    // Sample plan: one entry per instant the sweep should compare.
+    plan(step = 2) {
+      const out = [];
+      for (const p of SCHEDULE) {
+        // At least three samples per part however short it is: morko is 3.54s,
+        // and one sample is an anecdote rather than a median.
+        const n = Math.max(3, Math.floor((p.dur - 0.5) / step));
+        for (let i = 0; i < n; i++) {
+          // Inset from both ends by a quarter of a slot so a sample is never
+          // taken exactly on a part boundary, where a one-frame timing
+          // difference decides which part is on screen at all.
+          const local = +((i + 0.5) / n * (p.dur - 0.3) + 0.15).toFixed(3);
+          out.push({ part: p.name, phase: p.phase, local,
+                     captureTime: +(OFFSETS[p.phase] + p.start + local).toFixed(3) });
+        }
+      }
+      return out;
+    },
+    /** Draw one sample. Uses the same deterministic path the frame harness
+     *  uses, NOT the live accumulator, so a sweep is reproducible. */
+    async render({ part, local }) {
+      const p = parts.get(part) ?? await (async () => {
+        const made = await makePart(part); parts.set(part, made); return made;
+      })();
+      if (!p) return null;
+      await replay(p, local, fbWindowFor(part, local));
+      // APPLY THE SCHEDULED FADE. Without it the sweep compares an un-faded
+      // frame against a reference frame that is mid-fade, and every part with
+      // a fade reports as a timing or brightness fault that does not exist —
+      // morko opens on a white flash, hulluolli on a 1s fade from black. The
+      // fade is part of what the demo shows, so it is part of what we render.
+      const ent = SCHEDULE.find((x) => x.name === part);
+      applyFades(part, local, ent ? ent.dur : Infinity);
+      gl.finish();
+      return p.info(local);
+    },
+    /** What is on screen: the inspector's right-hand panel. */
+    state() { return window.__lapsusInfo ?? window.__lapsusNow ?? null; },
+    /** Geometry and images this part references, collected at build time. */
+    assets(part) { return parts.get(part)?.assets?.() ?? null; },
+  };
+  if (inspect) {
+    // No autoplay and no click gate: the tooling drives every frame itself.
+    setStatus('loading…');
+    await loadAll();
+    setStatus('');
+    window.__lapsusReady = true;
+    return;
+  }
+
   // ---- PLAYER. The demo's clock IS the music: the engine resets its QPC
   // reference immediately after FSOUND_PlaySound (ENGINE.md §7), so part time
   // is measured from the start of the current track. Driving the loop from
   // audio.currentTime rather than a wall clock means the visuals cannot drift
   // against the soundtrack no matter how the frame rate varies — which is the
   // one thing a viewer would notice.
-  const ui = document.getElementById('ui');
-  const setStatus = (s) => { if (ui) ui.textContent = s; };
-
   setStatus('loading part 1…');
-  const parts = new Map();
-  const load = async (names) => {
-    for (const n of names) {
-      if (parts.has(n)) continue;
-      setStatus(`loading ${n}…`);
-      try { parts.set(n, await makePart(n)); }
-      catch (e) { console.warn('part failed:', n, e); parts.set(n, null); }
-    }
-  };
   await load(PHASE1.map((p) => p[0]));
 
   const audio = new Audio();
@@ -1780,15 +1884,7 @@ const bgVao = gl.createVertexArray();
     const part = parts.get(cur);
     if (part) {
       await renderLive(part, local);
-      // scheduled fades, computed the way the sequencer does (ENGINE.md §4)
-      const e = table.find((x) => x[0] === cur);
-      const f = FADES[cur];
-      if (f?.in) { const [dur, mode, r, g, b] = f.in;
-        const v = clamp01(local / dur);
-        if (v < 1) drawFade('in', mode, v, [(r ?? 0) / 255, (g ?? 0) / 255, (b ?? 0) / 255]); }
-      if (f?.out) { const [dur, mode, r, g, b] = f.out;
-        const v = clamp01((local - (e[2] - dur)) / dur);
-        if (v > 0) drawFade('out', mode, v, [(r ?? 0) / 255, (g ?? 0) / 255, (b ?? 0) / 255]); }
+      applyFades(cur, local, table.find((x) => x[0] === cur)[2]);
     }
     requestAnimationFrame(() => frame());
   }
