@@ -792,7 +792,7 @@ gl.linkProgram(parProg);
  * GL_MODULATE against glColor(1,1,1,opacity) then gives exactly
  * alpha = opacity * texel.a.
  */
-function drawPicture(tex, x, y, w, h, opacity) {
+function drawPicture(tex, x, y, w, h, opacity, uv = null) {
   quad2D.begin();
   mgl.enableBlend(true);
   mgl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -803,7 +803,7 @@ function drawPicture(tex, x, y, w, h, opacity) {
   mgl.color4(1, 1, 1, opacity);
   mgl.matrixMode(mgl.PROJECTION);
   mgl.ortho(0, 640, 480, 0, -1, 1);          // the engine's virtual screen
-  quad2D.rect(x, y, w, h, [[0, 0], [1, 0], [1, 1], [0, 1]]);
+  quad2D.rect(x, y, w, h, uv ?? [[0, 0], [1, 0], [1, 1], [0, 1]]);
   quad2D.end();
 }
 
@@ -1875,7 +1875,17 @@ function accBlit() {
   function drawLoadingScreen(tex, fade = 1) {
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (tex) drawPicture(tex, 0, 0, 640, 480, 1);
+    if (tex) {
+      // 1:1 IN PIXELS, exactly as the backdrops are drawn. Both loading
+      // screens are 640x512: 640x480 of artwork padded to a power-of-two
+      // height with a flat fill. The engine blits them pixel for pixel, so the
+      // pad falls off the bottom of the screen. Stretching all 512 rows into
+      // 480 squashes the picture by 6.7% and misaligns everything in it — the
+      // same mistake already found and fixed for the backdrops.
+      const [tw, th] = texSize.get(tex) ?? [640, 480];
+      const fu = Math.min(1, 640 / tw), fv = Math.min(1, 480 / th);
+      drawPicture(tex, 0, 0, 640, 480, 1, [[0, 0], [fu, 0], [fu, fv], [0, fv]]);
+    }
     if (fade < 1) drawFade('in', 3, fade);
   }
 
@@ -2034,7 +2044,7 @@ function accBlit() {
 
   // Phase 2's scenes are loaded during the demo's own loading part — the gap
   // between the two tracks is authentic, not a stall we are adding.
-  let phase2Loaded = null;
+  let phase2Loaded = null, phase2Ready = false;
 
   // ---- the show clock.
   //
@@ -2125,25 +2135,45 @@ function accBlit() {
     const table = phase === 1 ? PHASE1 : PHASE2;
     const t = showClock();
     const [cur, local, dur] = entryAt(table, t);
+    const drawT0 = performance.now();
 
     // ENGINE.md §4 tail / §7 step 4: the phase-2 trigger is Part_LoadPart2
     // reaching localTime 2.5 — NOT the end of the music. mp3#1 goes on
     // playing over loading2.jpg for those 2.5s and right through the load,
     // and is only stopped when mp3#2 starts. Pausing the track instead (which
     // is what this did before) removed the one thing the loader sounds like.
-    if (phase === 1 && cur === 'loadpart2' && local >= 2.5 && !handingOver) {
-      handingOver = true;
+    if (phase === 1 && cur === 'loadpart2' && !handingOver) {
+      // HOLD THE LOADING SCREEN UNTIL THE TRACK HAS PLAYED OUT.
+      //
+      // A DELIBERATE DEPARTURE from the engine (ENGINE.md §7 step 4), because
+      // the original's timing here was a consequence of its hardware. There,
+      // loadPhase(2) took some five seconds of frozen display and mp3#1 was
+      // cut off wherever it had got to — around 100s of its 111s. The load
+      // takes a moment now, so honouring the 2.5s trigger would throw away
+      // eleven seconds of music for no reason. The screen holds instead, from
+      // 93.1s to the end of the track at 111.0s, and phase 2 starts on 2.mp3.
+      //
+      // The load starts as soon as the screen appears rather than at the 2.5s
+      // mark, so it is long finished by the time the music ends.
+      phase2Loaded ??= load(sceneParts(PHASE2)).then(() => { phase2Ready = true; });
+      window.__lapsusNow = { phase, t, part: cur, local };
       drawLoadingScreen(await loadingPic('loadpart2'));
       setStatus('');
-      await (phase2Loaded ??= load(sceneParts(PHASE2)));
-      await startPhase(2);
-      handingOver = false;
+      const trackDone = audio.ended ||
+        (audio.duration > 0 && audio.currentTime >= audio.duration - 0.05);
+      if (phase2Ready && trackDone) {
+        handingOver = true;
+        await startPhase(2);
+        handingOver = false;
+      }
+      window.__lapsusFrameMs = performance.now() - drawT0;
+      window.__lapsusFrames = (window.__lapsusFrames ?? 0) + 1;
+      updateStats(window.__lapsusFrameMs);
       return;
     }
     if (phase === 2 && t > 112.0) { setStatus('the end'); stopped = true; return; }
 
     window.__lapsusNow = { phase, t, part: cur, local };
-    const drawT0 = performance.now();
     if (LOADING_PIC[cur]) {
       drawLoadingScreen(await loadingPic(cur));
       applyFades(cur, local, dur);
