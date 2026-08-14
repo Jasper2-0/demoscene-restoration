@@ -2952,3 +2952,53 @@ mask-7 second pass's own set for its LUMI texture (§4.5, §13.4). That is not a
 third unit — it is one unit sampling a different set on a later pass, which is
 `glClientActiveTexture`. minigl models it that way: a mesh holds N UV sets and
 each draw selects which sets feed unit 0 and unit 1.
+
+## 15. paleksi — four negative results, and what is actually left
+
+paleksi sweeps at median r 0.531 with r swinging 0.18 / 0.30 / 0.84 / 0.53
+across four samples, while its MEAN LUMA matches the capture closely (67.9 vs
+66.3 at local 3.61). Right amount of light, wrong places — a spatial fault.
+
+Its scene is unusually simple, which is what makes it worth recording: ONE
+light, ONE object, ONE surface, and no texture blocks at all.
+
+```
+LightColor 0.866667 0.082353 0.003922   (= RGB 221,21,1 — emphatically red)
+LightIntensity 1   LightType 0 (distant)   ShowLight 1 5
+AmbientColor 1 1 1   AmbientIntensity 0.515
+SolidBackdrop 1   BackdropColor 0 0 0
+
+surface "paleksi": LUMI 0  DIFF 0.43  SPEC 0.785  GLOS 0.23  TRAN 0
+                   REFL 1  RFOP 2  RIMG -> Shock1Brown1.jpg  ADTR 1
+                   blocks: none
+```
+
+### Tested and rejected
+
+| hypothesis | test | result |
+|---|---|---|
+| the light is red but should be white | force all light colours to white | median r **0.531 either way**; RMSE worse (58.6 → 65.1) |
+| the light is switched off in the LWS | read the whole `AddLight` block | no such flag. `ShowLight` is viewport display; intensity is 1 |
+| the light's SPECULAR colour is not its diffuse colour | force light specular black, then white | median r **0.5308 in all three cases**; only RMSE moves (58.4 / 58.6 / 60.0) |
+| the part renders at the wrong time | `work/verify/phase.mjs`, ±1.5s | FLAT: 0.18–0.32 throughout, best beats aligned by 0.017. Control krediili peaks at exactly +0.00s with r 0.974 |
+
+Lighting is not the fault, in colour, in presence, or in its specular term.
+Correlation is normalised, so a broad additive term barely moves it — which is
+also why RMSE is the more sensitive statistic for this surface and r the more
+sensitive one for its geometry.
+
+### What is left
+
+The surface is **additive** (`ADTR 1` > 0.95 → blend mode 1, depth mode 2 —
+§4.5) and carries a **spherical reflection map** (`RFOP 2`, `RIMG` =
+Shock1Brown1.jpg) with **no colour texture**, so mask 0x80 applies: the sphere
+map lands on unit 0 under `GL_MODULATE` and *is* the surface's only texture.
+Its whole appearance is therefore the reflection, accumulated additively, with
+depth writes off — a configuration in which DRAW ORDER decides the picture and
+the engine's sort is per-object rather than per-triangle (§4 steps 5-8).
+
+Both visible differences fit that and not lighting: a red-brown glow across
+the top where the capture is black (additive accumulation of a brown
+reflection map), and black polygonal holes at lower left where the capture is
+solid (the ordering, or the depth mode, dropping faces). Next work belongs
+there.
