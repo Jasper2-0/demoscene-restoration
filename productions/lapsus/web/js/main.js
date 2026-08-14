@@ -1505,7 +1505,8 @@ const bgVao = gl.createVertexArray();
         //
         // Because every surface's exponent then takes effect on its own, none
         // of the persistent-state machinery is needed and it is gone.
-        gl.uniform1f(uShine, Math.min(128, mat.shine ?? 16));
+        gl.uniform1f(uShine, qs.has('shine') ? Number(qs.get('shine'))
+                                          : Math.min(128, mat.shine ?? 16));
         gl.uniform1i(uHasTex1, mat.tex1 ? 1 : 0);
         gl.uniform1i(uTex1Add, mat.tex1Add ? 1 : 0);
         gl.uniform1i(uPass1, 0);

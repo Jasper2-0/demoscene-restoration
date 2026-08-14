@@ -1427,6 +1427,44 @@ Ruled out by measurement:
   31.4% -> 39.0%) but the cast is untouched (1.35), so it is not the answer,
   though it does suggest the lit term is currently too peaky.
 
+### It is the SPECULAR BREADTH — the shim, not the data
+
+`?shine=` overrides GL_SHININESS so the exponent can be swept directly. On
+flu2's shards, lit pixels only:
+
+| shine | R | G | B | R/B | lit area |
+|--:|--:|--:|--:|--:|--:|
+| 128 (what 2^(GLOS*10+2) gives, clamped) | 96.8 | 85.5 | 73.1 | 1.33 | 31.4% |
+| 32 | 97.5 | 86.6 | 74.6 | 1.31 | 32.5% |
+| 8 | 98.3 | 88.7 | 77.5 | 1.27 | 36.7% |
+| 2 | 98.7 | 91.7 | 82.1 | 1.20 | **48.8%** |
+| 0.5 | 105.8 | 100.3 | 91.7 | 1.15 | 58.1% |
+| **capture** | 74.5 | 75.7 | 69.2 | **1.08** | **50.9%** |
+
+Both metrics move monotonically toward the capture as the highlight broadens,
+and lit area lands on it at shine ~2. That is the mechanism the constraint
+above demanded: the separate specular is **neutral grey by construction**
+(`specularity x 255` in all three channels) and is added AFTER texturing, so
+it is the one term that can dilute the reflection's colour cast without being
+tinted by it. A broad highlight spreads that neutral term across the surface;
+a tight one confines it to a few pixels.
+
+This also explains a result that never made sense on its own: taking
+`surface[+0x30]` at face value as the exponent (§10.6's first attempt, giving
+a near-flat highlight) IMPROVED exactly the two mask-0x80 parts —
+flu2 0.639 -> 0.713 and paleksi 0.518 -> 0.570 — while making everything else
+worse. It was right about these surfaces for the right reason and wrong
+everywhere else.
+
+**Not yet resolved: brightness.** A broad specular ADDS, so it overshoots —
+98.7 against the capture's 74.5 at shine 2. Getting the coverage right costs
+too much light, which says the lit (primary) term is ALSO too strong and too
+peaky here, the same thing the replace experiment and §10.6's clamp both
+pointed at. So this is one of two faults, not the whole answer, and the
+exponent mapping should not be changed on this evidence alone: 2^(GLOS*10+2)
+was read from the parser (0x426dcd-0x426de8) and is right for the rest of the
+archive.
+
 The capture also has HALF AGAIN as much lit area at LOWER peak brightness —
 the same "more area, less contrast" signature that §10.6's clamp experiment
 showed on the same part. Whatever is missing lifts the mid-range and
