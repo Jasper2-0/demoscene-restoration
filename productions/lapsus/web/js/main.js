@@ -1932,6 +1932,16 @@ function accBlit() {
   // frame: a quad at alpha a leaves (1-a)^n after n more frames, so the trail
   // is spent (under 1%) after ln(0.01)/ln(1-a) frames.
   const fbWindow = (a) => Math.log(0.01) / Math.log(1 - a) / 60;
+  // THE DECAY FACTORS ARE PINNED, not fitted. Each part's own draw pushes it as
+  // an immediate one instruction before applying it (RENDER.md §7 correction):
+  //
+  //   Pehko  0x407812  push 0x3f733333 (0.95)  -> call [eax+0x4]
+  //   Silli  0x407e43  push 0x3f4ccccd (0.80)  -> call [eax+0x4]
+  //
+  // so alpha = 1 - factor is 0.05 and 0.20. These match what had been fitted
+  // against the capture, so no value changes here; they are simply no longer
+  // guesses. Empt's 0.10 is still UNPINNED — its custom draw at 0x4057b0 has a
+  // different shape and the constant has not been located in it yet.
   const FB_WINDOW = { silli: fbWindow(0.20), pehko: fbWindow(0.05), empt: fbWindow(0.10) };
   // Viherio is NOT continuous feedback: its strobe suppresses the CLEAR only
   // inside 14 specific windows (table at 0x463c2c, every onset an exact

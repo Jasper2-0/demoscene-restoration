@@ -972,9 +972,27 @@ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   Viherio in particular runs a table-driven strobe (`DAT_00463c2c`…`0x463c64`,
   threshold `_DAT_0045a598`) that gates whether the scene is drawn at all in a
   given frame — worth a dedicated read before porting that part.
-- The exact per-frame behaviour of the double-buffered feedback in Silli/Pehko
+- ~~The exact per-frame behaviour of the double-buffered feedback in Silli/Pehko
   depends on driver semantics of the 2000-era back buffer and cannot be
-  determined from the binary; match it against the capture.
+  determined from the binary; match it against the capture.~~
+  **WRONG, corrected 2026-08-15.** The decay factors are IMMEDIATE OPERANDS at
+  the top of each part's own draw, one instruction before the call that applies
+  them:
+
+  | part | site | pushed | = | our `fbAlpha` |
+  |---|---|---|--:|--:|
+  | Pehko | 0x407812 | `0x3f733333` | **0.95** | 0.05 ✓ |
+  | Silli | 0x407e43 | `0x3f4ccccd` | **0.80** | 0.20 ✓ |
+
+  Both are `push <float>` / `call dword [eax+0x4]` on the part's screen object.
+  The fitted values happened to be right, so nothing changes in the port — but
+  they are now PINNED rather than GUESS, which is the point. Note what the
+  false claim cost: it read as "stop looking here", and three separate
+  investigations into Silli, Pehko and Empt trails took it at face value. A
+  negative claim needs provenance MOST (see `restoration-methodology`), and
+  "cannot be determined from the binary" is the strongest negative claim in the
+  document. What genuinely cannot be read off the binary is the ROUNDING of the
+  blend, which is a driver property — that part of the original note stands.
 
 ---
 
