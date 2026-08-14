@@ -2905,3 +2905,50 @@ Cited so a port can close them without re-deriving:
 - Pass 1 never re-issues `glClientActiveTextureARB(GL_TEXTURE1)` /
   `glDisableClientState`, so unit 1's texcoord array stays enabled across the
   draw; harmless only because unit 1's `GL_TEXTURE_2D` is off.
+
+## 14. Texture-unit census — two units are enough, and three were wrong
+
+The port grew three samplers on the mesh shader: `uTex` (unit 0), `uTex1`
+(unit 1) and `uEnv` (a RIMG reflection). The engine has **two** texture units,
+and §4 says so in two places that were never read together:
+
+* mask 0x80 — the reflection is the surface's *only* texture, so the engine
+  binds it to unit **0** with `GL_SPHERE_MAP` (0x42bd1e: `setTexCount(1)`,
+  `setTexture(0, refl)`, `setTexGen(0, SPHERE_MAP)`);
+* mask 0x81 — a colour texture *and* a reflection, so the reflection goes to
+  unit **1** with `GL_ADD`;
+* masks 3 / 5 — a LUMI (`GL_ADD`) or DIFF (`GL_MODULATE`) texture, also on
+  unit **1**.
+
+So the reflection and the second texture are the SAME hardware slot, chosen by
+mask. A third sampler can only fire on a surface with both a DIFF/LUMI block
+and `REFL > 0.95` — a combination the hardware could not have drawn.
+
+Counted over every surface in the archive (all 50 `.lwo` files, 73 surfaces):
+
+| unit 0 | unit 1 | surfaces |
+|---|---|--:|
+| reflection (mask 0x80) | — | 29 |
+| colour | DIFF/LUMI texture | 21 |
+| colour | — | 16 |
+| colour | reflection (mask 0x81) | 6 |
+| — | — | 1 |
+| **anything** | **texture *and* reflection** | **0** |
+
+Nothing in the demo needs a third unit, and the surface that would have needed
+one does not exist. The extra sampler was not a harmless generalisation: it
+made the port *more permissive than the hardware*, which is the quiet kind of
+wrong — it renders, it just renders something no GeForce of the period could
+have produced.
+
+The census is `productions/lapsus/work/verify/texunits.mjs`; re-run it if the
+archive ever changes.
+
+### 14.1 Three UV sets, two units
+
+The mesh does legitimately carry three coordinate sets (`meshFromLayer`
+attaches slots 2, 3 and 4): COLR's projection, the second unit's, and the
+mask-7 second pass's own set for its LUMI texture (§4.5, §13.4). That is not a
+third unit — it is one unit sampling a different set on a later pass, which is
+`glClientActiveTexture`. minigl models it that way: a mesh holds N UV sets and
+each draw selects which sets feed unit 0 and unit 1.

@@ -723,7 +723,7 @@ test('mystified order map retains all 23 boundaries', () => {
   const times = envelopeTimes(envelope);
   assert.equal(times.length, 23);
   assert.equal(times[0], 0);
-  assert.equal(times.at(-1), 181.035);
+  assert.equal(times.at(-1), Math.fround(181.035));
 });
 
 test('envelope sampling clamps and uses the native cubic scalar/vector curves', () => {
@@ -742,6 +742,19 @@ test('envelope sampling clamps and uses the native cubic scalar/vector curves', 
   assert.equal(tcb.keys[0].tension, 0.25);
   assert.equal(tcb.keys[0].continuity, -0.5);
   assert.equal(tcb.keys[0].bias, 0.75);
+
+  // Wonder uses a duplicate 70.557 key to make an instantaneous pulse drop.
+  // The native search keeps the first duplicate at equality and advances to
+  // the second immediately afterwards.
+  const stepped = parseEnvelope(
+    'stepped\nt 0 v 0\nt 1 v 1\nt 1 v 0\nt 2 v 0\nEND\n',
+  );
+  assert.equal(sampleEnvelope(stepped, stepped.keys[1].time), 1);
+  assert.ok(Math.abs(sampleEnvelope(stepped, stepped.keys[1].time + 1e-6)) < 1e-5);
+
+  const rounded = parseEnvelope('rounded\nt 69.753 v 0.7\nt 70 v 1\nEND\n');
+  assert.equal(rounded.keys[0].time, Math.fround(69.753));
+  assert.equal(rounded.keys[0].value, Math.fround(0.7));
 });
 
 test('layered timeline preserves overlaps and layer order', () => {
@@ -761,6 +774,13 @@ test('layered timeline preserves overlaps and layer order', () => {
   ], { inclusiveEnd: true, float32Time: true });
   assert.deepEqual(native.active(69.753).map((clip) => clip.id), ['old', 'new']);
   assert.equal(native.clips[0].end, Math.fround(69.753));
+
+  const mixed = new LayeredTimeline([
+    { id: 'strict', start: 1, end: 2, inclusiveStart: false },
+    { id: 'inclusive', start: 1, end: 2, inclusiveEnd: true },
+  ]);
+  assert.deepEqual(mixed.active(1).map((clip) => clip.id), ['inclusive']);
+  assert.deepEqual(mixed.active(2).map((clip) => clip.id), ['inclusive']);
 });
 
 test('recovered master schedules retain compiled intervals and overlaps', () => {
@@ -785,12 +805,31 @@ test('recovered master schedules retain compiled intervals and overlaps', () => 
   assert.equal(ENERGIA_SCENE_CLIPS.length, 4);
   assert.equal(ENERGIA_PHASE_CLIPS.length, 17);
   assert.equal(ENERGIA_SHOW_END, 290);
-  const energia = new LayeredTimeline([...ENERGIA_PHASE_CLIPS, ...ENERGIA_SCENE_CLIPS]);
+  const energia = new LayeredTimeline(
+    [...ENERGIA_PHASE_CLIPS, ...ENERGIA_SCENE_CLIPS],
+    { float32Time: true },
+  );
   assert.deepEqual(energia.active(60).map((clip) => clip.id), [
     'main_effect_410f90', 'kurwa2_scene', 'freak_scene', 'compositor_mode_2',
   ]);
   assert.ok(energia.active(128).some((clip) => clip.id === 'effect_40f070'));
   assert.ok(energia.active(12).some((clip) => clip.id === 'effect_40f070_opening'));
+  assert.deepEqual(energia.active(0), []);
+  assert.deepEqual(energia.active(56).map((clip) => clip.id), [
+    'kurwa2_scene', 'freak_scene', 'compositor_mode_2',
+  ]);
+  assert.deepEqual(energia.active(82).map((clip) => clip.id), [
+    'main_effect_410f90', 'kurwa2_scene', 'kurwa_scene', 'freak_scene',
+  ]);
+  assert.deepEqual(energia.active(157).map((clip) => clip.id), [
+    'scene6_scene', 'overlay_413050',
+  ]);
+  // The native master clock is float32: a sub-ULP debug seek remains exactly
+  // on the strict boundary, just as it does in Energia_FIXED.exe.
+  assert.ok(!energia.active(56 + Number.EPSILON)
+    .some((clip) => clip.id === 'main_effect_410f90'));
+  assert.ok(energia.active(56.00001)
+    .some((clip) => clip.id === 'main_effect_410f90'));
   assert.deepEqual(energia.active(290), []);
 });
 

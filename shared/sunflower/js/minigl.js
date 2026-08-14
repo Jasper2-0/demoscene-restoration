@@ -1021,42 +1021,85 @@ export class MiniGL {
   // must be freed through deleteMesh rather than by the caller.
 
   /**
-   * @param {object} m  { positions, indices, normals?, uv0?, uv1? } — typed
-   *                    arrays. `indices` may be Uint16Array or Uint32Array.
+   * A buffer that outlives one mesh. Lapsus shares one position and one normal
+   * buffer across every surface group in a layer while each group carries its
+   * own UVs and indices; without this, createMesh would duplicate the shared
+   * geometry once per surface.
+   */
+  createBuffer(data, target = null) {
+    const gl = this.gl;
+    const t = target ?? gl.ARRAY_BUFFER;
+    const b = gl.createBuffer();
+    gl.bindBuffer(t, b);
+    gl.bufferData(t, data, gl.STATIC_DRAW);
+    return b;
+  }
+
+  /**
+   * Build a retained mesh.
+   *
+   * Every geometry field takes EITHER a typed array (a buffer is created and
+   * owned by the mesh) OR a buffer from createBuffer (borrowed, and never
+   * freed by deleteMesh).
+   *
+   * `uvs` is an ARRAY OF UV SETS, not one set per unit. A fixed-function mesh
+   * may carry more coordinate sets than there are texture units — Lapsus
+   * carries three, because a mask-7 surface's second additive pass projects
+   * its LUMI texture through its own set — and each draw chooses which set
+   * feeds which unit, exactly as glClientActiveTexture does.
+   *
+   * @param {object} m  { positions, indices, normals?, uvs? }
    */
   createMesh(m) {
     const gl = this.gl;
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    const attach = (data, loc, size) => {
-      if (!data || loc < 0) return null;
-      const b = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, b);
-      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    const owned = [];
+    const asBuffer = (v) => {
+      if (!v) return null;
+      if (!ArrayBuffer.isView(v)) return v;              // already a buffer
+      const b = this.createBuffer(v);
+      owned.push(b);
       return b;
     };
-    const pos = attach(m.positions, this.aPos, 3);
-    const nrm = attach(m.normals, this.aNormal, 3);
-    const uv0 = attach(m.uv0, this.aUV[0], 2);
-    const uv1 = attach(m.uv1, this.aUV[1], 2);
-    // Constant attributes for anything absent. enable/disable is VAO state, so
-    // it has to be set here rather than at draw time.
-    if (!m.normals && this.aNormal >= 0) gl.disableVertexAttribArray(this.aNormal);
-    if (!m.uv0 && this.aUV[0] >= 0) gl.disableVertexAttribArray(this.aUV[0]);
-    if (!m.uv1 && this.aUV[1] >= 0) gl.disableVertexAttribArray(this.aUV[1]);
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const point = (buf, loc, size) => {
+      if (!buf || loc < 0) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+    const pos = asBuffer(m.positions);
+    const nrm = asBuffer(m.normals);
+    const uvs = (m.uvs ?? []).map(asBuffer);
+    point(pos, this.aPos, 3);
+    point(nrm, this.aNormal, 3);
+    point(uvs[0], this.aUV[0], 2);
+    point(uvs[1] ?? uvs[0], this.aUV[1], 2);
+    // Constant attributes for whatever is absent. enable/disable is VAO state,
+    // so it belongs here and not at draw time.
+    if (!nrm && this.aNormal >= 0) gl.disableVertexAttribArray(this.aNormal);
+    if (!uvs[0] && this.aUV[0] >= 0) gl.disableVertexAttribArray(this.aUV[0]);
+    if (!uvs[0] && this.aUV[1] >= 0) gl.disableVertexAttribArray(this.aUV[1]);
     if (this.aColor >= 0) gl.disableVertexAttribArray(this.aColor);
 
-    const ib = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.indices, gl.STATIC_DRAW);
+    let ib = m.indices, count = m.count ?? 0, short = false;
+    if (ArrayBuffer.isView(m.indices)) {
+      short = m.indices instanceof Uint16Array;
+      count = m.indices.length;
+      ib = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.indices, gl.STATIC_DRAW);
+      owned.push(ib);
+    } else {
+      short = !!m.shortIndices;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    }
     gl.bindVertexArray(null);
     return {
-      vao, ib, pos, nrm, uv0, uv1,
-      count: m.indices.length,
-      type: m.indices instanceof Uint16Array ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
-      bytes: m.indices instanceof Uint16Array ? 2 : 4,
+      vao, ib, pos, nrm, uvs, owned, count,
+      sel: [0, 1],
+      type: short ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
+      bytes: short ? 2 : 4,
     };
   }
 
@@ -1073,22 +1116,38 @@ export class MiniGL {
     }
   }
 
-  /** Draw a retained mesh, or a range of it. */
-  drawMesh(mesh, count = mesh.count, offset = 0) {
+  /**
+   * Draw a retained mesh.
+   *
+   * `uvSets` picks which of the mesh's coordinate sets feeds unit 0 and unit 1
+   * for this draw. The selection is remembered on the mesh, so re-pointing
+   * costs two calls only when it actually changes.
+   */
+  drawMesh(mesh, { count = mesh.count, offset = 0, uvSets = null } = {}) {
     const gl = this.gl;
     this._applyCommonUniforms();
     // No per-vertex colours on a retained mesh: glColor drives the primary,
-    // the same as the array path's `colors === null` branch.
+    // matching the array path's `colors === null` branch.
     gl.uniform1i(this.uUseVertexColor, 0);
     gl.uniform4fv(this.uColor, this.curColor);
     gl.bindVertexArray(mesh.vao);
+    if (uvSets && (uvSets[0] !== mesh.sel[0] || uvSets[1] !== mesh.sel[1])) {
+      for (let u = 0; u < 2; u++) {
+        const buf = mesh.uvs[uvSets[u]] ?? mesh.uvs[0];
+        if (!buf || this.aUV[u] < 0) continue;
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.vertexAttribPointer(this.aUV[u], 2, gl.FLOAT, false, 0, 0);
+      }
+      mesh.sel = [uvSets[0], uvSets[1]];
+    }
     gl.drawElements(gl.TRIANGLES, count, mesh.type, offset * mesh.bytes);
     gl.bindVertexArray(null);
   }
 
+  /** Frees only what the mesh created; borrowed buffers are the caller's. */
   deleteMesh(mesh) {
     const gl = this.gl;
-    for (const b of [mesh.pos, mesh.nrm, mesh.uv0, mesh.uv1, mesh.ib]) if (b) gl.deleteBuffer(b);
+    for (const b of mesh.owned) gl.deleteBuffer(b);
     gl.deleteVertexArray(mesh.vao);
   }
 

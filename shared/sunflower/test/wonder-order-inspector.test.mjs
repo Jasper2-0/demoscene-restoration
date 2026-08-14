@@ -33,7 +33,7 @@ test('Wonder inspector reads the release XM order table', () => {
   assert.equal(xm.orders[21], 13);
   assert.equal(xm.orders[22], 14);
   assert.equal(xm.patternRows[13], 64);
-  assert.deepEqual(orderTimes.slice(-2), [172.578, 181.035]);
+  assert.deepEqual(orderTimes.slice(-2), [Math.fround(172.578), Math.fround(181.035)]);
 });
 
 test('Wonder inspector keeps order 21 active through F00 and ghosts order 22', () => {
@@ -41,10 +41,10 @@ test('Wonder inspector keeps order 21 active through F00 and ghosts order 22', (
   assert.equal(model.segments.length, 22);
   assert.equal(model.segments.at(-1).order, 21);
   assert.equal(model.segments.at(-1).pattern, 13);
-  assert.equal(model.segments.at(-1).start, 172.578);
+  assert.equal(model.segments.at(-1).start, Math.fround(172.578));
   assert.equal(model.segments.at(-1).end, WONDER_SHOW_END);
   assert.deepEqual(model.unreachable.map(({ order, pattern, nominalStart }) =>
-    [order, pattern, nominalStart]), [[22, 14, 181.035]]);
+    [order, pattern, nominalStart]), [[22, 14, Math.fround(181.035)]]);
 
   const held = locateXmOrder(model, 184);
   assert.equal(held.order, 21);
@@ -64,4 +64,3 @@ test('every scheduled Wonder asset is tied to a named inspector element part', (
     }
   }
 });
-

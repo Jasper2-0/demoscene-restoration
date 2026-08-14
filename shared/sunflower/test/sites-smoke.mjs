@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import puppeteer from '../../../work-ptct/js/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js';
+import puppeteer from 'puppeteer-core';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const screenshotDirectory = process.env.SUNFLOWER_SCREENSHOT_DIR;
@@ -208,7 +208,7 @@ try {
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('requestfailed', (request) => errors.push(`request failed: ${request.url()}`));
-    await page.goto(`http://127.0.0.1:${server.address().port}/web-ptct/?t=10&debug`,
+    await page.goto(`http://127.0.0.1:${server.address().port}/productions/ptct/web/?t=10&debug`,
       { waitUntil: 'networkidle0' });
     await page.waitForFunction('window.__ptctReady === true');
     const frame = await page.evaluate(() => {

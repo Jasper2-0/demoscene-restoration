@@ -189,12 +189,55 @@
   mgl.clear();
   const quad = mgl.createMesh({
     positions: new Float32Array([-1,-1,0,  1,-1,0,  1,1,0,  -1,1,0]),
-    uv0: new Float32Array([0,0, 1,0, 1,1, 0,1]),
+    uvs: [new Float32Array([0,0, 1,0, 1,1, 0,1])],
     normals: new Float32Array([0,0,1, 0,0,1, 0,0,1, 0,0,1]),
     indices: new Uint16Array([0,1,2, 0,2,3]),
   });
   mgl.drawMesh(quad);
   const retainedPixel = readCenter();
+
+  // A mesh may carry more UV sets than there are texture units, and the draw
+  // picks which set feeds which unit (glClientActiveTexture). Two sets sample
+  // opposite halves of a red|green texture, so swapping the selection swaps
+  // the colour — a difference no other state change here could produce.
+  const halves = mgl.createTextureFromData(
+    Uint8Array.of(255,0,0,255,  0,255,0,255), 2, 1);
+  mgl.activeTexture(0);
+  mgl.bindTexture(halves);
+  mgl.enableTexture(true);
+  mgl.texEnv({ mode: 'replace' });
+  // Positions and indices live in buffers the meshes BORROW, so two meshes can
+  // share one copy of the geometry — which is why createBuffer exists: Lapsus
+  // shares one position buffer across every surface group in a layer.
+  const sharedPos = mgl.createBuffer(new Float32Array([-1,-1,0,  1,-1,0,  1,1,0,  -1,1,0]));
+  const twoSets = mgl.createMesh({
+    positions: sharedPos,
+    uvs: [
+      new Float32Array([0.25,0.5, 0.25,0.5, 0.25,0.5, 0.25,0.5]),   // left: red
+      new Float32Array([0.75,0.5, 0.75,0.5, 0.75,0.5, 0.75,0.5]),   // right: green
+    ],
+    indices: new Uint16Array([0,1,2, 0,2,3]),
+  });
+  mgl.clear();
+  mgl.drawMesh(twoSets, { uvSets: [0, 1] });
+  const uvSetAPixel = readCenter();
+  mgl.clear();
+  mgl.drawMesh(twoSets, { uvSets: [1, 0] });
+  const uvSetBPixel = readCenter();
+
+  // Deleting a mesh must not free a buffer it only borrowed: this second mesh
+  // shares sharedPos, and is drawn AFTER the first is deleted.
+  const sharesGeometry = mgl.createMesh({
+    positions: sharedPos,
+    uvs: [new Float32Array([0.75,0.5, 0.75,0.5, 0.75,0.5, 0.75,0.5])],
+    indices: new Uint16Array([0,1,2, 0,2,3]),
+  });
+  mgl.deleteMesh(twoSets);
+  mgl.clear();
+  mgl.drawMesh(sharesGeometry);
+  const borrowedPixel = readCenter();
+  mgl.deleteMesh(sharesGeometry);
+  mgl.bindTexture(red);
 
   // GL_SEPARATE_SPECULAR_COLOR. The specular term is added AFTER the texture
   // stages, so under a `replace` env it must still survive: a red texture lit
@@ -236,6 +279,9 @@
     blend: { pixel: blendPixel, expected: [64, 0, 0, 255] },
     sourceColorBlend: { pixel: sourceColorBlendPixel, expected: [64, 64, 64, 255] },
     retained: { pixel: retainedPixel, expected: [255, 0, 0, 255] },
+    uvSetA: { pixel: uvSetAPixel, expected: [255, 0, 0, 255] },
+    uvSetB: { pixel: uvSetBPixel, expected: [0, 255, 0, 255] },
+    borrowedBuffer: { pixel: borrowedPixel, expected: [0, 255, 0, 255] },
     separateSpecular: { pixel: separateSpecularPixel, expected: [255, 255, 255, 255] },
     noMaterial: { pixel: noMaterialPixel, expected: [255, 0, 0, 255] },
   };
