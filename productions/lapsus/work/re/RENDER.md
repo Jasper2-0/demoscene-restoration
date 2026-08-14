@@ -1314,6 +1314,32 @@ specific things were not pinned down and should be, before anyone tries again:
 Recording the negative result rather than burying it: the algorithm is now
 known, and the reason we do not use it is measured, not assumed.
 
+---
+
+## 10.6 GLOS is absent on 46 of 73 surfaces — and 0 is NOT the default
+
+`main.js` uses `shine = 2^((GLOS ?? 0.2)*10 + 2)`, and the `?? 0.2` is an
+invented number. The parser only writes `surface[+0x30]` when it actually sees
+a `GLOS` tag (0x426dcd-0x426de8), so a surface without one keeps whatever the
+`LW::Surface` constructor left there.
+
+The obvious reading is zero — a zeroed field, and `GL_SHININESS 0` gives
+`(N.H)^0 = 1`, a flat full-strength highlight on every lit fragment. **Tested,
+and it is wrong**: kaivoalieni goes 0.690 -> **0.422** and nothing else moves.
+So `+0x30` is not zero-initialised.
+
+Only 5 of the 46 GLOS-less surfaces are both lit and `specular > 0`, so the
+blast radius is small either way — but kaivoalieni is one of them and it is
+decisive. The `?? 0.2` therefore stays as a flagged assumption that happens to
+behave, not a read value.
+
+**Not located:** the `LW::Surface` constructor and what it presets. The SURF
+parser's only documented preset is the seven `PROJ = 0` channel writes at
+0x426bc9; no store to `+0x30` appears anywhere in 0x426a90-0x426c40, and the
+five `[reg + 0x30]` immediate stores in the binary all belong to other structs.
+Finding that ctor would replace the last invented constant in the material
+path with a read one.
+
 ## 11. Hair and particles
 
 Both systems are driven by plain-ASCII config files, both are simulated on the
