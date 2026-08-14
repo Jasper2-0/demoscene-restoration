@@ -11,6 +11,45 @@
 // in Lapsus is spantype 0 = TCB (Kochanek-Bartels), and every envelope ends
 // `Behaviors 1 1` (pre/post = Reset). Evaluation lives in evalEnvelope().
 
+// LW_MorphMixer block body, per FUN_0041c080 @0x41c080. Token stream (the
+// engine reads whitespace-delimited tokens, not lines):
+//
+//   <int> <ngroups>
+//   ngroups x:  "{" "Group" <nmorphs> "<groupName>" "}"
+//               nmorphs x: "{" "MorfForm" "<name>" <int> { Envelope … } "}"
+//
+// The name is the MORF vmap name in the LWO; when the group is not
+// "Miscellaneous" the engine prefixes it with `<group>.` (@0x41c118), which no
+// shipped scene exercises — all five use "Miscellaneous".
+function parseMorphMixer(block) {
+  const morphs = [];
+  for (let j = 0; j < block.length; j++) {
+    if (!/^\{\s*MorfForm\b/.test(block[j])) continue;
+    const nm = block[j + 1]?.match(/"([^"]*)"/);
+    if (!nm) continue;
+    // find this MorfForm's "{ Envelope" and read its keys
+    let k = j + 2;
+    while (k < block.length && !/Envelope/.test(block[k])) k++;
+    const env = { keys: [], behaviors: [1, 1] };
+    for (k = k + 2; k < block.length; k++) {         // +2 skips the key count
+      const t = block[k].trim();
+      if (t.startsWith('Key ')) {
+        const n = t.slice(4).trim().split(/\s+/).map(Number);
+        env.keys.push({ v: n[0], t: n[1], span: n[2], ten: n[3], con: n[4], bia: n[5], p: n.slice(6) });
+      } else if (t.startsWith('Behaviors')) {
+        env.behaviors = t.split(/\s+/).slice(1).map(Number);
+      } else if (t === '}') break;
+    }
+    morphs.push({ name: nm[1], envelope: env });
+  }
+  return morphs;
+}
+
+// A morph is applied at all only when |weight| > 0.01 — FUN_0041be60 @0x41beb4
+// compares the envelope value against _DAT_0045ace0 = -0.01 and
+// _DAT_0045acdc = +0.01 and drops the target otherwise.
+export const MORPH_EPSILON = 0.01;
+
 export function parseLWS(text) {
   const lines = text.split(/\r?\n/);
   let i = 0;
@@ -81,12 +120,22 @@ export function parseLWS(text) {
         break;
       }
       case 'Plugin': {
-        // Only empty ".BRDF" MasterHandler stubs ship in Lapsus — consume to
-        // EndPlugin and keep the text in case that ever changes.
+        // Two kinds ship in Lapsus: empty ".BRDF" MasterHandler stubs, and
+        // **15 `DisplacementHandler 1 LW_MorphMixer` blocks** across
+        // kaivoalieni / made / higherbiing / silli / turska. The engine
+        // IMPLEMENTS the second one (`LW_MorphMixer`, `Morph map `,
+        // `LWException_MorphMapNotFound` and `Broken morph mixer in file ` are
+        // all string constants in Lapsus.exe; the LWS-side parser is
+        // FUN_0041c080 @0x41c080 and the per-frame apply is FUN_0041be60), so
+        // dropping the block into `unhandled` silently renders the base mesh.
+        // On silli that is not a subtle error: its four morph targets carry a
+        // MEAN displacement of ~8 units on an object 64 units across.
         const plug = [l];
         while (i < lines.length && !peek().trim().startsWith('EndPlugin')) plug.push(next().trim());
         next();
-        scene.unhandled.push(plug.join(' | '));
+        if (current && rest[0] === 'DisplacementHandler' && rest[2] === 'LW_MorphMixer')
+          current.morphs = parseMorphMixer(plug);
+        else scene.unhandled.push(plug.join(' | '));
         break;
       }
       case 'AmbientColor': scene.ambientColor = rest.map(Number); break;

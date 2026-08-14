@@ -592,3 +592,232 @@ DIFF → uv1, LUMI → the pass-1 side array), and give the pass-1 draw its own 
 buffer instead of reusing uv1. §13.4 lists four smaller pass-1 deviations
 (pass 1 modulates by `glColor`, is fogged, writes depth, uses the third UV
 set).
+
+## §14 Part diagnostics — silli / hedi / kartonki / morko (2026-08-14)
+
+(Numbered §14 because `RENDER.md` already carries a §13.)
+
+Baseline at the start of this pass — `node work/verify/allparts.mjs`,
+median **0.515**: silli **−0.147**, morko **0.290**, kartonki **0.319**,
+hedi **0.324**. After the two fixes below, median **0.580**:
+silli **0.580**, morko 0.346, kartonki **0.691**, hedi 0.458.
+
+Two causes account for all four parts, and both are rules the disassembly
+already settles. Neither was found by looking at the four parts in isolation —
+each one, once read out of the binary, turned out to hit a third of the archive.
+
+### §14.1 silli — CAUSE: `LW_MorphMixer` displacement is never applied
+
+The camera was ruled out first, as instructed, and it is innocent on every
+count: `silli.lws` has **one** `AddCamera`, it has **no** `ParentItem`, and
+`Part_Silli::vf2` @0x407e30 (RENDER.md §12.6) contains no camera manipulation
+at all — it is depth-clear, `fader.draw(0.8)`, `tick`, `render(getCamera(0))`.
+The zoom envelope is a single key (1.562) and was already parsed correctly.
+
+What is wrong is the **geometry**. `silli.lws` carries, inside its object
+block, a
+
+```
+Plugin DisplacementHandler 1 LW_MorphMixer
+4
+1
+{ Group  4  "Miscellaneous" }
+{ MorfForm "blo1" 1 { Envelope … } }   … blo2, blo3, blo4
+EndPlugin
+```
+
+and `YourOrdinaryDemoObuSecondEdition.lwo` carries the matching
+`VMAP MORF blo1..blo4`, 5136 entries each. **The engine implements this.**
+`Lapsus.exe` contains the strings `LW_MorphMixer`, `DisplacementHandler`,
+`Morph map `, `LWException_MorphMapNotFound` and `Broken morph mixer in file `;
+the LWS-side parser is `FUN_0041c080` @0x41c080 (dispatched from the scene
+reader's `Plugin` branch at ~0x4188xx after matching both `DisplacementHandler`
+and `LW_MorphMixer`), the delta cache is built by `FUN_0041ba90` and the
+per-frame apply is `FUN_0041be60`.
+
+`work/js/lws.mjs` was dropping the whole block into `scene.unhandled`, so the
+renderer drew the **base mesh**. That is not a subtle error here: the four
+morph targets have a *mean* displacement of **7.8–8.5 units** (max 17.3) on an
+object whose bounding box is 64 × 39 × 39, and `blo1` is at full weight at
+t = 0 while `blo4` peaks at t = 5. A shape change that large reads exactly like
+"the right object from the wrong viewpoint", which is why the camera looked
+guilty.
+
+**Semantics, from the asm** (`FUN_0041be60`, on the DROPPED list, so read from
+`disasm.asm`):
+
+- weight = the `MorfForm` envelope sampled at localTime, used **raw** (not /100);
+- a target is dropped unless **|w| > 0.01** — 0x41beb4 `FCOM [0x45ace0]`
+  (= −0.01) / `FCOM [0x45acdc]` (= +0.01);
+- composition is **additive over relative deltas**: 0x41bfd6–0x41c015 walks
+  `out = base + Σ w_i·delta_i`, one pointer per active target, striding
+  `numMorphs·12` bytes per vertex (allocation at 0x41bc1f is
+  `numMorphs · nVerts · 3` floats);
+- UVs are **not** recomputed — the engine bakes them at load from the raw
+  `PNTS` (RENDER.md §10.1), so they stay on the unmorphed positions.
+
+**Fix applied.** `work/js/lws.mjs` gained `parseMorphMixer()` (transcribed from
+FUN_0041c080's token order) + `MORPH_EPSILON`; `web/js/main.js`'s
+`meshFromLayer` collects the layer's `MORF` VMAPs and exposes `applyMorph()`,
+which rebuilds positions, re-accumulates normals and re-uploads both buffers;
+the render loop evaluates each item's morph envelopes once per frame. silli
+**−0.147 → 0.580**, and the side-by-side at t=4 now matches in silhouette,
+pose, tone and framing.
+
+**15 `LW_MorphMixer` blocks ship, across five scenes** — kaivoalieni, made,
+higherbiing, silli, turska — over six objects with `MORF` maps
+(`HigherBeingMM`, `YourOrdinaryDemoObu`, `YourOrdinaryDemoObuSecondEdition`,
+`elioelimetYksiMedMM`, `jakkaraMM`, `kekkuli2`). turska 0.898 → 0.914 and
+made 0.889 → 0.894 came from the same change.
+
+### §14.2 hedi / kartonki / morko — CAUSE: mask 0x80 puts the reflection on unit 0, where it MODULATES
+
+All three drew the right geometry from the right viewpoint and were simply
+**blown out white** (morko's side-by-side was structurally identical to the
+capture, just white instead of near-black). Every over-bright surface has the
+same shape: `REFL 1.0` + an `RIMG` clip and **no `BLOK` at all** —
+`nivel1/nivel1paaB/luppakorva` (`mechaenv.jpg`), `kartonki_01(_w)`
+(`Humans.jpg`), hedi's `metalli`/`linssi` (`CorridorTex.jpg`).
+
+That is texture **mask 0x80**, and RENDER.md §4.5/§13.2 already record what the
+engine does with it — the port just never implemented it. From the mask
+dispatch at **0x42bd1e**:
+
+```
+0042be1c  CALL 0x40c020(mat, 1)      ; mat[+0x3c] = 1        texture count
+0042be30  CALL 0x40c030(mat, 0, tex) ; mat[+0x40] = refl     UNIT 0
+0042be3f  CALL 0x40c040(mat, 0, 1)   ; mat[+0x4c] = 1        SPHERE_MAP texgen
+```
+
+and unit 0's env mode is unconditionally `GL_MODULATE` (§4.4 @0x40c231). So on
+these surfaces the sphere map **multiplies** the lit colour. `main.js` was
+instead treating every `REFL > 0.95` surface as the *unit-1* case (mask 0x81),
+adding an unscaled full-brightness texel on top of an already-white base — the
+one reading that cannot be undone by any coefficient.
+
+**26 of the archive's 73 surfaces are mask 0x80** (only 9 are the 0x81 form),
+so this was never a three-part problem.
+
+**Fix applied** (`main.js`): a reflection image with no other block binds to
+unit 0 with a `uTexGen0` sphere-map lookup and modulates; `envTex` (the
+additive unit-1 path) is suppressed for those surfaces. hedi 0.324 → 0.453,
+kartonki 0.319 → **0.705**, morko 0.290 → 0.346, and as a side effect
+diskojea 0.733 → 0.951, syrjakyla 0.515 → 0.747, turska 0.827 → 0.898,
+kaivoalieni 0.231 → 0.377, higherbiing −0.003 → 0.084.
+
+### §14.3 Found while measuring the above: `GL_AMBIENT` is (1,1,1), and lighting comes BEFORE the texture
+
+RENDER.md §13.2 rule 1 says the surface's `K` goes to `GL_DIFFUSE` only, "with
+`GL_AMBIENT = (1,1,1)` unconditionally". Verified in the bytes: the `SURF`
+builder stores `0x437f0000` = 255.0 into `material[+0x04/+0x08/+0x0c]` at
+**0x42b90b–0x42b937** with no condition, and `GL_EMISSION` (+0x10..0x18) is
+never written at all. So the lit primary colour is
+
+```
+Cf = 1·lightModelAmbient + K·Σ max(N·L,0)·lightColour
+```
+
+and the texture stages modulate **Cf**, ambient included. `main.js` was
+computing `K·(ambient + Σ)·tex`, i.e. attenuating the light-model ambient by
+the surface colour. Corrected in the fragment shader (primary colour first,
+then unit 0, then unit 1). Only affects scenes with `AmbientIntensity > 0`,
+but there it is large: kaivoalieni 0.377 → **0.704**, rad_out 0.175 → **0.536**,
+higherbiing 0.084 → **0.525**, viherio 0.479 → 0.558.
+
+### §14.4 What is left on these four, and what was excluded
+
+**Phase 2 renders ~0.2 s early — this caps every phase-2 part.** Sweeping our
+render time against a *fixed* reference frame (`scratchpad/sweep.mjs`, whole-
+frame luma) gives a sharp, consistent peak off nominal for **every** phase-2
+part tested and **none** for phase 1:
+
+| part | phase | r at nominal | best r | at |
+|---|---|---:|---:|---:|
+| hulluolli | 1 | **0.9987** | 0.9987 | +0.00 |
+| silli | 1 | **0.5802** | 0.5802 | +0.00 (±0.15 → ≈0.0) |
+| diskojea | 2 | 0.951 | 0.966 | +0.15 |
+| hedi | 2 | 0.459 | **0.793** | +0.15 |
+| morko | 2 | 0.346 | **0.512** | +0.25 |
+| kartonki | 2 | 0.691 | **0.837** | +0.30 |
+| turska | 2 | 0.914 | 0.939 | ≥+0.30 |
+
+Phase 1 peaks *exactly* on nominal at both ends of its quality range, so the
+transform chain and the envelope evaluation are not at fault. This is a
+**clock-origin error in phase 2**, common to all of its parts — most likely the
+gap between `FSOUND_StopSound` → `PlaySound(mp3#2)` → clock reset in
+`loadPhase(2)`, or a ~0.2 s error in the measured 106.96 s audio alignment.
+Deliberately **not** patched: NOTES.md's earlier `pene` episode is the standing
+warning against fudging the harness, and the right move is to re-measure the
+mp3#2 onset (the 10 ms log-energy correlation scored 0.88 there, so 20 bins of
+error is plausible) rather than to add a constant. Note the offset here is
+*constant across parts*, which is exactly what the `pene` offset was not.
+
+**hedi** — after the offset, 0.793. Residual mean level matches the capture
+(7.6 vs 7.9 at t=1.5), so brightness is now right. Also worth knowing when
+reading its score: hedi's slot is 3.0 s with a **2.0 s black fade-out**
+(ENGINE.md §5), so 2/3 of the part is inside a fade that `allparts.mjs` does
+not apply; correlation is scale-invariant so this does not change `r`, but it
+does mean the reference frame is heavily quantised and the estimator is noisy
+there. Ruled out for hedi: camera count (one), camera parenting (none — the
+`Null_Cam` *is* parented to camera 0 but nothing parents to the null, so it is
+inert), and object parenting (7 parented items, all resolving).
+
+**kartonki** — after the offset, 0.837. The remaining defect is brightness:
+mean 95.7 against the capture's 48.1, i.e. still **2× too bright**, and the
+capture shows a coloured (red-rimmed) disc where ours saturates to white. The
+suspect is **specular**, and two things about it are unverified rather than
+wrong-by-proof:
+  * `main.js` uses `shininess = GLOS × 128`, explicitly flagged as an
+    ASSUMPTION in its own comment; RENDER.md §4.5 reads the engine as
+    `shininess = surface[+0x30]` = raw `GLOS` (0.36/0.565 here), which in GL is
+    a legal but almost flat exponent;
+  * the engine's specular is **per-vertex** (fixed function) on 1813 triangles;
+    ours is per-pixel Blinn-Phong, which on blades that big is a much larger
+    highlight.
+  The specular *gate* was checked and ours is right — but note RENDER.md §4.5
+  mis-states it: the bytes at 0x42ca1b–0x42ca30 are
+  `lit AND (specularity > 0 **OR** surface[+0x48] != 0) AND |colour| > 0`, an
+  OR, not an AND (`surface[+0x48]` is the `SPEC` subchunk's envelope reference,
+  written at 0x427181, and is null for every shipped surface).
+  Excluded for kartonki: texture resolution (`Humans.jpg` resolves by basename
+  and binds — `texturedGroups` 2), object parenting (one parent link,
+  resolving), camera (single, unparented, static zoom 2.858).
+
+**morko** — after the offset, 0.512, and the side-by-side is now structurally
+indistinguishable from the capture. `r` stays low because the frame is ~95 %
+black, so the statistic is dominated by fine specular detail. Residual mean
+13.5 vs 10.6. Excluded: camera selection (three cameras, but `Part_Morko` uses
+the generic `vf2` and therefore `getCamera(0)`; `CurrentCamera 2` in the LWS is
+a LightWave *UI* field the engine never reads), camera parenting (none of the
+three has a `ParentItem`), and the 26 parented objects (all resolve; the
+geometry lines up).
+
+**silli** — 0.580 with the morph in. It is a frame-feedback part (depth-only
+clear + a 20 % black quad), and the single-frame harness replays a 0.5 s
+window rather than owning a real frame loop, so the trail is approximate by
+construction. Mean 39.6 vs 34.0; the capture is slightly greener, consistent
+with the `GreenMess1.jpg` sphere map.
+
+### §14.5 Regressions to look at
+
+`flu2` 0.688 → **0.639** and `paleksi` 0.547 → **0.518** both moved down with
+the mask-0x80 change, and both are built from mask-0x80 objects (`Mesh059`,
+`pallo_01`). flu2 is now visibly *darker* than the capture where it used to be
+brighter. The rule itself is read straight from 0x42bd1e and should not be
+reverted; the likely remainder is the same specular question as kartonki
+(`Mesh059` is `SPEC 0.105 / GLOS 0.525`, `pallo_01` `SPEC 0.205–0.785`), so
+settle `GLOS → GL_SHININESS` before touching anything else here.
+**`empt` is not reproducible and its number should not be quoted.** Two
+consecutive `allparts.mjs` runs with no code change between them gave
+**−0.013** and **0.850**. It has no `.lws` and no mask-0x80 surface, so nothing
+in this pass can have touched it; the swing is in the part itself. Its content
+is `Part_Empt::vf2`'s `rand()`-driven stamping replayed over a feedback window,
+so the suspect is the MSVC `rand()` stream being consumed a different number of
+times per run (the replay loop calls `renderAt` repeatedly and each call draws
+N stamps from the *shared* generator, so any variation in how many frames the
+harness lets through changes the whole pattern). Give it a per-frame seed
+derived from the frame index rather than one running stream, then re-score.
+Because of this, quote the median from the run in which the target parts were
+measured: **0.580** with `empt` at −0.013, or 0.639 with `empt` at 0.850. The
+four diagnosed parts were bit-identical across both runs (silli 0.580,
+kartonki 0.691, hedi 0.458, morko 0.346).

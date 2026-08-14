@@ -1040,6 +1040,13 @@ const bgVao = gl.createVertexArray();
   // ---- hair. `AddNullObject Hair_<name>` binds that null to
   // data/hairs/<name>.txt; every strand shares ONE root, the null's world
   // origin, so the animated nulls drive the hair purely by parenting.
+  //
+  // Part_Pehko sets the global `DAT_004a900c = 1` around its frame
+  // (RENDER.md §11.2.2), which suppresses Scene::render's hair pass entirely.
+  // The simulation still RUNS — Scene::update ticks it and Pehko reads the
+  // node positions to place its particle systems — but nothing is drawn. So
+  // this is a draw suppression, not a skip: the strands must still be stepped.
+  const hairSuppressed = /^pehko$/i.test(SCENE);
   const hairNodes = [];        // emitter positions for the particle systems
   for (const nullObj of scene.objects.filter((o) => /^Hair_/.test(o.name ?? ''))) {
     const name = nullObj.name.replace(/^Hair_/, '');
@@ -1052,8 +1059,15 @@ const bgVao = gl.createVertexArray();
     const root = [w[12], w[13], w[14]];
     const strands = simulate(buildStrands(h), root, h.gravity, T);
     const verts = toLines(strands, root);
-    if (/^pehko$/i.test(SCENE))
-      for (const st of strands) for (let i = 1; i < st.nodes.length; i++) hairNodes.push(st.nodes[i].pos);
+    // One system per node, over ALL nodes — the engine's loop is
+    // `for node in strand[+0x18..0x1c]` with no skip, so `HairCount 8` x
+    // `NodesPerHair 10` is 80 systems, not 72. Node 0 is the anchor, which
+    // the simulation never moves, so its world position is the root itself.
+    if (hairSuppressed)
+      for (const st of strands)
+        for (let i = 0; i < st.nodes.length; i++)
+          hairNodes.push(i === 0 ? root : st.nodes[i].pos);
+    if (hairSuppressed) continue;
     hairLines += verts.length / 6;
 
     gl.useProgram(hairProg);
