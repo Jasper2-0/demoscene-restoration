@@ -633,7 +633,11 @@ uniform vec4 uRect;                  // x, y, w, h in virtual 640x480 pixels
 out vec2 vUV;
 void main(){
   vec2 q = P[gl_VertexID];
-  vUV = vec2(q.x, 1.0 - q.y);
+  // NOT V-flipped: the engine's Picture quad maps the image top-to-bottom
+  // down the screen, so design1.tga's typography (which sits in the upper
+  // part of the image) lands at the BOTTOM of the quad — which is where the
+  // capture shows it.
+  vUV = q;
   vec2 px = uRect.xy + q * uRect.zw;
   gl_Position = vec4(px.x / 320.0 - 1.0, 1.0 - px.y / 240.0, 0., 1.);
 }`;
