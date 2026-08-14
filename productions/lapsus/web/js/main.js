@@ -17,6 +17,18 @@
 //   fovX       = 2·atan(1/zoom);  fovY = 0.75·fovX AS AN ANGLE
 //   frustum(±tan(fovX/2)·near, ±tan(0.375·fovX)·near, near, far), near=1 far=100
 //   frontFace(CW), cullFace(BACK)
+// Report MODULE-LEVEL failures too, not just ones inside the async body. The
+// shader sources are built at module scope, so a syntax error there — or a
+// stray backtick closing a template literal early — used to throw before the
+// try/catch at the bottom existed, leaving __lapsusReady unset and every
+// harness waiting out its full 30s timeout with no message. A 21-part scoring
+// run then reports 21 identical "Waiting failed" lines and says nothing about
+// the one-character cause.
+addEventListener('error', (e) => {
+  window.__lapsusError = String(e.message ?? e);
+  window.__lapsusReady = true;
+});
+
 import { parseLWS, evalEnvelope, MORPH_EPSILON } from '../../work/js/lws.mjs';
 import { parseLWO } from '../../work/js/lwo.mjs';
 import { decodeTGA } from '../../work/js/tga.mjs';
@@ -164,7 +176,14 @@ void main(){
   // mask-7 parts with FogType 1.
   vec3 pass1 = uColor * texture(uTex1, vUV2).rgb;
   vec3 n = normalize(vN);                       // GL_NORMALIZE equivalent
-  if (uTwoSided && !gl_FrontFacing) n = -n;
+  // NO back-face normal flip. GL_LIGHT_MODEL_TWO_SIDE (0x0b52) is never
+  // passed to glLightModel* anywhere in the binary, so it keeps its GL_FALSE
+  // default: the fixed-function pipeline lights every fragment with the
+  // front-face normal and never computes a back-face colour. A double-sided
+  // LWO surface (SIDE 3) therefore turns off CULLING only — its back faces
+  // are lit as if they were front faces, which is why they read as flat or
+  // wrongly-shaded in the capture rather than correctly shaded from behind.
+  // uTwoSided still drives gl.cullFace on the JS side; only the flip goes.
   // MASK 0x80 — a reflection image and NOTHING else. The engine binds the
   // sphere map to texture unit ZERO (0x42bd1e: setTexCount(1),
   // setTexture(unit 0, refl), setTexGen(unit 0, SPHERE_MAP)), and unit 0's env
@@ -216,7 +235,13 @@ void main(){
   // surface is lit and specularity > 0; the material specular is a grey of
   // that specularity.
   if (!uUnlit && uSpec > 0.0) {
-    vec3 V = -normalize(vP);                    // toward the viewer, eye space
+    // INFINITE VIEWER. GL_LIGHT_MODEL_LOCAL_VIEWER (0x0b51) is never passed to
+    // glLightModel* anywhere in the binary, so it keeps its GL_FALSE default
+    // and the fixed-function pipeline uses the constant eye vector (0,0,1)
+    // instead of the direction to each point. The half-vector is then constant
+    // across a surface for a given light, which is a visibly flatter and
+    // larger highlight than a local viewer gives.
+    vec3 V = vec3(0.0, 0.0, 1.0);
     for (int i = 0; i < MAXL; i++) {
       if (i >= uNumLights) break;
       vec3 H = normalize(uLightDir[i] + V);
