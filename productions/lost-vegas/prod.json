@@ -60,7 +60,8 @@
       "path": "productions/lost-vegas/work/reference/lostvegas_ref.webm",
       "format": "bestvideo+bestaudio",
       "sha256": "9de88cdcd72d4feb249271c888f3855397d90681c3cc804163b66e1311d6b606",
-      "alignmentOffsetMs": null,
+      "alignmentOffsetMs": 80,
+      "alignmentMethod": "read off the demo's OWN on-screen counter in sceneB (eff_b.js:285, n = round(ms*0.1) drawn as four decimal digits), not by correlation: two samples agree exactly at +80ms (pos 0x0610 ours 1920 vs ref 1840; pos 0x0629 ours 4920 vs ref 4840). See work/reference/NOTES.md for the third sample, which disagrees and is unexplained.",
       "note": "NOT the 2002 remix (9_zHem33lq4); ref_audio.raw = 11025 Hz mono s16le for cross-correlation"
     }
   ],
