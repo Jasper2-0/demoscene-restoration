@@ -1,10 +1,16 @@
 # demoscene-restoration
 
-Reverse-engineered browser reconstructions of classic demoscene productions —
-Dutch demoscene immaterial heritage work. Each restoration recovers *how the
-original works* from the shipped binary, documents that knowledge durably, and
-re-implements it in plain JavaScript + WebGL2 so it runs from static files with
-no plugins, no WebAssembly blobs, and no runtime dependencies.
+Reverse-engineered browser reconstructions of classic demoscene productions.
+Each restoration recovers *how the original works* from the shipped binary,
+documents that knowledge durably, and re-implements it in plain JavaScript +
+WebGL2 so it runs from static files with no plugins, no WebAssembly blobs, and
+no runtime dependencies.
+
+The project began as **Dutch demoscene immaterial heritage work**, and that is
+still most of what is here: Aardbei, threestate and Sunflower. The method turned
+out not to care about nationality, so it has since taken in work from elsewhere
+in the European scene — currently Maturefurk's *Lapsus* (Finland). Each
+production's origin is in its own `prod.json` and in the table below.
 
 The pipeline, the tooling lessons, and the reverse-engineering findings are in
 **[METHOD.md](METHOD.md)** — start there.
