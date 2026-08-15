@@ -39,6 +39,26 @@ export function sceneAt(pos) {
 }
 
 /**
+ * The musicPos at which `pos`'s scene BEGINS — the exclusive `until` of the
+ * scene before it, or 0 for the first.
+ *
+ * This is renderCold's start point, and choosing it right is half the fix. The
+ * old pre-roll in work/verify/compare.mjs began at a fixed `p - 0x120`, which
+ * for a short scene starts MID-SCENE (the entry reset never runs, so the
+ * integrators begin from whatever was there) and near a scene start lands in the
+ * PREVIOUS scene (firing an extra, spurious reset). A scene boundary is both
+ * semantically right — it is where the demo itself resets — and bounded.
+ */
+export function sceneEntryPos(pos) {
+  let from = 0;
+  for (const s of SCENES) {
+    if (pos < s.until) return from;
+    from = s.until;
+  }
+  return from;
+}
+
+/**
  * Order start times in seconds, measured from our own xm.js render, and the row
  * duration at the module's speed/BPM.
  *

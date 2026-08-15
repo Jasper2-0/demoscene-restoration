@@ -526,5 +526,30 @@ export function makeScene(ctx, variant = 0) {
     if (pos >= 0xb38) drawMoire(ms, pos);
   }
 
-  return { init, render };
+  /**
+   * REGISTRY PROTOCOL: restore the state a real playthrough has when it FIRST
+   * reaches this scene, so a cold render can start from a defined point.
+   *
+   * The distinction plan risk R2 warns about: this is NOT "call the original's
+   * reset". FUN_0040bf50 deliberately leaves spinX/spinY alone (:214-215), so
+   * clearing them models something the binary does not do — on a genuine REWIND
+   * the camera keeps its accumulated spin. But at FIRST ENTRY they are zero,
+   * because nothing has run yet, and first entry is what a cold render
+   * reproduces. So zero them here and let render() fire the authentic
+   * resetTimers() through its own entry path (:437) rather than duplicating
+   * that logic where it could drift.
+   *
+   * spinX/spinY are recoverable in closed form regardless: `spinX += (ms - t294)`
+   * with `t294 = ms` every frame (:450-452) telescopes to
+   * (ms - msAtEntry) * C_SPIN_RATE, independent of how many steps got there.
+   * blobS (:448) is the one that is not — nonlinear in dt plus a per-frame step
+   * — so a cold render has to walk the frames for it.
+   */
+  function reset(ms) {
+    spinX = 0; spinY = 0;
+    entered = false; lastPos = -1;
+    resetTimers(ms);
+  }
+
+  return { init, render, reset };
 }

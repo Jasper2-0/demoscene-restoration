@@ -11,7 +11,8 @@
 
 import { MiniD3D7, D3DTEX_MIPMAP } from './minid3d7.js';
 import { Kernel } from './kernel.js';
-import { sceneAt, normalizePos, POS_MAX, posToSeconds, SCENES, secondsToPos} from './timeline.js';
+import { sceneAt, normalizePos, POS_MAX, posToSeconds, SCENES, secondsToPos,
+         sceneEntryPos, ROW_SECONDS } from './timeline.js';
 import { buildRegistry } from './effects/registry.js';
 import { XmPlayer } from './xm.js';
 
@@ -167,6 +168,79 @@ if (DEBUG) {
     const s = renderAt(ctx, p, { ms: t, songMs: t, rowFrac });
     return { pos: p, scene: s ? s.id : null, ms: t, rowFrac };
   };
+
+  /**
+   * COLD RENDER: reset this scene, then walk to `pos` in MILLISECONDS at a fixed
+   * simulated cadence, one render per simulated frame.
+   *
+   * Three scenes integrate frame deltas, so `__lvRender(pos)` alone gives a
+   * frame that depends on whatever ran before it — which makes a sweep score
+   * unattributable after its first sample. This makes the history a declared,
+   * reproducible one instead of an accidental one.
+   *
+   * WHY MILLISECONDS AND NOT POSITION STRIDE. The old pre-roll stepped
+   * `q += 0x8`. Scene E's flash triggers on `(pos & 0x1f) in {0x14,0x16,0x17}`
+   * and multiples of 8 give {0,8,16,24}, so the trigger rows were never visited
+   * and the flash provably never fired in a pre-rolled frame. Stepping time and
+   * DERIVING the position from it visits every row the music visits, which fixes
+   * that by construction rather than by widening a stride until it works.
+   *
+   * CADENCE IS A DECLARED MODELLING ASSUMPTION, NOT A DERIVED FACT. Scene F
+   * consumes a per-frame delta directly and scene D's blobS is nonlinear in dt
+   * with a per-frame step, so their trajectories genuinely depend on frame rate
+   * — the ORIGINAL was framerate-dependent here. There is no cadence-independent
+   * answer to recover, so the honest move is to fix one, state it, and MEASURE
+   * the sensitivity (work/verify/repeat_test.mjs reports it rather than
+   * asserting it away).
+   */
+  const COLD_FPS = 60;
+  window.__lvRenderCold = (pos, opts = {}) => {
+    const fps = opts.fps ?? COLD_FPS;
+    const p = Math.min(POS_MAX, pos | 0);
+    const scene = sceneAt(p);
+    if (!scene) return { pos: p, scene: null, ms: 0, frames: 0, fps };
+
+    const entry = sceneEntryPos(p);
+    const t0 = (posToSeconds(entry) ?? 0) * 1000;
+    const t1 = (posToSeconds(p) ?? 0) * 1000;
+
+    // RESET EVERY SCENE, NOT JUST THIS ONE — because they are not independent.
+    // eff_d draws the scene-E overlay itself (`if (pos >= 0xb38) drawMoire(...)`)
+    // and its resetTimers comments eT0 as FUN_00409d8d's _DAT_00510200, i.e.
+    // eff_e's t0: in the original these scenes SHARE globals. Resetting only the
+    // scene at `pos` therefore leaves its partner holding whatever the previous
+    // sample left, which is exactly what ORDER kept reporting — and the tell was
+    // that D and E disagreed with DIFFERENT pairs of orderings, which a
+    // first-pass or warm-up effect cannot produce.
+    //
+    // Safe because reset() is defined as "the state at FIRST ENTRY", which is
+    // idempotent and is the state a cold render is entitled to assume.
+    for (const e of ctx.registry.values()) if (e.reset) e.reset(t0);
+    // REFUTED BY MEASUREMENT, 2026-08-15: also resetting the DEVICE to its boot
+    // state here (a minid3d7 resetState() restoring this.rs/this.tss from a
+    // construction-time snapshot) made ORDER go from 2/12 failing to 5/12, and
+    // broke `finale`, which had been clean. Scenes legitimately inherit device
+    // state that earlier scenes set, so restoring boot state models something
+    // the demo never does. This is plan risk R2 — a reset that clears too much
+    // is caught only by the numbers getting worse, never by the tests below.
+
+    // Step time, derive position. rowFrac comes from the measured row start, so
+    // scenes that need sub-row motion get a continuous clock here too rather
+    // than stepping at 8 Hz.
+    const stepMs = 1000 / fps;
+    let frames = 0;
+    for (let t = t0; t < t1 - 1e-6; t += stepMs) {
+      const q = secondsToPos(t / 1000);
+      const rowStart = (posToSeconds(q) ?? 0) * 1000;
+      const rf = Math.min(1, Math.max(0, (t - rowStart) / (ROW_SECONDS * 1000)));
+      renderAt(ctx, q, { ms: t, songMs: t, rowFrac: rf });
+      frames++;
+    }
+    // Land exactly on the requested instant, so the returned frame is the one
+    // asked for and not the last step before it.
+    const s = renderAt(ctx, p, { ms: t1, songMs: t1, rowFrac: 0 });
+    return { pos: p, scene: s ? s.id : null, ms: t1, frames, fps, entry };
+  };
   const posParam = params.get('pos');
   const start = posParam
     ? (posParam.startsWith('0x') ? parseInt(posParam, 16) : parseInt(posParam, 10))
@@ -226,7 +300,11 @@ if (DEBUG) {
     async render({ part, local }) {
       const b = BANDS.find((x) => x.name === part);
       if (!b) return null;
-      const info = window.__lvRender(secondsToPos(b.start + local));
+      // renderCold, not __lvRender: three scenes integrate frame deltas, so a
+      // plain seek returns a frame that depends on whatever the harness rendered
+      // before it. Cold makes the history declared and reproducible, which is
+      // what the contract's repeatability requirement actually asks for.
+      const info = window.__lvRenderCold(secondsToPos(b.start + local));
       lastState = { ...info, part, local, active: [info.scene ?? part],
                     posHex: '0x' + info.pos.toString(16).padStart(4, '0') };
       return lastState;
@@ -240,6 +318,23 @@ if (DEBUG) {
       return `order ${raw >> 8} row ${raw & 0xff}`;
     },
   };
+  // PRIME EVERY SCENE ONCE BEFORE DECLARING READY.
+  //
+  // With renderCold in place, REPEAT and ISOLATION passed but ORDER still failed
+  // on D and E — and the tell was that DESCENDING and SHUFFLED agreed with each
+  // other while only ASCENDING differed. Order dependence cannot do that; a
+  // first-pass effect can. Whatever a scene builds lazily on its first ever
+  // render (GL resources, cached geometry) is built during the ascending run and
+  // reused by the two after it, so the first pass measures a different thing.
+  //
+  // This is the same shape as lapsus's GL_SHININESS seeding: the fix is not to
+  // hunt each lazy allocation but to REPLAY until the state converges, so every
+  // measured render starts from the same place by construction rather than by
+  // luck. One render per scene is enough because the effect is first-use, not
+  // accumulating.
+  for (const b of BANDS) {
+    try { window.__lvRenderCold(secondsToPos(b.start + b.dur / 2)); } catch { /* keep priming */ }
+  }
   window.__demoReady = true;
 
   window.__lvReady = true;
