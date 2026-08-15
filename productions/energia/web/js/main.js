@@ -26,6 +26,12 @@ const status = document.querySelector('#status');
 const startButton = document.querySelector('#start');
 const parameters = new URLSearchParams(location.search);
 const fixedTime = parameters.has('t') ? Number(parameters.get('t')) : null;
+// ?inspect=1 installs the production-agnostic tooling adapter (window.__demo,
+// tools/inspect/ADAPTER.md) and hands every frame to the caller: no audio, no
+// click gate, no rAF loop. It is `?t=` without a time.
+const inspect = parameters.has('inspect');
+// Both modes skip the soundtrack, the AudioContext and the transport.
+const headless = fixedTime !== null || inspect;
 const debug = parameters.has('debug');
 
 async function loadBytes(url) {
@@ -100,7 +106,7 @@ try {
   });
   let clock = null;
   let playing = false;
-  if (fixedTime === null) {
+  if (!headless) {
     const audioUrl = assets.resolve('energia.mp3');
     if (!audioUrl) throw new Error('Energia soundtrack is absent from the asset manifest');
     const audio = new Audio(audioUrl.href);
@@ -243,8 +249,8 @@ try {
     renderAt(fixedTime ?? clock.timeSeconds());
     if (fixedTime === null) requestAnimationFrame(draw);
   };
-  requestAnimationFrame(draw);
-  window.__energiaReady = true;
+  // In inspect mode the tooling drives every frame, so there is no loop at all.
+  if (!inspect) requestAnimationFrame(draw);
   window.__energiaScene = fallback.scene;
   window.__energiaScenes = scenes;
   window.__energiaClock = clock;
@@ -261,6 +267,53 @@ try {
   window.__energiaOpeningDots = openingDots;
   window.__energiaSunflowerLogo = sunflowerLogo;
   window.__energiaRenderAt = renderAt;
+
+  // ---- INSPECTOR ADAPTER (tools/inspect/ADAPTER.md).
+  //
+  // Energia is the Sunflower sibling of wonder and takes the same shape: one
+  // continuous clock, a LAYERED timeline where several clips are live at once,
+  // and a renderAt() that takes ABSOLUTE show seconds. So a per-part score means
+  // "the whole frame while this clip was active", and state().active names
+  // everything that contributed rather than just the clip the sample is filed
+  // under.
+  //
+  // Both clip tables are exposed: ENERGIA_PHASE_CLIPS and ENERGIA_SCENE_CLIPS
+  // are deliberately not flattened into cuts (show-data.js), because the
+  // executable runs several of them in the same frame.
+  const CLIPS = [...ENERGIA_PHASE_CLIPS, ...ENERGIA_SCENE_CLIPS].map((clip) => ({
+    name: clip.id, start: clip.start, dur: clip.end - clip.start,
+    assets: clip.data?.assets ?? null,
+  }));
+  // Comparison offset from prod.json rather than a constant here, so a
+  // re-measured alignment does not need a code change. Null until measured.
+  let captureOffsetS = 0;
+  try {
+    const pj = await (await fetch(new URL('../../prod.json', import.meta.url))).json();
+    captureOffsetS = (pj.captures?.[0]?.alignmentOffsetMs ?? 0) / 1000;
+  } catch { /* no manifest reachable: schedule works, scores will not align */ }
+
+  let lastState = null;
+  window.__demo = {
+    id: 'energia',
+    schedule: () => CLIPS.map((c) => ({
+      name: c.name, phase: 1, start: c.start, dur: c.dur,
+      captureStart: c.start + captureOffsetS,
+    })),
+    // plan() intentionally omitted — tools/inspect/plan.mjs owns the grid.
+    async render({ part, local }) {
+      const c = CLIPS.find((x) => x.name === part);
+      if (!c) return null;
+      const info = renderAt(c.start + local);
+      lastState = { ...info, part, local, glError: mgl.gl ? mgl.gl.getError() : 0 };
+      return lastState;
+    },
+    state: () => lastState,
+    assets: (part) => CLIPS.find((x) => x.name === part)?.assets ?? null,
+  };
+  // Ready LAST, after __demo exists, so a harness waiting on either flag cannot
+  // race a half-built adapter. __energiaReady kept for its existing tools.
+  window.__demoReady = true;
+  window.__energiaReady = true;
 } catch (error) {
   status.textContent = error.message;
   throw error;
