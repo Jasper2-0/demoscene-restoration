@@ -7,6 +7,6 @@
     "productions/ptct/work/js"
   ],
   "scripts": {
-    "test:shared": "node --test shared/sunflower/test/"
+    "test:shared": "node --test \"shared/sunflower/test/*.test.mjs\""
   }
 }
