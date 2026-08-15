@@ -71,13 +71,13 @@
   ],
   "captures": [
     {
-      "youtube": "J6SM8MZ0pho",
+      "youtube": "JJ3TVjBjat4",
       "path": "productions/energia/work/reference/energia_ref.mkv",
-      "format": "bestvideo[height<=1080][fps>=50]+bestaudio",
-      "sha256": "bf99109d0917d45d5f80f85ddac9d8a06c6fd1f21989374895afe0c1a2e3caf8",
+      "format": "bestvideo+bestaudio",
+      "sha256": "2a8d249222c3c415f1a0a4e5760165b5c9b1bb3af002eeb29fb489f2147df3da",
       "alignmentOffsetMs": null,
-      "note": "SUPERSEDES JJ3TVjBjat4 (1080p at 30fps, 255s), which had no 60fps stream and so carried an irreducible 0-33ms frame phase against a 60fps-rendered port. J6SM8MZ0pho is 'Sunflower - Energia (2001) [60fps]' by DemosceneVids, 258s, uploaded 2015-02-02, offering 1440x1080 at 60fps (fmt 299). The fetched file reports r_frame_rate 19001/317 = 59.94, not a clean 60, and runs 258.108s. The format pin asks for 1080p60 rather than any larger stream because every comparison tool downscales to 640x480 - frame RATE was the deficiency, not resolution. alignmentOffsetMs stays null until measured against THIS file; the soundtrack still needs waveform alignment to the original 261.459s MP3, and note all three durations differ (MP3 261.459s, this capture 258s, the superseded one 255s), so the capture is not a complete recording and its tail must be checked before any sample there is trusted.",
-      "captureFps": 59.94
+      "note": "The 1080p/30fps capture, 255s. REVERTED here from J6SM8MZ0pho on 2026-08-15: that one advertises 60fps and I switched to it purely on frame rate, but Jasper watched it and it RENDERS THE DEMO WITH BUGS. Frame rate is a property of the recording; FIDELITY is a property of what was recorded, and an unfaithful 60fps capture is worthless as an oracle while a faithful 30fps one is not. No probe of the file would have caught this - only watching it. Consequence to keep in mind rather than fix: at 30fps against a 60fps-rendered port there is an irreducible 0-33ms frame phase, so sub-frame timing claims cannot be made from this capture; wonder's superseded capture had the same limit and its work/reference/README.md judged it 'unsuitable as a pixel-exact oracle' for that reason. Soundtrack still needs waveform alignment to the original 261.459s MP3; note the capture is 255s, so it does not cover the full show and its tail must be checked before any sample there is trusted.",
+      "captureFps": 30
     }
   ],
   "status": {
