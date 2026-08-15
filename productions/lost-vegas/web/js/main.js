@@ -189,17 +189,15 @@ if (DEBUG) {
   // MILLISECONDS from the scene-entry boundary, and an equivalence test) fixes
   // that. Run tools/inspect/repeatability.mjs before trusting a sweep.
   //
-  // BUT THAT AUDIT IS INCOMPLETE, in a way that changes the fix (#36).
-  // repeatability.mjs also fails sceneC, which the D/E/F audit called clean, and
-  // three consecutive renders give three DISTINCT hashes — so not lazy warm-up
-  // (that differs only on the 1st) and not buffer alternation (that has period
-  // 2). Yet eff_c has no integrator: its only `+=` is a local batch cursor, it
-  // consumes no RNG, its `ms` comes from posToSeconds, its subRow wall-clock
-  // fallback (eff_c.js:201) is unreachable while rowFrac is a number, renderAt
-  // is stateless (:143) and present clears TARGET|ZBUFFER (minid3d7.js:840).
-  // The carried state is therefore in the ENGINE layer, not the scene — so a
-  // reset(ms) on the SCENE protocol cannot fix sceneC, which has nothing to
-  // reset. Read #36 before writing 4c.
+  // THE AUDIT IS RIGHT, and confirming that cost an instrument fix (#36).
+  // repeatability.mjs first failed sceneC too, which reads exactly like a missed
+  // integrator. It is not one: the difference is RMSE 0.330 and CONSTANT across
+  // renders (r 0.999943), where sceneD's grows 3.53 -> 5.05 -> 6.05. Integrators
+  // ACCUMULATE; a constant sub-LSB difference is rasteriser nondeterminism. The
+  // fault was the test asserting on a SHA of the PNG, which cannot tell a few
+  // stray pixels from a demo that has lost its state. With a noise floor it now
+  // names D and E and clears C — matching the audit that read each scene for
+  // accumulation. ISOLATION passes; only ORDER and REPEAT fail, on D/E.
   const BANDS = [];
   {
     let from = 0;
