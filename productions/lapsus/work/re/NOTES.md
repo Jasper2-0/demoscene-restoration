@@ -670,6 +670,68 @@ higherbiing, silli, turska — over six objects with `MORF` maps
 `elioelimetYksiMedMM`, `jakkaraMM`, `kekkuli2`). turska 0.898 → 0.914 and
 made 0.889 → 0.894 came from the same change.
 
+### §14.1b silli, revisited 2026-08-15 — the MORPH FIX HELD; what is left is the TRAIL'S ECHO SPACING
+
+§14.1 is SOLVED and stays solved: the morph is applied and the geometry is
+right. At silli's worst instant the side-by-side matches in tube layout, curve
+and silhouette — the two frames are hard to tell apart until you magnify them.
+
+silli's remaining deficit is not uniform across the part. Swept at 0.4s
+(`sweep.mjs --parts=silli --step=0.4`):
+
+    0.36-3.36s   r 0.82 -> 0.97      first half, fine
+    3.79s on     0.688 0.886 0.915 0.769 0.638 0.615 0.685 0.754
+
+Good early, bad late, with mean luma tracking the reference throughout — so it
+is structural, not tonal.
+
+**What it is not** (each measured, not argued):
+
+- NOT timing. `phase.mjs silli 5.5 0.8 0.1` peaks at exactly +0.00s, r 0.5846
+  against a scan median of 0.0056. A sharper peak than flu2's.
+- NOT the trail LENGTH. `?fb=0.344` (the derived window), `?fb=0.7` and
+  `?fb=1.5` are byte-identical: under truncation the trail is already fully
+  reconstructed and more history adds nothing. `?fb=0` collapses to r 0.258 at
+  twice the reference brightness, so the trail is doing real work.
+- NOT the decay ROUNDING. This was the one fitted part of the feedback (the
+  keep factors are pinned — §7). `?accmode=round` was added to re-test it,
+  since the choice predates the phase-2 clock and the fade harness: r 0.5846 ->
+  0.5857 at 5.5s and 0.6151 -> 0.6175 at 5.925s. Neutral. Truncation stands.
+- NOT the morph envelopes' TCB parameters. silli's `MorfForm` keys carry
+  nonzero numbers, but they sit in the 4th/5th spline slots; for a TCB span
+  (type 0) tension/continuity/bias are slots 1-3 and those are all zero.
+
+**What it is.** Magnifying the banding makes it obvious: ours has MANY THIN,
+tightly spaced echoes where the capture has FEWER, THICKER, more widely spaced
+ones. Jasper described exactly this from the inspector before any of it was
+measured — "the feedback effect captures more frames than the reference (the
+reference captures a bigger timestamp)".
+
+Each retained frame is an echo of the object one step earlier, so echo spacing
+is (object speed) x (accumulation step). The speed is independently confirmed
+correct by the phase scan above. **So the spacing measures the ORIGINAL
+MACHINE'S FRAME PERIOD, and it is a much sharper instrument than
+`verify/hairdt.mjs`** — hair shape varies slowly with dt, but a wrong dt here
+puts the wrong NUMBER of bands in a still frame.
+
+**And yet it does not resolve the period.** `?fbdt=` was added to sweep it:
+
+    silli @5.5s    1/60 0.5846   1/50   -     1/40 0.6085   1/30 0.4255  1/25 0.4124
+    silli @5.925s  1/60 0.6151   1/50 0.6293  1/40 0.6215   1/30 0.5378
+    silli @2.075s  1/60 0.9507                1/40 0.9516                 (control)
+
+The two bad instants peak at DIFFERENT values (1/40 and 1/50), the margins are
+0.014-0.024, mean luma prefers 1/60 at every instant (19.0 vs ref 18.9 at 5.5s,
+rising to 23.0 by 1/20), and the good-region control is flat to 0.001. That is
+the same failure `hairdt.mjs` was twice corrected for — argmax on a nearly flat
+curve is not a measurement. **NOTHING ADOPTED; 1/60 stands.**
+
+This joins hairball (§ NOTES 2026-08-15) as the second part whose residual is
+bounded by not knowing the capture machine's cadence. Both are consistent with
+"slightly slower than 60Hz" and neither can pin it. Worth re-testing if a
+better instrument for the frame period ever appears — that, not silli itself,
+is now the blocking unknown.
+
 ### §14.2 hedi / kartonki / morko — CAUSE: mask 0x80 puts the reflection on unit 0, where it MODULATES
 
 All three drew the right geometry from the right viewpoint and were simply

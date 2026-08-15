@@ -69,6 +69,8 @@ const DRAW_OBJECTS = qs.get('objects') !== '0';
 // State, not a per-surface constant: it persists across draws AND across
 // frames, like the GL state it models. `?shinmodel=clamp` restores the previous
 // clamp-to-128 behaviour for A/B measurement.
+// Feedback decay rounding: 0 = truncate (the fitted default), 1 = round.
+const ACC_ROUND = qs.get('accmode') === 'round' ? 1 : 0;
 const SHIN_MODEL = qs.get('shinmodel') ?? 'carry';
 let shininessState = 0;                       // GL's initial GL_SHININESS
 function applyShininess(v) {
@@ -871,12 +873,26 @@ function drawPicture(tex, x, y, w, h, opacity, uv = null) {
 const ACC_VS = `#version 300 es
 const vec2 P[3] = vec2[3](vec2(-1.0,-1.0), vec2(3.0,-1.0), vec2(-1.0,3.0));
 void main(){ gl_Position = vec4(P[gl_VertexID], 0.0, 1.0); }`;
+// THE DECAY'S ROUNDING IS THE ONE PART OF THE FEEDBACK STILL FITTED.
+//
+// The keep FACTORS are pinned (Pehko 0.95 @0x407812, Silli 0.80 @0x407e43,
+// Empt 0.90 @0x40580c/0x405913 — RENDER.md §7). How the 2000-era back buffer
+// ROUNDED the blend is a driver property, is not in the binary, and was chosen
+// by matching the capture.
+//
+// The two candidates diverge exactly where a trail lives, at low values:
+//   truncate  keep=0.8:  2 -> 1 -> 0          the trail dies out
+//   round     keep=0.8:  2 -> 2 -> 2 ...      a permanent floor at 2
+// so this single choice decides whether faint history persists as a haze or is
+// erased. `?accmode=round` selects the other for A/B, because the measurement
+// that picked truncation predates the phase-2 clock, the fade harness and the
+// shininess work — a fitted choice made under confounds is worth re-testing.
 const ACC_FS = `#version 300 es
 precision highp float; out vec4 o;
-uniform sampler2D uSrc; uniform float uKeep;
+uniform sampler2D uSrc; uniform float uKeep; uniform float uRound;
 void main(){
-  vec3 c = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0).rgb;
-  o = vec4(floor(c * 255.0 * uKeep) / 255.0, 1.0);
+  vec3 c = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0).rgb * 255.0 * uKeep;
+  o = vec4(mix(floor(c), floor(c + 0.5), uRound) / 255.0, 1.0);
 }`;
 const BLIT_FS = `#version 300 es
 precision highp float; out vec4 o;
@@ -925,6 +941,7 @@ function accDecay(keep, clearDepth = true) {
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, acc.tex[src]);
   gl.uniform1i(gl.getUniformLocation(accProg, 'uSrc'), 0);
   gl.uniform1f(gl.getUniformLocation(accProg, 'uKeep'), keep);
+  gl.uniform1f(gl.getUniformLocation(accProg, 'uRound'), ACC_ROUND);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   if (clearDepth) gl.clear(gl.DEPTH_BUFFER_BIT);
   for (const u of [0, 1, 2, 3]) { gl.activeTexture(gl.TEXTURE0 + u); gl.bindTexture(gl.TEXTURE_2D, null); }
@@ -2051,7 +2068,23 @@ function accBlit() {
    */
   async function replay(part, T, win) {
     if (win) {
-      const dt = 1 / 60, n = Math.max(1, Math.round(win / dt));
+      // THE ACCUMULATION STEP IS THE ORIGINAL MACHINE'S FRAME PERIOD, and a
+      // feedback trail MEASURES it directly. Each retained frame is an echo of
+      // the object one step earlier, so the spacing between echoes is
+      // (object speed) x dt. The speed is fixed by the scene's envelopes and is
+      // independently confirmed correct — phase.mjs peaks at exactly +0.00s for
+      // silli against a scan median of 0.006 — so the spacing is a measurement
+      // of dt and nothing else.
+      //
+      // That makes this a far sharper instrument than verify/hairdt.mjs, which
+      // can only bound the period because hair shape varies slowly with it.
+      // Here a wrong dt is visible as the wrong NUMBER of bands in a still.
+      //
+      // `?fbdt=` overrides it. The window is derived from the step so the same
+      // number of frames is retained either way — what changes is how much
+      // TIME they span, which is the quantity under test.
+      const dt = Number(qs.get('fbdt')) || 1 / 60;
+      const n = Math.max(1, Math.round(win / (1 / 60)));
       const useAcc = part.fbAlpha != null;
       part.setAcc(useAcc);
       if (useAcc) accInit();
