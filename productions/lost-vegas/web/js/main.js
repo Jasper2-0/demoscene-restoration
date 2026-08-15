@@ -200,7 +200,10 @@ if (DEBUG) {
     const scene = sceneAt(p);
     if (!scene) return { pos: p, scene: null, ms: 0, frames: 0, fps };
 
-    const entry = sceneEntryPos(p);
+    // opts.from lets the equivalence test start the window EARLIER than the
+    // scene boundary. If reset() is complete, an earlier start must produce a
+    // byte-identical frame; where it does not, the test has found carried state.
+    const entry = opts.from !== undefined ? (opts.from | 0) : sceneEntryPos(p);
     const t0 = (posToSeconds(entry) ?? 0) * 1000;
     const t1 = (posToSeconds(p) ?? 0) * 1000;
 
