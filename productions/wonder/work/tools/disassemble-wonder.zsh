@@ -6,7 +6,7 @@ if (( $# != 2 )); then
   exit 2
 fi
 
-repo_root=${0:A:h:h:h}
+work_root=${0:A:h:h}
 start_address=$1
 stop_address=$2
 
@@ -15,4 +15,4 @@ stop_address=$2
 exec /usr/bin/objdump -d \
   --start-address="$start_address" \
   --stop-address="$stop_address" \
-  "$repo_root/work-wonder/src/wONDEr.exe"
+  "$work_root/src/wONDEr.exe"

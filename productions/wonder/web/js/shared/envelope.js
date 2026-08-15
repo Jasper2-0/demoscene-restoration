@@ -15,8 +15,11 @@ export function parseEnvelope(text, source = '<envelope>') {
     if (fields.length < 4) {
       throw new Error(`${source}:${index + 2}: malformed envelope key`);
     }
-    const time = Number(fields[1]);
-    const payload = fields.slice(3).map(Number);
+    // The native loaders at 0x404760/0x404a00 scan directly into 32-bit
+    // floats. Preserve that rounding so key-boundary comparisons use the same
+    // values as the executable.
+    const time = Math.fround(Number(fields[1]));
+    const payload = fields.slice(3).map((field) => Math.fround(Number(field)));
     if (!Number.isFinite(time) || !payload.length || payload.some((v) => !Number.isFinite(v))) {
       throw new Error(`${source}:${index + 2}: non-finite envelope value`);
     }

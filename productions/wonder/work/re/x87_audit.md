@@ -1,4 +1,4 @@
-# x87 audit — 61 flagged of 940 functions
+# x87 audit — 61 flagged of 954 functions
 
 Treat DROPPED as un-ported until the asm has been read (METHOD.md §3).
 

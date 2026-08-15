@@ -10,6 +10,13 @@ used to map objects and control flow; instruction bytes are checked for exact
 constants, float width/rounding, comparisons, and x87 stack order. See
 `ORACLE_WORKFLOW.md`.
 
+The paired 954-function export also closes the ENV parameter audit. Native
+loaders `0x404760`/`0x404a00` accept scalar/vector values with optional T/C/B;
+omitted fields are zero-initialized, every shipped ENV omits them, and all
+parsed fields are stored as float32. Segment searches `0x404f70`/`0x405960`
+keep equality on the preceding segment, preserving Wonder's duplicate-time
+`70.557` pulse step.
+
 | class | interval | principal retained data | implementation |
 |---:|---:|---|---|
 | `0x4106a0` | 0–22 | `beginning.exp`, alpha/exit ENV | recovered procedural pass |

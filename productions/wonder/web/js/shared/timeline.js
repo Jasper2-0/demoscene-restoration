@@ -3,8 +3,11 @@
  * within a layer; callers may opt into a native inclusive/float32 interval.
  */
 export class LayeredTimeline {
-  constructor(clips = [], { inclusiveEnd = false, float32Time = false } = {}) {
+  constructor(clips = [], {
+    inclusiveStart = true, inclusiveEnd = false, float32Time = false,
+  } = {}) {
     this.clips = [];
+    this.inclusiveStart = inclusiveStart;
     this.inclusiveEnd = inclusiveEnd;
     this.float32Time = float32Time;
     clips.forEach((clip) => this.add(clip));
@@ -16,6 +19,8 @@ export class LayeredTimeline {
       start: this.float32Time ? Math.fround(clip.start) : Number(clip.start),
       end: this.float32Time ? Math.fround(clip.end) : Number(clip.end),
       layer: Number(clip.layer ?? 0),
+      inclusiveStart: Boolean(clip.inclusiveStart ?? this.inclusiveStart),
+      inclusiveEnd: Boolean(clip.inclusiveEnd ?? this.inclusiveEnd),
       render: clip.render ?? null,
       data: clip.data ?? null,
       insertion: this.clips.length,
@@ -35,8 +40,10 @@ export class LayeredTimeline {
 
   active(time) {
     const current = this.float32Time ? Math.fround(time) : time;
-    return this.clips.filter((clip) => current >= clip.start
-      && (this.inclusiveEnd ? current <= clip.end : current < clip.end));
+    return this.clips.filter((clip) => (
+      (clip.inclusiveStart ? current >= clip.start : current > clip.start)
+      && (clip.inclusiveEnd ? current <= clip.end : current < clip.end)
+    ));
   }
 
   render(time, context) {

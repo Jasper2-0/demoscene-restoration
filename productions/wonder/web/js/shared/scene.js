@@ -13,12 +13,15 @@ function fromVector(value, kind) { return kind === 'scalar' ? value[0] : value; 
 function findSegment(keys, frame) {
   if (frame <= keys[0].time) return { index: 0, t: 0 };
   const last = keys.length - 1;
-  if (frame >= keys[last].time) return { index: last - 1, t: 1 };
+  if (frame > keys[last].time) return { index: last - 1, t: 1 };
   let low = 0;
   let high = last;
   while (low + 1 < high) {
     const middle = (low + high) >> 1;
-    if (keys[middle].time <= frame) low = middle;
+    // FUN_00404f70/FUN_00405960 advance while next.time < frame. Keeping
+    // equality on the preceding segment matters for duplicate-time ENV keys:
+    // the first value is sampled at the key, then the second takes over after.
+    if (keys[middle].time < frame) low = middle;
     else high = middle;
   }
   const duration = keys[low + 1].time - keys[low].time;

@@ -5,10 +5,10 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { envelopeTimes, parseEnvelope } from '../js/envelope.js';
-import { WONDER_EFFECT_METADATA } from '../../../productions/wonder/web/js/inspector-data.js';
+import { WONDER_EFFECT_METADATA } from '../../../productions/wonder/work/js/inspector-data.js';
 import {
   buildXmOrderTimeline, locateXmOrder, parseXmOrderTable,
-} from '../../../productions/wonder/web/js/order-timeline.js';
+} from '../../../productions/wonder/work/js/order-timeline.js';
 import { WONDER_EFFECT_CLIPS, WONDER_SHOW_END } from '../../../productions/wonder/web/js/show-data.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');

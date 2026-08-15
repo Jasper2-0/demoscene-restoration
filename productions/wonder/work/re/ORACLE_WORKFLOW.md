@@ -18,21 +18,26 @@ Every native-to-browser audit uses both views of the original code:
 The repeatable structural audit is:
 
 ```sh
-/bin/zsh work-wonder/tools/run-oracle-audit.zsh
+/bin/zsh productions/wonder/work/tools/run-oracle-audit.zsh
 ```
+
+The runner discovers executable targets stored in the native pointer tables,
+then refreshes `oracle-audit.txt`, the paired `decompiled.c`/`disasm.asm`
+exports, and `x87_audit.md` in one pass. This keeps callback-only render
+functions in the same mechanical audit as directly called code.
 
 It keeps Ghidra's mutable home under `/private/tmp`, so it runs within the
 workspace permission boundary. An instruction range can be inspected without a
 Ghidra launch:
 
 ```sh
-/bin/zsh work-wonder/tools/disassemble-wonder.zsh 0x4107d0 0x410900
+/bin/zsh productions/wonder/work/tools/disassemble-wonder.zsh 0x4107d0 0x410900
 ```
 
 Constants referenced by those instructions can be read as literal file bytes:
 
 ```sh
-/bin/zsh work-wonder/tools/dump-wonder-bytes.zsh 0x4334f8 0x433500
+/bin/zsh productions/wonder/work/tools/dump-wonder-bytes.zsh 0x4334f8 0x433500
 ```
 
 Ghidra can omit functions reached only through stored callback pointers. Force
@@ -41,8 +46,8 @@ discovery and decompile one or more exact addresses with:
 ```sh
 JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
   /opt/homebrew/Cellar/ghidra/12.1.2/libexec/support/analyzeHeadless \
-  work-wonder/ghidra-project Wonder -process wONDEr.exe \
-  -scriptPath work-wonder/ghidra \
+  productions/wonder/work/ghidra-project Wonder -process wONDEr.exe \
+  -scriptPath tools/ghidra \
   -postScript DecompileAt.java /private/tmp/wonder-targeted.c \
   0040e490 0040e9d0
 ```
@@ -66,7 +71,7 @@ pixel comparison captures every indexed boundary/midpoint, computes SSIM, and
 writes reference/port/amplified-difference montages plus a worst-first report:
 
 ```sh
-node work-wonder/tools/compare-reference.mjs /path/to/wonder-reference.mp4
+node productions/wonder/work/tools/compare-reference.mjs /path/to/wonder-reference.mp4
 ```
 
 Pass `--times=10,11.681` (or set `WONDER_COMPARE_TIMES`) for a quick targeted
