@@ -8,7 +8,7 @@
 // layer clocks and one-shot triggers behave as if played through.
 
 import { MiniGL } from './minigl.js';
-import { parseScript, Timeline } from './timeline.js';
+import { parseScript, Timeline, OP_SHOW, OP_SHOW2 } from './timeline.js';
 import { SyncMap } from './sync.js';
 import { Renderer } from './scene.js';
 import { buildRegistry } from './effects/registry.js';
@@ -17,7 +17,11 @@ import { LoadingScreen, loadAssetsTracked } from './loader.js';
 const canvas = document.getElementById('screen');
 const overlay = document.getElementById('overlay');
 const params = new URLSearchParams(location.search);
-const DEBUG = params.has('debug') || params.has('t');
+// ?inspect=1 installs the production-agnostic tooling adapter (window.__demo,
+// tools/inspect/ADAPTER.md). It joins the existing debug path, which already
+// loads no audio, builds no click gate and runs no rAF loop.
+const INSPECT = params.has('inspect');
+const DEBUG = params.has('debug') || params.has('t') || INSPECT;
 
 async function loadAssets() {
   const [scriptBuf, syncJson] = await Promise.all([
@@ -171,8 +175,83 @@ if (DEBUG) {
     for (const [id, eff] of ctx.registry) { const p = eff.probe?.(); if (p) out[id] = p; }
     return out;
   };
+  // ---- INSPECTOR ADAPTER (tools/inspect/ADAPTER.md).
+  //
+  // ptct's parts are the script's SHOW spans, and they are LAYERED — several
+  // effects are on screen at once — so a per-part score means "the whole frame
+  // while this effect was shown", and state() reports the layer it sat on.
+  //
+  // Spans are in MUSIC POSITION (order, row) and the schedule is in seconds, so
+  // SyncMap.secondsAt bridges them. Same shape as sonnet's positionToSeconds:
+  // a third production whose native coordinate is musical rather than temporal.
+  const SHOWS = parseScript(assets.scriptBuf)
+    .filter((ev) => ev.opcode === OP_SHOW || ev.opcode === OP_SHOW2)
+    .map((ev) => {
+      const start = ctx.sync.secondsAt(ev.startOrder, ev.startRow);
+      return { id: ev.effectId, layer: ev.layer, start,
+               dur: Math.max(0.1, ctx.sync.secondsAt(ev.b4, ev.b5) - start) };
+    })
+    .sort((a, b) => a.start - b.start);
+  // Names are effect ids in hex, matching the source filenames (eff0a, eff12,
+  // ...) so a finding points straight at a module. An id shown more than once
+  // gets an index rather than a duplicate name.
+  {
+    const seen = new Map();
+    for (const sh of SHOWS) {
+      const base = 'eff' + sh.id.toString(16).padStart(2, '0');
+      const n = (seen.get(base) ?? 0) + 1;
+      seen.set(base, n);
+      sh.name = n > 1 ? `${base}_${n}` : base;
+    }
+  }
+  // Comparison offset from prod.json rather than a constant, so a re-measured
+  // alignment needs no code change.
+  let CAP_OFFSET = 0;
+  try {
+    const pj = await (await fetch(new URL('../../prod.json', import.meta.url))).json();
+    CAP_OFFSET = (pj.captures?.[0]?.alignmentOffsetMs ?? 0) / 1000;
+  } catch { /* no manifest reachable: schedule works, scores will not align */ }
+
+  let lastState = null;
+  window.__demo = {
+    id: 'ptct',
+    schedule: () => SHOWS.map((sh) => ({
+      name: sh.name, phase: 1, start: sh.start, dur: sh.dur,
+      captureStart: sh.start + CAP_OFFSET,
+    })),
+    // plan() intentionally omitted — tools/inspect/plan.mjs owns the grid.
+    async render({ part, local }) {
+      const sh = SHOWS.find((x) => x.name === part);
+      if (!sh) return null;
+      const info = window.__ptctSeek(sh.start + local);
+      lastState = { ...info, part, local, layer: sh.layer,
+                    effectId: '0x' + sh.id.toString(16) };
+      return lastState;
+    },
+    state: () => lastState,
+    assets: () => null,
+    /** Musical coordinate — ptct thinks in order/row, like sonnet. */
+    positionAt(showTime) {
+      const p = ctx.sync.pos(Math.max(0, showTime - CAP_OFFSET));
+      return `order ${p.order} row ${p.row}`;
+    },
+  };
+  window.__demoReady = true;
+
+  // KNOWN LIMITATION, do not read sweep scores for ptct as fidelity yet. The
+  // contract assumes the canvas IS the frame. ptct's is not: it sizes to the
+  // viewport (960x960 square under the harness) and letterboxes the image
+  // inside it, so downscaling to the comparison's 640x480 squeezes our content
+  // against a full-frame reference. A first sweep scored median r 0.1405 while
+  // the frames plainly show the same scene at the same moment — the geometry,
+  // not the port. ?aspect=classic reaches the page but does not resolve it.
+  //
+  // Fixing it means either giving the page a 4:3 viewport whose canvas matches
+  // the capture, or teaching the comparison layer to crop to the drawn band.
+  // The second is the more general answer and belongs in tools/inspect.
   window.__ptctReady = true;
-  window.__ptctSeek(t0);
+  // In inspect mode the tooling drives every frame; do not render one up front.
+  if (!INSPECT) window.__ptctSeek(t0);
 } else {
   // the preloader removed the original overlay; re-create the click gate
   // (browser autoplay policy needs a gesture before audio can start)
