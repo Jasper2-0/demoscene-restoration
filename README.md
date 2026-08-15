@@ -16,8 +16,9 @@ The pipeline, the tooling lessons, and the reverse-engineering findings are in
 | [please the cookie thing](productions/ptct/) | Aardbei | 2000 | OpenGL 1.1 | [published](https://jasper2-0.github.io/ptct-webgl/) |
 | [lost vegas](productions/lost-vegas/) | threestate | 2000 | Direct3D 7 | [published](https://jasper2-0.github.io/lost-vegas-webgl/) |
 | [sonnet](productions/sonnet/) | threestate | 2001 | Direct3D 8 | engineering (readable + 64k builds) |
-| [wonder](productions/wonder/) | Sunflower | 1999 | software/DOS | engineering |
+| [wonder](productions/wonder/) | Sunflower | 1999 | OpenGL FF | engineering |
 | [energia](productions/energia/) | Sunflower | 2001 | OpenGL FF | engineering |
+| [lapsus](productions/lapsus/) | Maturefurk | 2000 | OpenGL 1.x FF | engineering |
 | [tesla](productions/tesla/) | Sunflower | 2000 | — | evidence (source-lineage study) |
 
 Each production directory holds `prod.json` (provenance: demozoo/pouet ids,
