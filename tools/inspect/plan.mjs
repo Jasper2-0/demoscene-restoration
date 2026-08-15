@@ -53,3 +53,22 @@ export function defaultPlan(schedule, step = 2) {
   }
   return out;
 }
+
+/**
+ * A part name safe to put in a FILENAME.
+ *
+ * Part names are human-facing and a production may use whatever reads best:
+ * sonnet's are prose ("title / poem only", "scene 2 — trees/butterflies"). The
+ * sweep writes one PNG per sample named after the part, so a slash silently
+ * became a directory separator and the write failed with ENOENT several hundred
+ * renders in. lapsus and wonder never exposed it because their names are
+ * identifier-like (flu2, effect_40c760) — a third adopter with readable names
+ * was needed to find it.
+ *
+ * Collapses anything outside [A-Za-z0-9._-] so two different names cannot
+ * collide on the same file.
+ */
+export const safePart = (name) => String(name)
+  .replace(/[^\w.-]+/g, '_')
+  .replace(/^_+|_+$/g, '')
+  .slice(0, 80) || 'part';

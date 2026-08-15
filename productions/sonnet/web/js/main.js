@@ -860,7 +860,16 @@ if (HEADLESS) {
   //     contract's repeatability requirement without any change — and it is why
   //     97-99% of a sample's cost is the replay rather than the draw. Use a
   //     coarser --step here than for the Sunflower ports.
-  const REF_OFFSET = 0;   // prod.json alignmentOffsetMs, once measured
+  // Capture alignment comes from prod.json, not a constant here. It was
+  // REF_OFFSET = 2.43 duplicated in web/test/sweep.mjs AND web/test/capture.mjs
+  // — a measured value with two copies free to drift. SETTLE_MS is added because
+  // __sonnetRender settles half a row past the position it is given, so the
+  // frame on screen is that much later than the position implies.
+  let REF_OFFSET = 0;
+  try {
+    const pj = await (await fetch(new URL('../../prod.json', import.meta.url))).json();
+    REF_OFFSET = ((pj.captures?.[0]?.alignmentOffsetMs ?? 0) + SETTLE_MS) / 1000;
+  } catch { /* no manifest reachable: schedule still works, scores will not align */ }
   const BANDS = SCENE_BANDS.map((b) => {
     const start = positionToSeconds(b.from);
     return { name: b.name, obj: b.obj, from: b.from, to: b.to,

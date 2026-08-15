@@ -41,7 +41,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { withPage, fromRepo } from '../harness/index.mjs';
-import { defaultPlan } from './plan.mjs';
+import { defaultPlan, safePart } from './plan.mjs';
 import { W, H, N, grayOf, corr, rmse, meanOf, classify } from './compare.mjs';
 
 const argv = process.argv.slice(2);
@@ -167,7 +167,7 @@ await withPage(
         const info = await window.__demo.render(sm);
         return { png: document.querySelector('canvas').toDataURL('image/png'), info };
       }, s);
-      const ours = path.join(FRAMES, `ours${suffix}_${s.part}_${s.local}.png`);
+      const ours = path.join(FRAMES, `ours${suffix}_${safePart(s.part)}_${s.local}.png`);
       fs.writeFileSync(ours, Buffer.from(dataUrl.png.split(',')[1], 'base64'));
       const a = grayOf(ours), b = grayOf(refFrame(s.captureTime));
       samples.push({
