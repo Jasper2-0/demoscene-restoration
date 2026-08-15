@@ -40,6 +40,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { withPage, fromRepo } from '../harness/index.mjs';
+import { defaultPlan } from './plan.mjs';
 
 const argv = process.argv.slice(2);
 const prodName = argv.find((a) => !a.startsWith('--'));
@@ -138,7 +139,16 @@ await withPage(
     if (!has) throw new Error(
       `${prodName} does not expose window.__demo — see tools/inspect/ADAPTER.md`);
 
-    let plan = await page.evaluate((s) => window.__demo.plan(s), STEP);
+    // THE SAMPLE GRID IS THE SWEEP'S, NOT THE PRODUCTION'S. It used to be
+    // copy-pasted into every adapter, which made the five-sample floor — a
+    // correctness property — something that could drift silently between ports
+    // until two of them disagreed about which part was worst. `plan()` is now an
+    // optional override for a genuinely irregular timeline; tools/inspect/
+    // plan-identity.mjs asserts the default reproduces what the copies produced.
+    const hasOwnPlan = await page.evaluate(() => typeof window.__demo.plan === 'function');
+    let plan = hasOwnPlan
+      ? await page.evaluate((s) => window.__demo.plan(s), STEP)
+      : defaultPlan(await page.evaluate(() => window.__demo.schedule()), STEP);
     if (ONLY) plan = plan.filter((p) => ONLY.includes(p.part));
 
     // A SAMPLE PAST THE END OF THE CAPTURE HAS NO REFERENCE, AND THAT IS NOT AN

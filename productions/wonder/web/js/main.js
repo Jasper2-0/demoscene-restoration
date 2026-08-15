@@ -426,21 +426,10 @@ try {
       name: c.name, phase: c.phase, start: c.start, dur: c.dur,
       captureStart: c.start + captureOffsetMs / 1000,
     })),
-    plan(step = 2) {
-      const out = [];
-      for (const c of CLIPS) {
-        // Same floor as the Lapsus adapter and work/verify/allparts.mjs: three
-        // samples cannot show a spread, and Wonder's clips run from 2.5s to
-        // 22s, so short ones would otherwise be judged on a single frame.
-        const n = Math.max(5, Math.floor((c.dur - 0.5) / step));
-        for (let i = 0; i < n; i++) {
-          const local = +((i + 0.5) / n * (c.dur - 0.3) + 0.15).toFixed(3);
-          out.push({ part: c.name, phase: 1, local,
-                     captureTime: +(c.start + local + captureOffsetMs / 1000).toFixed(3) });
-        }
-      }
-      return out;
-    },
+    // plan() intentionally omitted: the sample grid lives in
+    // tools/inspect/plan.mjs so the five-sample floor cannot drift between
+    // productions. Supply plan() here only to OVERRIDE it, and keep
+    // tools/inspect/plan-identity.mjs passing so the override stays deliberate.
     async render({ part, local }) {
       const c = CLIPS.find((x) => x.name === part);
       if (!c) return null;

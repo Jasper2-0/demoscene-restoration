@@ -13,6 +13,8 @@
 // Neither could take you from "this part scores 0.54" to "…and here is the
 // frame, here is the original, and here is what the renderer thought it was
 // drawing" without a human copying timestamps between two tools.
+import { defaultPlan } from '../plan.mjs';
+
 const qs = new URLSearchParams(location.search);
 const PROD = qs.get('prod') ?? 'lapsus';
 const TAG = qs.get('tag') ?? '';
@@ -89,7 +91,12 @@ async function refreshTracker() {
 await refreshTracker();
 if (!state.samples.length) {
   // No sweep on disk: still usable as a scrubber, just without scores.
-  state.samples = demo.contentWindow.__demo.plan(2)
+  //
+  // Uses the SAME grid the sweep would, via the shared default, so scrubbing an
+  // unswept production lands on the instants a sweep would later score.
+  // `plan()` is now an optional adapter override, so honour it when present.
+  const d = demo.contentWindow.__demo;
+  state.samples = (typeof d.plan === 'function' ? d.plan(2) : defaultPlan(d.schedule(), 2))
     .sort((a, b) => a.captureTime - b.captureTime);
 }
 
