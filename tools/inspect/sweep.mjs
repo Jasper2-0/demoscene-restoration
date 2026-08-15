@@ -127,6 +127,11 @@ await withPage(
     // optional override for a genuinely irregular timeline; tools/inspect/
     // plan-identity.mjs asserts the default reproduces what the copies produced.
     const hasOwnPlan = await page.evaluate(() => typeof window.__demo.plan === 'function');
+    // The sub-rect of the canvas the page actually draws, if it declares one.
+    const FRAME_RECT = await page.evaluate(() => window.__demo.frameRect?.() ?? null);
+    if (FRAME_RECT) console.log(`  frameRect ${FRAME_RECT.w}x${FRAME_RECT.h} at ` +
+      `${FRAME_RECT.x},${FRAME_RECT.y} — cropping our frames to the drawn band`);
+
     let plan = hasOwnPlan
       ? await page.evaluate((s) => window.__demo.plan(s), STEP)
       : defaultPlan(await page.evaluate(() => window.__demo.schedule()), STEP);
@@ -169,7 +174,7 @@ await withPage(
       }, s);
       const ours = path.join(FRAMES, `ours${suffix}_${safePart(s.part)}_${s.local}.png`);
       fs.writeFileSync(ours, Buffer.from(dataUrl.png.split(',')[1], 'base64'));
-      const a = grayOf(ours), b = grayOf(refFrame(s.captureTime));
+      const a = grayOf(ours, FRAME_RECT), b = grayOf(refFrame(s.captureTime));
       samples.push({
         ...s, ours,
         r: +corr(a, b).toFixed(4),

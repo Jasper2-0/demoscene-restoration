@@ -42,7 +42,7 @@ await withDemo(prodName, extra, async (api) => {
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', ours, '-i', ref,
     '-filter_complex', '[0:v][1:v]hstack=inputs=2', sbs]);
 
-  const s = scorePair(ours, ref);
+  const s = scorePair(ours, ref, api.frameRect);
   console.log(`${prodName}/${part}  local ${local}s   capture ${t.toFixed(3)}s`);
   if (info) console.log('  ' + JSON.stringify(info));
   console.log(`  r ${s.r.toFixed(4)}   RMSE ${s.rmse.toFixed(2)}   luma ${s.meanOurs.toFixed(1)} vs ${s.meanRef.toFixed(1)}`);

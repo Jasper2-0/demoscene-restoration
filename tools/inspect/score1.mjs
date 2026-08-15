@@ -27,7 +27,7 @@ const cap = captureOf(prodName);
 await withDemo(prodName, extra, async (api) => {
   const t = api.captureTime(part, local);
   const { pngPath, info } = await api.render(part, local);
-  const s = scorePair(pngPath, refFrame(prodName, cap.file, t));
+  const s = scorePair(pngPath, refFrame(prodName, cap.file, t), api.frameRect);
 
   console.log(`  ${prodName}/${part} @${local}s  ${extra.join(' ') || '(baseline)'}   capture ${t.toFixed(3)}s`);
   console.log(`    r ${s.r.toFixed(4)}   RMSE ${s.rmse.toFixed(2)}   luma ${s.meanOurs.toFixed(1)} vs ${s.meanRef.toFixed(1)}`);

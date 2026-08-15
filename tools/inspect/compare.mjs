@@ -26,9 +26,27 @@ import { execFileSync } from 'node:child_process';
 
 export const W = 640, H = 480, N = W * H;
 
+/**
+ * The filter chain for one frame, with an optional CROP applied first.
+ *
+ * A production may draw into only part of its canvas. ptct's backing store is
+ * square (960x960 under the harness) while the demo occupies a 960x800 band at
+ * y=H/12 — the letterbox its own CSS crops away for display. The tooling took
+ * the canvas to BE the frame, so it compared a letterboxed image against a
+ * full-frame reference and scored a well-verified port at median r 0.14 while
+ * the frames plainly showed the same scene. Geometry, not fidelity.
+ *
+ * The page knows this rect — it computes it to lay itself out — so the adapter
+ * declares it via frameRect() and nothing here has to guess or detect bars.
+ * Detection would be actively dangerous: a legitimately dark frame (lapsus's
+ * empt ends on black) has no content to bound.
+ */
+const chain = (crop) => (crop ? `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},` : '')
+  + `scale=${W}:${H},format=gray`;
+
 /** One frame as 8-bit luma at the comparison resolution. */
-export const grayOf = (png) => execFileSync('ffmpeg',
-  ['-v', 'error', '-i', png, '-vf', `scale=${W}:${H},format=gray`, '-f', 'rawvideo', '-'],
+export const grayOf = (png, crop = null) => execFileSync('ffmpeg',
+  ['-v', 'error', '-i', png, '-vf', chain(crop), '-f', 'rawvideo', '-'],
   { maxBuffer: 1 << 28 });
 
 /** Pearson correlation: "is this the same picture". */
@@ -119,9 +137,10 @@ export function classify({ r, meanOurs, meanRef }) {
 }
 
 /** Score one pair of PNGs, with the flat-reference guard applied. */
-export function scorePair(oursPng, refPng) {
+export function scorePair(oursPng, refPng, crop = null) {
   const flat = isFlat(refPng);
-  const a = grayOf(oursPng), b = grayOf(refPng);
+  // Only OURS is cropped: the reference is already the frame a viewer saw.
+  const a = grayOf(oursPng, crop), b = grayOf(refPng);
   const meanOurs = meanOf(a), meanRef = meanOf(b);
   const r = corr(a, b), e = rmse(a, b);
   return {

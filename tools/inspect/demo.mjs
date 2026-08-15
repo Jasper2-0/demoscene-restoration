@@ -82,9 +82,13 @@ export async function withDemo(prodName, extra, fn) {
       return p;
     };
 
+    // The sub-rect the page actually draws into, if it declares one. Shared
+    // with the sweep so a spot check and a sweep sample crop identically.
+    const frameRect = await page.evaluate(() => window.__demo.frameRect?.() ?? null);
+
     let n = 0;
     const api = {
-      page, errors, schedule, partOf, query,
+      page, errors, schedule, partOf, query, frameRect,
       captureTime: (name, local) => partOf(name).captureStart + local,
       async render(name, local) {
         const p = partOf(name);

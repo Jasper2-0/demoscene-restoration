@@ -230,6 +230,25 @@ if (DEBUG) {
     },
     state: () => lastState,
     assets: () => null,
+    /**
+     * The sub-rect of the canvas the demo actually occupies.
+     *
+     * The backing store carries baked letterbox bars: the visible band is 5/6
+     * of the canvas height starting 1/12 down, which is exactly what fit()
+     * crops away for display (`canvas.style.top = -w*0.75/12`). Measured on a
+     * real frame to confirm the arithmetic: a 960x960 store draws into
+     * y=80 h=800, i.e. H/12 and H*5/6.
+     *
+     * ?aspect=classic shows the whole 4:3 frame INCLUDING the bars, so in that
+     * mode the frame is the whole canvas.
+     */
+    frameRect() {
+      const c = document.querySelector('canvas');
+      if (CLASSIC) return { x: 0, y: 0, w: c.width, h: c.height };
+      return { x: 0, y: Math.round(c.height / 12), w: c.width,
+               h: Math.round(c.height * 5 / 6) };
+    },
+
     /** Musical coordinate — ptct thinks in order/row, like sonnet. */
     positionAt(showTime) {
       const p = ctx.sync.pos(Math.max(0, showTime - CAP_OFFSET));
@@ -238,17 +257,6 @@ if (DEBUG) {
   };
   window.__demoReady = true;
 
-  // KNOWN LIMITATION, do not read sweep scores for ptct as fidelity yet. The
-  // contract assumes the canvas IS the frame. ptct's is not: it sizes to the
-  // viewport (960x960 square under the harness) and letterboxes the image
-  // inside it, so downscaling to the comparison's 640x480 squeezes our content
-  // against a full-frame reference. A first sweep scored median r 0.1405 while
-  // the frames plainly show the same scene at the same moment — the geometry,
-  // not the port. ?aspect=classic reaches the page but does not resolve it.
-  //
-  // Fixing it means either giving the page a 4:3 viewport whose canvas matches
-  // the capture, or teaching the comparison layer to crop to the drawn band.
-  // The second is the more general answer and belongs in tools/inspect.
   window.__ptctReady = true;
   // In inspect mode the tooling drives every frame; do not render one up front.
   if (!INSPECT) window.__ptctSeek(t0);

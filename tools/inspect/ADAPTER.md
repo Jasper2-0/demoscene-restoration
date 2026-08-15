@@ -222,3 +222,25 @@ the alignment tool re-measures its own output.
 replaced with a 60fps source, its `alignmentOffsetMs` was reset to null rather
 than inherited: the old 0ms pin and its 0.7634 correlation score belonged to the
 superseded video and said nothing about the new one. Re-measure, or record null.
+
+## Optional: `frameRect()` — when the canvas is not the frame
+
+Return `{x, y, w, h}` in canvas pixels: the sub-rect the demo actually draws
+into. Omit it when the canvas *is* the frame, which is the usual case.
+
+The tooling assumed canvas == frame until ptct, whose backing store is square
+(960×960 under the harness) with the demo occupying a 960×800 band at `y = H/12`
+— baked letterbox bars that its own CSS crops away for display. Comparing the
+whole store against a full-frame reference scored a published, well-verified port
+at median **r 0.1405**, while a single side-by-side showed the same scene at the
+same moment. Declaring the rect took it to **0.3438** on the same samples.
+
+The page must declare it rather than the tooling detect it. Bar detection would
+be actively dangerous: a legitimately dark frame has no content to bound, and
+lapsus's `empt` ends on black. The page already computes this rect to lay itself
+out, so it is free and exact there.
+
+Note the rect can depend on a query parameter. ptct's `?aspect=classic` shows the
+whole 4:3 frame *including* the bars, so `frameRect()` returns the whole canvas
+in that mode — and scoring it against a capture of the band collapses to 0.053,
+which is a useful confirmation that the rect is doing real work.
