@@ -130,3 +130,38 @@ at 180s, so the failure surfaced as `Runtime.callFunctionOn timed out` from deep
 inside puppeteer, naming neither the production nor the missing flag. The sweep
 now waits on `__demoReady === true || !!window.__demo` and contains no
 production name at all.
+
+## Optional: `positionAt(showTime)` — a musical coordinate
+
+Return a SHORT LABEL for where `showTime` sits in the music, or `null`. The
+inspector prints it beside the sample and knows nothing about what it means, so
+a production can return whatever coordinate it actually thinks in.
+
+Show time is monotonic but says nothing about musical position, and for engines
+that drive visuals from the music the two are not interchangeable. Wonder's
+executable reads `FMUSIC_GetOrder`, so its own coordinate is the XM ORDER, and
+`mystified.env` maps order boundaries to seconds — `positionAt` returns
+`"order 11"`. A production with no musical structure omits the method.
+
+## Layered timelines
+
+A "part" is not always exclusive. If several parts can be live at once, the
+inspector needs to say so, and it derives that from `schedule()` alone — any
+part whose `[captureStart, captureStart + dur)` contains the cursor. No adapter
+work is required, but two things follow that are worth knowing when reading a
+sweep of a layered production:
+
+- **A per-part score indicts the FRAME, not the part.** The sample is filed
+  under one part; the picture is everything live at that instant. The inspector
+  now lists the others as "also live".
+- **Parts must be drawn in LANES.** Packed into one row they paint over each
+  other and only the last drawn survives. The inspector greedily first-fits by
+  start time, which degenerates to a single lane exactly when parts never
+  overlap, so exclusive productions are unaffected.
+
+Related: the sweep now sorts every sample by capture time before drawing.
+`plan()` is built part-by-part, and a layered production's parts are not in
+start order — Wonder's clip table begins at 0s, jumps to 9.862s, then back to
+0s — so the score trace zigzagged across the canvas and "next sample" jumped
+around the show. Sorting is correct for exclusive timelines too, where it is
+already the order.

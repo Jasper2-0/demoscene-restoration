@@ -76,7 +76,7 @@ try {
     bubbleText, woahPulseText, facetedPulseText] = await Promise.all([
     AssetCatalog.load('./assets-manifest.json'),
     headless ? null : loadBytes('./assets/mystified.xm'),
-    headless ? null : loadText('./assets/mystified.env'),
+    fixedTime !== null ? null : loadText('./assets/mystified.env'),
     loadText('./assets/wondertext_pos.env'),
     loadText('./assets/alpha_circle.env'),
     loadText('./assets/koniec_intra.env'),
@@ -408,6 +408,10 @@ try {
   // in playback. `captureOffsetMs` below carries the rest as a comparison-only
   // quantity — the same split Lapsus needed between trackOffsetsMs (audio) and
   // visualTrackOffsetsMs (frames), arrived at independently on both ports.
+  // Order boundaries in seconds, when the envelope was loaded (everything but a
+  // bare ?t= render). Drives __demo.positionAt.
+  const ORDER_TIMES = orderEnvelopeText
+    ? envelopeTimes(parseEnvelope(orderEnvelopeText, 'mystified.env')) : null;
   const CLIPS = WONDER_EFFECT_CLIPS.map((clip) => ({
     name: clip.id, phase: 1, start: clip.start, dur: clip.end - clip.start,
     assets: clip.data?.assets ?? [],
@@ -446,6 +450,20 @@ try {
     },
     state: () => lastState,
     assets: (part) => CLIPS.find((x) => x.name === part)?.assets ?? null,
+    // OPTIONAL: a MUSICAL coordinate for the timeline axis.
+    //
+    // Show time is monotonic but says nothing about where you are in the piece.
+    // Wonder's executable drives its visuals from FMUSIC_GetOrder, so the XM
+    // ORDER is the coordinate the demo itself thinks in, and mystified.env maps
+    // order boundaries to seconds. Returning a short label keeps this generic:
+    // the inspector prints whatever string it gets and needs to know nothing
+    // about trackers. A production with no musical structure simply omits this.
+    positionAt(showTime) {
+      if (!ORDER_TIMES?.length) return null;
+      let i = 0;
+      while (i + 1 < ORDER_TIMES.length && ORDER_TIMES[i + 1] <= showTime) i++;
+      return showTime < ORDER_TIMES[0] ? null : `order ${i}`;
+    },
   };
   // Ready LAST, after __demo exists, so a harness that waits on either flag can
   // rely on the adapter being installed rather than racing it. __demoReady is

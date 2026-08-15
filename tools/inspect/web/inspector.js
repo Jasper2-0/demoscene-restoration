@@ -35,7 +35,13 @@ try {
   $('#meta').textContent = 'no sweep yet — run: node tools/inspect/sweep.mjs ' + PROD;
 }
 if (state.run) {
-  state.samples = state.run.samples;
+  // CHRONOLOGICAL, ALWAYS. The plan is built part-by-part, and for a LAYERED
+  // production the parts are not in start order — Wonder's clip table lists
+  // effect_4106a0 (start 0), then 9.862, then 0 again. Drawn in array order the
+  // score trace zigzags back and forth across the canvas and the "next sample"
+  // key jumps around the show. Sorting by capture time costs nothing and is
+  // correct for exclusive timelines too, where it is already the order.
+  state.samples = [...state.run.samples].sort((a, b) => a.captureTime - b.captureTime);
   $('#meta').textContent =
     `${state.run.samples.length} samples · median r ${state.run.medianR} · ` +
     `${state.run.issues.length} issues · ${new Date(state.run.when).toLocaleString()}`;
@@ -52,6 +58,26 @@ await new Promise((res) => {
   tick();
 });
 state.schedule = demo.contentWindow.__demo.schedule();
+// LANE-PACK THE PART BARS. A production whose parts are exclusive needs one
+// lane; a LAYERED one needs as many as its deepest overlap, or the bars paint
+// over each other and only the last drawn is visible. Wonder runs four effects
+// at once around t=37s. Greedy first-fit by start time: generic, and it
+// degenerates to a single lane exactly when parts never overlap.
+state.lanes = (() => {
+  const ends = [];
+  for (const p of [...state.schedule].sort((a, b) => a.captureStart - b.captureStart)) {
+    let l = ends.findIndex((e) => e <= p.captureStart + 1e-9);
+    if (l < 0) { l = ends.length; ends.push(0); }
+    ends[l] = p.captureStart + p.dur;
+    p.lane = l;
+  }
+  return Math.max(1, ends.length);
+})();
+/** Every part live at a given capture time — "what is under the cursor".
+ *  Computed from schedule() alone, so no adapter has to implement it. */
+const activeAt = (t) => state.schedule
+  .filter((p) => t >= p.captureStart && t < p.captureStart + p.dur)
+  .map((p) => p.name);
 async function refreshTracker() {
   try {
     const t = await (await fetch('/_inspect/issues')).json();
@@ -63,7 +89,8 @@ async function refreshTracker() {
 await refreshTracker();
 if (!state.samples.length) {
   // No sweep on disk: still usable as a scrubber, just without scores.
-  state.samples = demo.contentWindow.__demo.plan(2);
+  state.samples = demo.contentWindow.__demo.plan(2)
+    .sort((a, b) => a.captureTime - b.captureTime);
 }
 
 // ---------------------------------------------------------------- timeline
@@ -88,23 +115,31 @@ const xOf = (t) => { const [a, b] = tSpan(); return 8 + (t - a) / ((b - a) || 1)
 function draw() {
   const D = devicePixelRatio;
   ctx.clearRect(0, 0, cv.width, cv.height);
-  const barY = 6 * D, barH = 16 * D, plotY = 30 * D, plotH = 60 * D;
+  // Lanes share the same 16px band a single-lane production used, so an
+  // exclusive timeline looks exactly as before and a layered one gets thinner
+  // stacked bars rather than bars painted over each other.
+  const barY = 6 * D, bandH = 16 * D;
+  const partLaneH = bandH / state.lanes;
+  const plotY = 30 * D, plotH = 60 * D;
 
   // part bars, alternating so boundaries read at a glance
   state.schedule.forEach((p, i) => {
     const x0 = xOf(p.captureStart), x1 = xOf(p.captureStart + p.dur);
+    const y = barY + (p.lane ?? 0) * partLaneH;
     ctx.fillStyle = i % 2 ? '#1d242b' : '#232b34';
-    ctx.fillRect(x0, barY, Math.max(1, x1 - x0), barH);
+    ctx.fillRect(x0, y, Math.max(1, x1 - x0), Math.max(1, partLaneH - D));
     // colour the bar by the part's median score when we have one
     const ps = state.run?.parts?.find((x) => x.name === p.name);
     if (ps) {
       ctx.fillStyle = ps.medianR >= 0.75 ? '#46b36b' : ps.medianR >= 0.55 ? '#d1a13a' : '#d6503f';
-      ctx.fillRect(x0, barY + barH - 3 * D, Math.max(1, x1 - x0), 3 * D);
+      ctx.fillRect(x0, y + partLaneH - 3 * D, Math.max(1, x1 - x0), 2 * D);
     }
-    if (x1 - x0 > 40 * D) {
+    // Only label when the lane is tall enough to read; with many lanes the
+    // hover readout carries the names instead.
+    if (x1 - x0 > 40 * D && partLaneH > 9 * D) {
       ctx.fillStyle = '#8d97a2';
       ctx.font = `${9 * D}px ui-monospace, monospace`;
-      ctx.fillText(p.name, x0 + 3 * D, barY + 11 * D);
+      ctx.fillText(p.name, x0 + 3 * D, y + partLaneH - 4 * D);
     }
   });
 
@@ -197,9 +232,16 @@ async function go(i) {
   const s = state.samples[state.idx];
   const info = await demo.contentWindow.__demo.render({ part: s.part, local: s.local });
 
+  // WHAT IS UNDER THE CURSOR. On a layered timeline the sample is filed under
+  // one part but the FRAME is everything live at that instant, so a low score
+  // does not indict the part it is filed under. Name the others.
+  const live = activeAt(s.captureTime).filter((n) => n !== s.part);
+  const pos = demo.contentWindow.__demo.positionAt?.(s.captureTime);
   $('#where').innerHTML =
     `<b>${s.part}</b> <span>local ${s.local.toFixed?.(2) ?? s.local}s · show ${s.captureTime.toFixed(2)}s` +
-    (s.r !== undefined ? ` · r ${s.r.toFixed(3)} · rmse ${s.rmse?.toFixed?.(1) ?? '—'}` : '') + '</span>';
+    (pos ? ` · ${pos}` : '') +
+    (s.r !== undefined ? ` · r ${s.r.toFixed(3)} · rmse ${s.rmse?.toFixed?.(1) ?? '—'}` : '') +
+    (live.length ? `<br>also live: ${live.join(', ')}` : '') + '</span>';
 
   const rows = Object.entries(info ?? {})
     .filter(([k]) => k !== 'probe' && k !== 'scene' && k !== 't')
