@@ -259,12 +259,26 @@ if (DEBUG) {
   // Its native coordinate is MUSIC POSITION, converted with the measured
   // posToSeconds — the same shape as sonnet and ptct.
   //
-  // KNOWN LIMITATION, and the reason no score here is a fidelity claim yet:
-  // render() is NOT repeatable. Scenes D, E and F integrate frame deltas and
-  // reset only on a REWIND, so a frame depends on how it was reached. The plan's
-  // remaining Phase 4 work (reset(ms) on the registry, a renderCold that steps in
-  // MILLISECONDS from the scene-entry boundary, and an equivalence test) fixes
-  // that. Run tools/inspect/repeatability.mjs before trusting a sweep.
+  // STATE OF PLAY, after renderCold (db5dd75) and the equivalence test.
+  //
+  // render() goes through __lvRenderCold, so a sample is reached by a DECLARED
+  // history — reset, then step to it in milliseconds at 60 fps from the scene
+  // boundary — rather than by whatever the harness happened to render before.
+  // That moved REPEAT and ISOLATION from FAIL to ok, which is what makes a sweep
+  // attributable at all: ISOLATION passing means an in-run render equals a
+  // fresh-page one.
+  //
+  // WHAT IS STILL OPEN, and it is one scene, not the class:
+  //   * ORDER fails on sceneD and sceneE (2/12 samples).
+  //   * work/verify/repeat_test.mjs localises it: sceneD's frame changes when the
+  //     pre-roll window starts 0x200 earlier (RMSE 11.759), so reset() does not
+  //     restore everything sceneD carries. sceneE and sceneF pass that check.
+  // Run BOTH before trusting a sweep — tools/inspect/repeatability.mjs for the
+  // generic contract, work/verify/repeat_test.mjs for the pre-roll itself.
+  //
+  // Cadence is a DECLARED assumption (60 fps), not a derived fact: sceneD is
+  // 4/4 distinct across 15/30/60/120 fps. The original was framerate-dependent
+  // here, so there is no cadence-free answer to recover.
   //
   // THE AUDIT IS RIGHT, and confirming that cost an instrument fix (#36).
   // repeatability.mjs first failed sceneC too, which reads exactly like a missed
