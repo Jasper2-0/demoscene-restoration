@@ -357,9 +357,11 @@ try {
     const bubbleClip = activeClips.find((clip) => clip.id === 'effect_408ca0');
     if (bubbleClip) bubble.render(seconds - bubbleClip.start);
     const active = activeClips.map((clip) => clip.id);
+    // Nothing on screen unless ?debug: the page is the demo, not a dev harness.
+    // Inspection moved to the shared tooling (tools/inspect, ?inspect=1).
     status.textContent = debug
-      ? `Wonder EXP vertical slice — t=${seconds.toFixed(3)}s frame=${frame.toFixed(2)} active=${active.join(',') || 'none'}`
-      : 'Wonder EXP vertical slice';
+      ? `t=${seconds.toFixed(3)}s frame=${frame.toFixed(2)} active=${active.join(',') || 'none'}`
+      : '';
     return { seconds, frame, active };
   };
   const draw = () => {

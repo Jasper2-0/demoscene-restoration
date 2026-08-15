@@ -20,9 +20,9 @@ is no build step or runtime dependency. Browser autoplay policy requires the
 
 - `?t=10&debug` renders a deterministic show-time frame and lists active clips.
 - `?t=60&debug` exercises several overlapping recovered scene layers.
-- `timeline.html` opens an XM-order visual inspector with the live WebGL frame,
-  compiled effect lanes, active render-layer details, and direct/transitive
-  asset links for each element.
+- `?inspect=1` installs the shared tooling adapter (`tools/inspect/ADAPTER.md`):
+  no audio, no click gate, no render loop, `window.__demo` driving every frame.
+  Inspect with `node tools/inspect/serve.mjs wonder` rather than a page here.
 - Shared modules are vendored under `js/shared/`; edit the canonical copies in
   `shared/sunflower/js/` and run `node tools/sync-shared-runtime.mjs`.
 

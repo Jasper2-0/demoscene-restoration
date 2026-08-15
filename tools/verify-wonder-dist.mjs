@@ -57,8 +57,8 @@ const exists = async (relative) => {
 
 // ---- 1. the files a served copy cannot do without.
 const REQUIRED = [
-  'index.html', 'timeline.html', 'timeline.css', 'assets-manifest.json',
-  'js/main.js', 'js/timeline-inspector.js', 'LICENSE', 'README.md', '.nojekyll',
+  'index.html', 'assets-manifest.json',
+  'js/main.js', 'LICENSE', 'README.md', '.nojekyll',
 ];
 for (const name of REQUIRED) {
   if (!await exists(name)) fail(`missing ${name}`);
@@ -101,7 +101,7 @@ if (await exists('assets-manifest.json')) {
 // ---- 3. the module graph, walked from the pages rather than from the folder.
 // Globbing js/ would prove only that files exist. Walking the graph proves the
 // page can boot: every specifier resolves, and nothing ships unreferenced.
-const ENTRY_PAGES = ['index.html', 'timeline.html'];
+const ENTRY_PAGES = ['index.html'];
 const SPECIFIER = /(?:^|[\s;}])(?:import|export)\b[^'"]*?from\s*['"]([^'"]+)['"]|(?:^|[\s;}])import\s*['"]([^'"]+)['"]/g;
 
 const reached = new Set();

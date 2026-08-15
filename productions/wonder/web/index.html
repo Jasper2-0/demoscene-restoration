@@ -12,16 +12,13 @@
     #start { position: fixed; inset: 1rem 1rem auto auto; padding: .6rem 1rem; color: #fff;
       border: 1px solid #777; background: #111c; cursor: pointer; }
     #start[hidden] { display: none; }
-    #inspector { position: fixed; inset: 1rem auto auto 1rem; padding: .45rem .7rem;
-      color: #b9ff65; border: 1px solid #536c39; background: #111c; text-decoration: none; }
-    html.embedded #status, html.embedded #inspector { display: none; }
+    html.embedded #status { display: none; }
   </style>
 </head>
 <body>
   <canvas id="screen" width="640" height="480"></canvas>
-  <a id="inspector" href="./timeline.html">Open XM order inspector</a>
   <button id="start" type="button">Start with sound</button>
-  <div id="status">Wonder restoration foundation</div>
+  <div id="status"></div>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

@@ -11,7 +11,7 @@
 # WHY THIS BUILD IS A COPY AND NOT A TRANSFORM.  Unlike build-sonnet.sh, which
 # has to reproduce an out-of-tree module layout and rewrite index.html, the
 # Wonder runtime is already self-contained: every import specifier is relative
-# and stays inside web-wonder/, there are no dynamic imports and no bare
+# and stays inside productions/wonder/web/, there are no dynamic imports and no bare
 # specifiers, and index.html is already at the root of that directory.  So the
 # job here is subtraction (authoring-only files) plus deploy furniture, and the
 # interesting work is VERIFICATION, not assembly.
@@ -117,11 +117,12 @@ Browser autoplay policy requires the **Start with sound** button.
 | `?debug` | list the clips active at the current time |
 | `?only=name[,name]` | render only the named effects |
 | `?design-parts=` / `?design-passes=` | isolate design-tunnel parts or passes |
-| `?embedded` | hide the status line and inspector link |
+| `?embedded` | hide the status line |
+| `?inspect=1` | install the shared tooling adapter (tools/inspect) |
 
-`timeline.html` opens an XM-order inspector: the live WebGL frame against
-compiled effect lanes, active render-layer detail, and direct plus transitive
-asset links for every element.
+Inspection is the repo-wide tooling, not a page in this site: run
+`node tools/inspect/serve.mjs wonder` for the live frame against the reference
+capture, effect lanes, per-sample scores and note-taking.
 
 **Requires WebGL2.**
 
