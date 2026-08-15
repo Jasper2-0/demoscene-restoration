@@ -939,6 +939,67 @@ Traced and patched by Codex/GPT-5.6; gates run and committed here.
   inside the bound and is krediili's peak. Within that set the frames differ
   by less than the metric can see, so no finer answer is available from the
   capture — and none is needed.
+
+  **VOID FOR HAIRBALL, 2026-08-15.** That run predates the phase-2 visual-clock
+  correction. Its Hairball references were 40 ms early while Krediili's phase-1
+  origin was right, invalidating the cross-part intersection. The required
+  rerun now reads `visualTrackOffsetsMs`, but in this sandbox it produced no
+  measurements: Chromium failed before the first Krediili candidate with
+  `listen EPERM ... 127.0.0.1`. Keep both verdict rules above (strongest time;
+  every dt within 0.005 of peak) when it is rerun outside the sandbox.
+
+* **Hairball state audit, 2026-08-15 — two independent defects, one still
+  awaiting image scores.** Address correction first: Part_Hairball's trivial
+  constructor is **0x405cc0** (sets vtable 0x45a3e4 and instance null);
+  0x405cd0 is vf0/create, which loads `data/Hairball.lws`. First, the port
+  constructed Hairball from CRT seed 1. The executable never calls `srand`;
+  Hair::Hair consumes three values per
+  strand at 0x42393f/0x42395c/0x423979, while `Demo::loadPhase` constructs
+  unique parts in schedule order at 0x403017–0x40306e. Before phase-2 Hairball,
+  the shared stream contains 3024 static hair calls plus the dt-dependent Empt
+  and Pehko consumers (Empt 0x40585e–0x405ada, RandomFadeOut 0x401ece,
+  ParticleSystem::emit 0x40db9f–0x40deb8). A standalone seed-1 Hairball can
+  therefore never be the binary's Hairball.
+
+  The patch replays those consumers for each `hairdt` candidate, rather than
+  fitting or baking a seed. At a uniform 1/60 it predicts **115727** preceding
+  calls exactly: 3024 + 47833 Empt stamps + 780 fade calls + 4930×13 Pehko
+  emission calls. The particle timer/age values must be rounded to float at
+  0x40d4d7–0x40d509 and 0x40e6f3–0x40e6fa; a JS-double replay gives a different
+  answer at 60 Hz. Since the executable uses real QPC deltas, 115727 is the
+  falsifiable uniform-60 prediction, not an asserted capture value. The new
+  `hairdt.mjs` prints the corresponding prefix for every candidate, and
+  `?hairskip=N` overrides it for auditing.
+
+  Independent capture observation: ffprobe reports both nominal and average
+  video rate as 60/1. Four-second active windows contained 241 Krediili frames
+  and 240 Hairball frames with **zero adjacent duplicates**; the full Empt slot
+  contained 780 encoded frames and Pehko 572. The latter two repeat only in
+  their intentionally black/decayed edges. This rules against a sustained
+  50/40 Hz source being naively repeated into a 60 Hz capture, but it does not
+  recover the executable's individual QPC deltas or exclude a faster source
+  sampled at 60. It is supporting evidence for retaining the 1/60 default, not
+  a replacement for the corrected image sweep and not a newly resolved dt.
+
+  Second, the standalone renderer exposed the raw constructor pose at t=0.
+  The binary calls the current part at 0x40270d–0x40271b before incrementing
+  its local time at 0x40271b–0x40272a; generic vf2 calls Scene::update at
+  0x406e67–0x406e78 and HairMesh::update at 0x4151ae–0x4151c7. The first frame
+  is therefore one full-dt step at root time 0. The port now primes that step;
+  `?hairprime=0` is the old-pose A/B. Prediction at 1/60: old/new update counts
+  at local 0, .05, .30, 1.0, 3.5 are respectively 0/1, 3/4, 18/19, 60/61,
+  210/211. A direct seed-1 strand-state A/B found the missing step large at t=0
+  (node-position RMS 2.736846) but only 0.000126 by t=1 and effectively zero
+  by t=3.5. It explains Jasper's first-frame report but **cannot** explain the
+  degrading late score; the persistent wrong random directions can.
+
+  Negative results: there is no pre-roll between construction and part start —
+  loadPhase's loop only calls vf0 (0x403017–0x40306e), and Scene::update only
+  comes from the current part. There are no velocity fields in the 0x14-byte
+  Node. `Timer::resetAndSeed` 0x4089a0 seeds only the first phase callback;
+  Hairball is 29.7 s later. The full x87 body 0x42d500–0x42d771 confirms the
+  existing displacement/constraint formula; no dropped Ghidra operand changed
+  it. No post-patch correlation/RMSE/gate score is claimed from this sandbox.
 * ~~Lighting is per-fragment; the engine's is per-vertex.~~ **FIXED
   2026-08-14.** `glShadeModel` is never called, so shading is GL_SMOOTH and
   fixed-function lights each vertex, emits a primary and a secondary colour and

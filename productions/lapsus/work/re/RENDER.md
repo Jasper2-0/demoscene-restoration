@@ -1688,6 +1688,37 @@ for i = 1 .. N-1:
 > uniform on the sphere — there is a mild bias toward the cube's corners.
 > Reproduce it if you want bit-comparable output.
 
+**The seed is global history, not a HairMesh property.** No `srand` call exists
+in the process. The three calls above use the CRT-global stream, continuously,
+so a standalone renderer may begin Krediili at seed 1 but may **not** do that
+for Pehko or Hairball. `Demo::loadPhase` constructs unique scheduled parts in
+schedule order at 0x403017–0x40306e (vf0 at 0x403050): phase 1 constructs
+Krediili's 1000 strands and Pehko's 8, consuming `(1000+8)*3 = 3024` calls.
+Playback then adds the following frame-dependent consumers before phase 2:
+
+- Part_Empt's stamp loop, calls at 0x40585e–0x405ada;
+- RandomFadeOut, one call at 0x401ece on **every** Empt callback (negative
+  progress is clamped only after the wrapper has been entered);
+- Pehko's particle emission, 13 calls per successful emit at
+  0x40db9f–0x40deb8.
+
+No later phase-1 part and no phase-2 part preceding Hairball consumes `rand`.
+The dynamic prefix and hair integration step are therefore coupled through
+the same physical frame period. Under a uniform 60 Hz fixed-grid replay (first
+callback at local t=0), the mechanically traced counts are: 3024 static,
+47833 Empt stamp calls, 780 Empt fade calls, and 4930 Pehko emissions ×13 =
+64090, for **115727 calls before Hairball**. This is an arithmetic prediction
+for that cadence, not a claim that the capture's QPC deltas were perfectly
+uniform. The port replays the consumers for every `hairdt` candidate instead
+of baking one prefix; `?hairskip=N` is the audit override.
+
+The float storage in that replay is load-bearing. ParticleSystem adds dt to
+its emit timer at 0x40d4d7 and stores it to dword `[system+0x100]` at 0x40d4e9
+before comparing at 0x40d4f1. Particle ages are likewise stored to dword at
+0x40e6f3–0x40e6fa. At 60 Hz this makes the 0.1 timer cross on callback 6;
+leaving the values as JS doubles crosses on callback 7 and predicts the wrong
+stream position.
+
 **Buffer build** — `FUN_00423f00` @0x423f00, called once at the end of the ctor:
 
 - walks the strands assigning `strand[+0x30] = Σ nodes so far` and
@@ -1714,6 +1745,26 @@ for each hair in scene[+0x68..0x6c]:
 (`FUN_0040f9f0`) and calls `FUN_0042d220(strand, &hair[+0x5c], arg, dt)` for
 each strand. **`arg` is passed but never read** — the simulation only sees the
 world matrix and `dt`.
+
+**Lifecycle / first frame.** Phase loading constructs the HairMeshes but does
+not tick them: the creation loop at 0x403017–0x40306e only calls vf0. Each
+render callback calls the current part's vf2 at 0x40270d–0x40271b and only then
+adds dt to that entry's local time at 0x40271b–0x40272a. Generic vf2 calls
+`Scene::update(localTime, dt)` at 0x406e67–0x406e78, which reaches
+`HairMesh::update` at 0x4151ae–0x4151c7. Consequently:
+
+- there is **no construction-to-part-start warm-up**; inactive scenes are not
+  updated;
+- the first visible frame has `localTime == 0` but has already received one
+  ordinary full-dt hair step, with the root evaluated at t=0;
+- the next frame receives the next measured dt. There is no per-part timer
+  reset and no special Hairball delta.
+
+`Timer::resetAndSeed` at 0x4089a0 affects only the first callback after a phase
+load. Hairball starts 29.7 s into phase 2, so it cannot affect Hairball's first
+delta. Node layout above also proves there is no velocity to initialise: state
+is position, segment length and stiffness only. The port's former t=0 output
+was the raw straight constructor pose; it now primes exactly one grid step.
 
 **The simulation** — `FUN_0042d220` @0x42d220. Ghidra's C for this is coherent;
 every helper it calls was re-read in asm (`FUN_0042d7d0` add, `FUN_0042d800`

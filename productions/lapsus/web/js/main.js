@@ -34,6 +34,7 @@ import { parseLWO } from '../../work/js/lwo.mjs';
 import { decodeTGA } from '../../work/js/tga.mjs';
 import { parseHair, buildStrands, simulateSpan, shadeNormals, toLineVerts, msvcRand } from '../../work/js/hair.mjs';
 import { parseParticles, createSystem, stepSystem, frameOf, billboard } from '../../work/js/particles.mjs';
+import { advanceRandToHairball } from '../../work/js/hair-prefix.mjs';
 import { MiniGL } from './shared/minigl.js';   // vendored: tools/sync-shared-runtime.mjs
 
 const ROOT = new URL('../../', import.meta.url).href;
@@ -1666,7 +1667,23 @@ function accBlit() {
     const SIM_SEEK = 0.1;
     if (!sim || T < sim.t - SIM_SEEK) {
       const rand = msvcRand();
-      if (hairSuppressed) for (let i = 0; i < PEHKO_LOAD_RAND_DRAWS; i++) rand();
+      let randAudit = null;
+      if (qs.has('hairskip')) {
+        const randSkip = Math.max(0, Math.trunc(Number(qs.get('hairskip'))) || 0);
+        for (let i = 0; i < randSkip; i++) rand();
+        randAudit = { draws: randSkip, override: true };
+      } else if (hairSuppressed) {
+        for (let i = 0; i < PEHKO_LOAD_RAND_DRAWS; i++) rand();
+        randAudit = { draws: PEHKO_LOAD_RAND_DRAWS, static: true };
+      } else if (/^hairball$/i.test(SCENE)) {
+        // The dt candidate and the preceding random history are one physical
+        // hypothesis, not two knobs: Empt and Pehko make a dt-dependent number
+        // of calls before phase 2 constructs Hairball.  Replaying those binary
+        // consumers prevents a hairdt sweep from testing a new cadence with an
+        // unrelated seed-1 pose. `?hairskip=N` remains the exact A/B override.
+        randAudit = advanceRandToHairball(rand, HAIR_DT);
+      }
+      window.__lapsusHairRand = randAudit;
       sim = { t: 0, rand, strands: new Map(), systems: [] };
     }
     const simFrom = sim.t, simTo = Math.max(T, sim.t);
@@ -1735,7 +1752,20 @@ function accBlit() {
       // the whole history. `simulate` integrates a span, so the state carries
       // and the cost per frame is the elapsed dt rather than the elapsed part.
       let strands = sim.strands.get(nullObj);
-      if (!strands) sim.strands.set(nullObj, strands = buildStrands(h, hairRand));
+      if (!strands) {
+        sim.strands.set(nullObj, strands = buildStrands(h, hairRand));
+        // The first frame is not the constructor pose. Demo::render calls the
+        // current part's vf2 with entry.localTime == 0 (0x40270d-0x40271b),
+        // generic vf2 immediately calls Scene::update (0x406e67-0x406e78), and
+        // that reaches HairMesh::update (0x4151ae-0x4151c7) before the draw.
+        // Therefore the binary has already taken ONE full-dt step at root t=0
+        // on its first visible frame.  The old 0->T replay began at root dt,
+        // leaving t=0 in the raw straight constructor pose.  A span -dt->0 is
+        // exactly one grid step at t=0; the following 0->T span stays unchanged.
+        // `?hairprime=0` reproduces the old initialization for a controlled A/B.
+        if (qs.get('hairprime') !== '0')
+          simulateSpan(strands, matAt, h.gravity, -hairDt, 0, hairDt, onStep);
+      }
       simulateSpan(strands, matAt, h.gravity, simFrom, simTo, hairDt, onStep);
       if (hairSuppressed) {
         for (const st of strands)

@@ -156,7 +156,7 @@ vf0 = create (loads `data/<name>.lws` from the archive into an `LW::Scene`
 | 11 | Part_Radiosity | 0x407b20 | 0x407b30 | data/rad_out.lws | |
 | 12 | Part_LoadPart2 | inline, vtbl 0x45a2fc | 0x401f50 | pics/loading2.jpg | draw 0x402290 = clear + picture; **its index (0xc) is the phase-2 trigger** |
 | 13 | Part_Kaivoalieni | 0x406320 | 0x406330 | data/Kaivoalieni.lws | |
-| 14 | Part_Hairball | 0x405cc0 | 0x405cd0 | data/Hairball.lws | |
+| 14 | Part_Hairball | 0x405cc0 | 0x405cd0 | data/Hairball.lws | vtable 0x45a3e4; generic vf2 0x406e50 |
 | 15 | Part_Kuubiotekniikka | 0x4068c0 | 0x4068e0 | data/Kuubiotekniikka.lws | vf1 0x407e00, vf2 0x406b20 |
 | 16 | Part_Morko | 0x406ec0 | 0x406ee0 | data/Morko.lws | vf1 0x407e00 |
 | 17 | Part_Pehko | 0x407430 | 0x407490 | particles/tauno/tauno.txt (+ data/pehko.lws @ 0x463af4) | vf1 0x407740, vf2 0x407800 — the tauno sprite/particle part |
@@ -323,11 +323,12 @@ per-part float constants).
   skimmed.
 - ~~**Material/blend semantics of fader modes 1 vs 3**~~ **RESOLVED** — §6
   above, read out of `FUN_0040c060`'s jump table at 0x40c5c4.
-- **Hair (`data/hairs/*.txt`, HairMesh/Hair classes) and Pehko's tauno.txt
-  format** — the *draw* side is now known (RENDER.md §4.6: `GL_LINES`, stride-32
-  verts, 16-bit indices, `glLineWidth(3)`, one light; tauno.txt parsed by
-  `FUN_0040c620` for `ColorTexture`/`AlphaTexture`), but the geometry
-  generators are still un-traced.
+- ~~**Hair (`data/hairs/*.txt`, HairMesh/Hair classes) and Pehko's tauno.txt
+  format**~~ **RESOLVED** — RENDER.md §11 traces construction, the explicit
+  position-only integrator, shading normals, particle update/emission and draw
+  state. It also records the process-global `rand()` history and first-frame
+  lifecycle; these are state outside the individual HairMesh and are required
+  for a standalone part renderer.
 - Exact wall-clock offset between capture t=0 and process start (mode-switch
   time before the first frame) is unknowable statically; all relative timing
   is anchored to the two PlaySound events and matches the capture.

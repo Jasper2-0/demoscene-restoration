@@ -22,7 +22,11 @@
 //
 // WHAT MAKES THIS A MEASUREMENT AND NOT A FIT. The unknown is a single
 // physical quantity — the frame period of the machine the capture was made on
-// — and it is shared. krediili (phase 1, 1000 strands, two meshes) and
+// — and it is shared. That same period also fixes how many process-global
+// rand() calls Empt and Pehko make before phase 2 constructs Hairball, so the
+// renderer now replays that preceding stream for EACH dt candidate; holding a
+// seed-1 Hairball pose fixed across the sweep would test an impossible hybrid.
+// krediili (phase 1, 1000 strands, two meshes) and
 // hairball (phase 2, 1020 strands, three meshes) are different scenes, at
 // different points in the demo, with different hair files, cameras and
 // gravity-to-stiffness ratios. One free parameter cannot fit both by accident.
@@ -35,6 +39,11 @@
 // the honest outcome is to leave 1/60 in place and record the negative result.
 // Each part is also swept at two different times, because a value that is
 // really the frame period must hold across the part, not just at its midpoint.
+//
+// HISTORY WARNING. The 2026-08-14 result predates the phase-2 visual/audio
+// split: its Hairball references were 40 ms early. It is void and must not be
+// quoted as the current bound. This script deliberately reads
+// visualTrackOffsetsMs below, so a new run uses the corrected origin.
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -79,6 +88,7 @@ const best = {};
 for (const [scene, [phase, start, locals]] of Object.entries(CASES)) {
   console.log(`\n${scene}  (phase ${phase})`);
   const perDt = DTS.map(() => []);
+  const randPrefixes = DTS.map(() => null);
   for (const local of locals) {
     const capture = OFF[phase] + start + local;
     const refPng = path.join(TMP, `${scene}_${local}_ref.png`);
@@ -97,6 +107,7 @@ for (const [scene, [phase, start, locals]] of Object.entries(CASES)) {
           await page.waitForFunction('window.__lapsusReady === true', { timeout: 60000 });
           const err = await page.evaluate(() => window.__lapsusError ?? null);
           if (err) throw new Error('renderer: ' + err);
+          randPrefixes[i] = await page.evaluate(() => window.__lapsusHairRand ?? null);
           fs.writeFileSync(png, await shootCanvas(page, { canvasSelector: '#c', warmupFrames: 2 }));
         });
       const r = corr(gray(png, path.join(TMP, 'ours.raw')), ref);
@@ -106,6 +117,9 @@ for (const [scene, [phase, start, locals]] of Object.entries(CASES)) {
     console.log(`  t=${local}s   ` + DTS.map((d, i) =>
       `1/${Math.round(1 / d)}:${line[i].toFixed(3)}`).join('  '));
   }
+  if (randPrefixes.some(Boolean))
+    console.log('  pre-Hairball rand prefix  ' + DTS.map((d, i) =>
+      `1/${Math.round(1 / d)}:${randPrefixes[i]?.draws ?? 'n/a'}`).join('  '));
   // WHICH TIME TO BELIEVE, decided before looking: a dt sweep can only speak
   // where the rest of the model already matches. At a time whose best score is
   // 0.55 the residual is dominated by something that is not dt, and the peak
