@@ -72,12 +72,12 @@
   ],
   "captures": [
     {
-      "youtube": "7MnD4Ugco1g",
+      "youtube": "G3XLu10_140",
       "path": "productions/wonder/work/reference/wonder_ref.mkv",
-      "format": "bestvideo+bestaudio",
+      "format": "bestvideo[height<=1080][fps>=50]+bestaudio",
       "sha256": null,
-      "alignmentOffsetMs": 0,
-      "note": "10 ms log-energy correlation peaks at zero offset (score 0.7634); capture not kept on disk by policy"
+      "alignmentOffsetMs": null,
+      "note": "SUPERSEDES 7MnD4Ugco1g (1440x1080 at 30fps), whose 30-fps resampling work/reference/README.md judged unsuitable as a visual oracle and which carried an unresolvable 0-33ms frame phase. G3XLu10_140 is 187s, uploaded 2019-06-27, and offers 60fps streams up to 2880x2160 (fmt 315) - the format pin asks for 1080p60 because every comparison tool downscales to 640x480, so frame RATE was the deficiency, not resolution. NOT YET FETCHED: yt-dlp 2026.03.17 fails with HTTP 403 partway through every stream tried (315 at 32%, 303 at 21%, and on resume); the tool warns it is >90 days old and this is the usual signature. Update yt-dlp, then run tools/fetch/capture.mjs wonder. alignmentOffsetMs stays null until re-measured against THIS file: the old 0ms pin and its 0.7634 correlation score belong to the superseded video and do not carry over."
     }
   ],
   "status": {
