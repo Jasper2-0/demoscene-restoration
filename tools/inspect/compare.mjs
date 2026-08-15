@@ -64,7 +64,15 @@ export function corr(a, b) {
   // level, so answer that instead. One flat and one not is a real mismatch and
   // still scores 0.
   const varA = sa / N, varB = sb / N;
-  if (varA < 0.25 && varB < 0.25) return Math.abs(ma - mb) <= 1.0 ? 1 : 0;
+  // The tolerance is a property of the REFERENCE, not a taste setting. A
+  // YouTube-compressed capture moves mean luma by around a unit on a flat field,
+  // so 1.0 sits exactly ON the noise floor and decides matches by coin flip:
+  // lost-vegas's intro_titles is a flat blue field whose two frames differ by
+  // RMSE 1.11-1.14 with means 163.0 vs 164.0-164.1, and it scored r 0.0000 —
+  // three samples of a visibly identical picture branded total failures because
+  // the means differed by 1.0 to 1.1 instead of 0.9. 2.5 clears compression
+  // noise while still separating flats that sit at genuinely different levels.
+  if (varA < 0.25 && varB < 0.25) return Math.abs(ma - mb) <= 2.5 ? 1 : 0;
   return d / Math.sqrt(sa * sb || 1);
 }
 
