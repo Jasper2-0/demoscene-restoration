@@ -35,6 +35,13 @@ const status = document.querySelector('#status');
 const startButton = document.querySelector('#start');
 const parameters = new URLSearchParams(location.search);
 const fixedTime = parameters.has('t') ? Number(parameters.get('t')) : null;
+// ?inspect=1 installs the production-agnostic tooling adapter (window.__demo,
+// see tools/inspect/ADAPTER.md) and hands every frame to the caller: no audio,
+// no click gate, no rAF loop. It is `?t=` without a time — the page loads ready
+// to render whatever it is asked for, repeatedly, within ONE page load.
+const inspect = parameters.has('inspect');
+// Both modes skip the module, the AudioContext and the transport.
+const headless = fixedTime !== null || inspect;
 const debug = parameters.has('debug');
 const onlyEffects = new Set(parameters.getAll('only')
   .flatMap((value) => value.split(','))
@@ -68,8 +75,8 @@ try {
   const [assets, moduleBytes, orderEnvelopeText, positionText, circleAlphaText, exitText,
     bubbleText, woahPulseText, facetedPulseText] = await Promise.all([
     AssetCatalog.load('./assets-manifest.json'),
-    fixedTime === null ? loadBytes('./assets/mystified.xm') : null,
-    fixedTime === null ? loadText('./assets/mystified.env') : null,
+    headless ? null : loadBytes('./assets/mystified.xm'),
+    headless ? null : loadText('./assets/mystified.env'),
     loadText('./assets/wondertext_pos.env'),
     loadText('./assets/alpha_circle.env'),
     loadText('./assets/koniec_intra.env'),
@@ -196,7 +203,7 @@ try {
   const energyEffect = new EnergyEffect(mgl, scenes.get('energy.exp').renderer);
   let clock = null;
   let playing = false;
-  if (fixedTime === null) {
+  if (!headless) {
     const AudioContext = window.AudioContext ?? window.webkitAudioContext;
     if (!AudioContext) throw new Error('Web Audio is unavailable');
     const context = new AudioContext({ latencyHint: 'interactive' });
@@ -366,14 +373,83 @@ try {
       requestAnimationFrame(draw);
     }
   };
-  requestAnimationFrame(draw);
-  window.__wonderReady = true;
+  // In inspect mode the tooling drives every frame itself, so there is no loop.
+  if (!inspect) requestAnimationFrame(draw);
   window.__wonderScene = scenes.get('beginning.exp').scene;
   window.__wonderScenes = scenes;
   window.__wonderClock = clock;
   window.__wonderTimeline = showTimeline;
   window.__wonderRawTextures = rawTextures;
   window.__wonderRenderAt = renderAt;
+
+  // ---- INSPECTOR ADAPTER (tools/inspect/ADAPTER.md).
+  //
+  // Everything production-specific about Wonder lives here, so the repo-level
+  // sweep, inspector and issue sync work on it without knowing anything about
+  // it. Two things differ from Lapsus, the contract's first implementer, and
+  // both are worth stating because they are what makes this a second data
+  // point rather than a copy:
+  //
+  //  1. ONE CLOCK, NOT TWO. Lapsus has an MP3 per phase with a load between
+  //     them, so its plan entries carry a per-phase offset. Wonder is a single
+  //     continuous show, so captureTime is just showTime + the capture phase.
+  //
+  //  2. CLIPS OVERLAP; A "PART" DOES NOT OWN THE SCREEN. Lapsus parts are
+  //     exclusive — one is on screen at a time. Wonder's manager (0x410bf0)
+  //     runs a LAYERED timeline and several effects are live at once, so a
+  //     sample attributed to a clip means "the whole frame while this clip was
+  //     active". A low score therefore indicts the frame, not necessarily that
+  //     clip, and `state().active` lists everything that contributed.
+  //
+  // CAPTURE PHASE IS EXPLICIT AND NOT BAKED IN, per work/reference/README.md:
+  // the executable calls FSOUND_SetMixAhead(30) and drives visuals from
+  // FMUSIC_GetOrder, so visuals lead audible output by ~30ms, and the 30fps
+  // capture adds another 0-33ms of frame phase. Only the engine's 30ms belongs
+  // in playback. `captureOffsetMs` below carries the rest as a comparison-only
+  // quantity — the same split Lapsus needed between trackOffsetsMs (audio) and
+  // visualTrackOffsetsMs (frames), arrived at independently on both ports.
+  const CLIPS = WONDER_EFFECT_CLIPS.map((clip) => ({
+    name: clip.id, phase: 1, start: clip.start, dur: clip.end - clip.start,
+    assets: clip.data?.assets ?? [],
+  }));
+  let captureOffsetMs = 0;
+  let lastState = null;
+  window.__demo = {
+    id: 'wonder',
+    schedule: () => CLIPS.map((c) => ({
+      name: c.name, phase: c.phase, start: c.start, dur: c.dur,
+      captureStart: c.start + captureOffsetMs / 1000,
+    })),
+    plan(step = 2) {
+      const out = [];
+      for (const c of CLIPS) {
+        // Same floor as the Lapsus adapter and work/verify/allparts.mjs: three
+        // samples cannot show a spread, and Wonder's clips run from 2.5s to
+        // 22s, so short ones would otherwise be judged on a single frame.
+        const n = Math.max(5, Math.floor((c.dur - 0.5) / step));
+        for (let i = 0; i < n; i++) {
+          const local = +((i + 0.5) / n * (c.dur - 0.3) + 0.15).toFixed(3);
+          out.push({ part: c.name, phase: 1, local,
+                     captureTime: +(c.start + local + captureOffsetMs / 1000).toFixed(3) });
+        }
+      }
+      return out;
+    },
+    async render({ part, local }) {
+      const c = CLIPS.find((x) => x.name === part);
+      if (!c) return null;
+      // renderAt takes ABSOLUTE show time and is safe to call repeatedly, which
+      // is what lets a whole sweep run in one page load.
+      const info = renderAt(c.start + local);
+      lastState = { ...info, part, local, glError: mgl.gl ? mgl.gl.getError() : 0 };
+      return lastState;
+    },
+    state: () => lastState,
+    assets: (part) => CLIPS.find((x) => x.name === part)?.assets ?? null,
+  };
+  // Ready LAST, after __demo exists, so a harness that waits on this flag can
+  // rely on the adapter being installed rather than racing it.
+  window.__wonderReady = true;
 } catch (error) {
   status.textContent = error.message;
   throw error;

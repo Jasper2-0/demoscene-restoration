@@ -74,3 +74,44 @@ Lapsus splits by 40ms in phase 2 because the binary resets its QPC timer only
 after the synchronous `FSOUND_PlaySound` returns. Anything comparing frames
 takes `visualTrackOffsetsMs ?? trackOffsetsMs`; anything measuring or aligning
 audio keeps reading `trackOffsetsMs`, or it would re-measure its own output.
+
+## What the SECOND implementation taught us
+
+Wonder (`productions/wonder/web/js/main.js`, `?inspect=1`) is the contract's
+second implementer, and it was chosen precisely because it is not shaped like
+Lapsus. It needed **no changes to any tool** — which is the result this contract
+was hoping for — but it did expose three things the first implementer had hidden.
+
+**1. "Part" is not always exclusive.** Lapsus parts own the screen one at a
+time. Wonder's manager (0x410bf0) runs a LAYERED timeline where several effects
+are live at once: a sample at t=37.5s has four clips active. So a per-part score
+means "the whole frame while this part was active", and a low score indicts the
+frame rather than that part alone. Adapters for layered productions should
+expose the full active set in `state()` so the inspector can show what actually
+contributed. Do not assume a part is a scene.
+
+**2. `plan()` is boilerplate and should not be.** Both adapters implement the
+same sampler — inset from the ends, at least five samples per part however
+short. Five is a correctness property, not taste: three cannot show a spread,
+and a coarse grid over an uneven part reports the good half and hides the
+defect. Because it is copied, it can drift between productions and silently
+make two ports incomparable. It belongs in the sweep, defaulted from
+`schedule()`, with `plan()` becoming an optional override for productions with a
+genuinely irregular timeline.
+
+**3. Capture phase is universal, and both ports found it independently.** Lapsus
+needed `visualTrackOffsetsMs` because its QPC timer resets after
+`FSOUND_PlaySound`. Wonder's `work/reference/README.md` documents the same class
+of split from the other direction: `FSOUND_SetMixAhead(30)` plus visuals driven
+from `FMUSIC_GetOrder` make the picture lead audible output by ~30ms, and its
+30fps capture adds 0-33ms of frame phase on top. Only the engine's 30ms belongs
+in playback; the rest is a comparison-only quantity. **Two independent engines,
+the same distinction** — it should be a first-class `prod.json` field rather
+than something each production discovers for itself.
+
+Note also that a production may deliberately not retain its capture (Wonder's
+is fetched on demand and is explicitly "not a pixel-exact oracle" — 30fps,
+recompressed, resolution-converted). `sweep.mjs` fails clean in that case and
+names the fetch command, which is the right behaviour: the adapter is still
+worth implementing, because the inspector, the schedule and the asset map do
+not need a reference.
