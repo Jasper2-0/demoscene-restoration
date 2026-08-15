@@ -188,6 +188,18 @@ if (DEBUG) {
   // remaining Phase 4 work (reset(ms) on the registry, a renderCold that steps in
   // MILLISECONDS from the scene-entry boundary, and an equivalence test) fixes
   // that. Run tools/inspect/repeatability.mjs before trusting a sweep.
+  //
+  // BUT THAT AUDIT IS INCOMPLETE, in a way that changes the fix (#36).
+  // repeatability.mjs also fails sceneC, which the D/E/F audit called clean, and
+  // three consecutive renders give three DISTINCT hashes — so not lazy warm-up
+  // (that differs only on the 1st) and not buffer alternation (that has period
+  // 2). Yet eff_c has no integrator: its only `+=` is a local batch cursor, it
+  // consumes no RNG, its `ms` comes from posToSeconds, its subRow wall-clock
+  // fallback (eff_c.js:201) is unreachable while rowFrac is a number, renderAt
+  // is stateless (:143) and present clears TARGET|ZBUFFER (minid3d7.js:840).
+  // The carried state is therefore in the ENGINE layer, not the scene — so a
+  // reset(ms) on the SCENE protocol cannot fix sceneC, which has nothing to
+  // reset. Read #36 before writing 4c.
   const BANDS = [];
   {
     let from = 0;
