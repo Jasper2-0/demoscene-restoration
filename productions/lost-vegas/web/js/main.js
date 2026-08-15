@@ -11,14 +11,18 @@
 
 import { MiniD3D7, D3DTEX_MIPMAP } from './minid3d7.js';
 import { Kernel } from './kernel.js';
-import { sceneAt, normalizePos, POS_MAX, posToSeconds} from './timeline.js';
+import { sceneAt, normalizePos, POS_MAX, posToSeconds, SCENES, secondsToPos} from './timeline.js';
 import { buildRegistry } from './effects/registry.js';
 import { XmPlayer } from './xm.js';
 
 const canvas = document.getElementById('screen');
 const overlay = document.getElementById('overlay');
 const params = new URLSearchParams(location.search);
-const DEBUG = params.has('debug') || params.has('pos') || params.has('t');
+// ?inspect=1 installs the production-agnostic tooling adapter (window.__demo,
+// tools/inspect/ADAPTER.md). It joins the existing debug path, which builds no
+// audio graph and no click gate — what a caller-driven mode needs.
+const INSPECT = params.has('inspect');
+const DEBUG = params.has('debug') || params.has('pos') || params.has('t') || INSPECT;
 
 const TEXTURES = ['dr_256_grid_panels', 'dr_64_grid_small', 'dr_64_envmap', 'dr_64_finale'];
 
@@ -167,8 +171,70 @@ if (DEBUG) {
   const start = posParam
     ? (posParam.startsWith('0x') ? parseInt(posParam, 16) : parseInt(posParam, 10))
     : 0;
+  // ---- INSPECTOR ADAPTER (tools/inspect/ADAPTER.md).
+  //
+  // lost-vegas's parts are the scene ladder in timeline.js: EXCLUSIVE, unlike the
+  // layered Sunflower ports, so one scene owns the screen and state().active is a
+  // single name. The ladder stores only `until` (an exclusive upper bound on
+  // musicPos), so a scene's start is the previous entry's `until` and the first
+  // starts at 0.
+  //
+  // Its native coordinate is MUSIC POSITION, converted with the measured
+  // posToSeconds — the same shape as sonnet and ptct.
+  //
+  // KNOWN LIMITATION, and the reason no score here is a fidelity claim yet:
+  // render() is NOT repeatable. Scenes D, E and F integrate frame deltas and
+  // reset only on a REWIND, so a frame depends on how it was reached. The plan's
+  // remaining Phase 4 work (reset(ms) on the registry, a renderCold that steps in
+  // MILLISECONDS from the scene-entry boundary, and an equivalence test) fixes
+  // that. Run tools/inspect/repeatability.mjs before trusting a sweep.
+  const BANDS = [];
+  {
+    let from = 0;
+    for (const sc of SCENES) {
+      const startS = posToSeconds(from) ?? 0;
+      const endS = posToSeconds(Math.min(POS_MAX, sc.until)) ?? startS;
+      BANDS.push({ name: sc.id, from, until: sc.until, start: startS,
+                   dur: Math.max(0.1, endS - startS) });
+      from = sc.until;
+    }
+  }
+  let CAP_OFFSET = 0;
+  try {
+    const pj = await (await fetch(new URL('../../prod.json', import.meta.url))).json();
+    CAP_OFFSET = (pj.captures?.[0]?.alignmentOffsetMs ?? 0) / 1000;
+  } catch { /* no manifest reachable: schedule works, scores will not align */ }
+
+  let lastState = null;
+  window.__demo = {
+    id: 'lost-vegas',
+    schedule: () => BANDS.map((b) => ({
+      name: b.name, phase: 1, start: b.start, dur: b.dur,
+      captureStart: b.start + CAP_OFFSET,
+    })),
+    // plan() intentionally omitted — tools/inspect/plan.mjs owns the grid.
+    async render({ part, local }) {
+      const b = BANDS.find((x) => x.name === part);
+      if (!b) return null;
+      const info = window.__lvRender(secondsToPos(b.start + local));
+      lastState = { ...info, part, local, active: [info.scene ?? part],
+                    posHex: '0x' + info.pos.toString(16).padStart(4, '0') };
+      return lastState;
+    },
+    state: () => lastState,
+    assets: () => null,
+    /** Musical coordinate — order/row, like sonnet and ptct. */
+    positionAt(showTime) {
+      const p = secondsToPos(Math.max(0, showTime - CAP_OFFSET));
+      const raw = p > 0x3ff ? p - 0x200 : p;
+      return `order ${raw >> 8} row ${raw & 0xff}`;
+    },
+  };
+  window.__demoReady = true;
+
   window.__lvReady = true;
-  window.__lvRender(start);
+  // In inspect mode the tooling drives every frame.
+  if (!INSPECT) window.__lvRender(start);
 } else {
   overlay.textContent = 'click to start';
   overlay.addEventListener('click', async () => {
