@@ -11,7 +11,7 @@
 
 import { MiniD3D7, D3DTEX_MIPMAP } from './minid3d7.js';
 import { Kernel } from './kernel.js';
-import { sceneAt, normalizePos, POS_MAX } from './timeline.js';
+import { sceneAt, normalizePos, POS_MAX, posToSeconds} from './timeline.js';
 import { buildRegistry } from './effects/registry.js';
 import { XmPlayer } from './xm.js';
 
@@ -153,10 +153,13 @@ if (DEBUG) {
   // ms defaults to a plausible wall clock for the given music position rather
   // than 0 — several scenes drive motion from timeGetTime (see FRAME_LOOP.md),
   // and pinning it to 0 freezes them. Callers may pass an explicit ms.
-  const MS_PER_POS = 176700 / 0x1a20; // reference runtime / final threshold
   window.__lvRender = (pos, ms, rowFrac = 0) => {
     const p = Math.min(POS_MAX, pos | 0);
-    const t = ms === undefined ? p * MS_PER_POS : ms;
+    // posToSeconds is the MEASURED mapping (timeline.js). The old
+    // `p * MS_PER_POS` averaged over POSITION units, but pos is sparse — 64 of
+    // every 256 values occur — so it was out by ~4.5x per row, and `ms` is
+    // exactly what scenes D/E/F integrate.
+    const t = ms === undefined ? (posToSeconds(p) ?? 0) * 1000 : ms;
     const s = renderAt(ctx, p, { ms: t, songMs: t, rowFrac });
     return { pos: p, scene: s ? s.id : null, ms: t, rowFrac };
   };

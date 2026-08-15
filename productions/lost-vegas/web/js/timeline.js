@@ -38,6 +38,55 @@ export function sceneAt(pos) {
   return null;
 }
 
+/**
+ * Order start times in seconds, measured from our own xm.js render, and the row
+ * duration at the module's speed/BPM.
+ *
+ * WHY THIS IS HERE RATHER THAN A CONSTANT. main.js used to convert with
+ * `MS_PER_POS = 176700 / 0x1a20` = 26.42 ms per position UNIT, which is a
+ * pos-space average and is only correct at the endpoint: `pos = (order << 8) |
+ * row` is SPARSE — only 64 of every 256 values occur — and normalizePos adds a
+ * +0x200 discontinuity past 0x1ff. A row actually lasts 120 ms, so the flat
+ * average was out by ~4.5x per row.
+ *
+ * That mattered more than a wrong axis label: `ms` is exactly what scenes D, E
+ * and F integrate (eff_d's blobS/spinX, eff_f's dt), so every cadence
+ * experiment, pre-roll and equivalence test run against the old constant was
+ * measuring a broken clock. This had to land before any determinism work.
+ *
+ * The table lived in work/verify/compare.mjs, i.e. Node-side, where the page
+ * could not see it — so the harness and the demo disagreed about what time it
+ * was. It is exported so compare.mjs can import it instead of keeping a copy.
+ */
+export const ORDER_SECONDS = Object.freeze([
+  0, 5.6, 9.3, 17.1, 24.9, 32.3, 40.1, 47.9, 55.4, 63.2, 71.0, 74.7, 78.4,
+  86.2, 94.0, 101.4, 109.2, 117.0, 124.5, 132.3, 140.1, 147.5, 155.3, 163.1,
+  171.3,
+]);
+export const ROW_SECONDS = 0.120;
+
+/**
+ * Music position -> seconds from the start of the song, or null if the position
+ * is outside the mapped range.
+ *
+ * Takes a NORMALIZED position (the +0x200 already applied) and undoes that
+ * offset to index the order table, exactly as the measured mapping does.
+ */
+export function posToSeconds(pos) {
+  const raw = pos > 0x3ff ? pos - 0x200 : pos;
+  const order = raw >> 8, row = raw & 0xff;
+  if (order < 0 || order >= ORDER_SECONDS.length || row >= 64) return null;
+  return ORDER_SECONDS[order] + row * ROW_SECONDS;
+}
+
+/** Seconds -> normalized music position; the inverse of posToSeconds. */
+export function secondsToPos(sec) {
+  let order = 0;
+  while (order + 1 < ORDER_SECONDS.length && ORDER_SECONDS[order + 1] <= sec) order++;
+  const row = Math.min(63, Math.max(0, Math.floor((sec - ORDER_SECONDS[order]) / ROW_SECONDS)));
+  return normalizePos((order << 8) | row);
+}
+
 // Apply the engine's clamp/offset to a raw replayer position.
 export function normalizePos(raw) {
   let p = raw & 0xffff;
