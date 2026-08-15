@@ -165,3 +165,34 @@ start order — Wonder's clip table begins at 0s, jumps to 9.862s, then back to
 0s — so the score trace zigzagged across the canvas and "next sample" jumped
 around the show. Sorting is correct for exclusive timelines too, where it is
 already the order.
+
+## The one-instant tools
+
+Four tools sit beside the sweep and go through the same adapter, so a spot check
+and a sweep sample are the same frame:
+
+```
+node tools/inspect/score1.mjs   <prod> <part> <local> [k=v ...]   how close
+node tools/inspect/frame.mjs    <prod> <part> <local> [k=v ...]   what differs
+node tools/inspect/channels.mjs <prod> <part> <local> [--box=…]   colour/cast
+node tools/inspect/phase.mjs    <prod> <part> <local> [span step] wrong time?
+```
+
+They were written per-production first, with the schedule compiled in, and that
+cost more than duplication: the lapsus copies extracted their reference frame at
+full resolution and scaled during comparison, while the sweep scaled at
+extraction. The two renditions differ by 0.24 mean luma and correlate at
+0.999957 — enough to move a score by ~1e-4, so a tool and the gate never quite
+agreed about what "the reference at time T" was. Sharing `demo.mjs` and
+`compare.mjs` makes them agree by construction.
+
+`--query=` on the sweep and bare `k=v` arguments on these tools are the same
+mechanism: they reach the renderer, so an authenticity path (`?quality=original`)
+or a one-variable experiment can be scored rather than only eyeballed.
+
+## `state()` must be pure
+
+`state()` must be a function of the last `render()` argument and nothing else —
+no accumulation across calls. `render()` is already required to be repeatable;
+this makes the requirement checkable, because a pixel assertion only says
+"different" while a `state()` assertion says *which field*.

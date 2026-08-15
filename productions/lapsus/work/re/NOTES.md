@@ -107,7 +107,7 @@ guessing at class boundaries.
 
 ## First static frame (2026-08-13) — transform chain VERIFIED
 
-`node productions/lapsus/work/verify/frame.mjs hulluolli 4.8` renders one
+`node productions/lapsus/tools/inspect/frame.mjs lapsus hulluolli 4.8` renders one
 frame and montages it against the capture. The jester statue matches the
 reference in **silhouette, framing, scale, orientation and pose**, which
 validates the whole transform chain at once:
