@@ -87,8 +87,9 @@
       "path": "productions/ptct/work/reference/ptct_reference.mkv",
       "format": "bestvideo+bestaudio",
       "sha256": "fa8cbb847b5c84a606c9545589d9bd2bec417b156e6e51e315f4aab32f2391fa",
-      "alignmentOffsetMs": 4431,
-      "note": "video time = music time + 4.431 s (audio cross-correlation vs baked world_of_noise render)"
+      "alignmentOffsetMs": 4031,
+      "note": "video time = music time + 4.431 s (audio cross-correlation vs baked world_of_noise render) | alignmentOffsetMs RE-MEASURED 2026-08-15: 4431 -> 4031. Five well-matching samples spread across the show, scanned -1.2..+1.2s through the inspector adapter with frameRect cropping applied: a single-peaked curve with the mean peaking at -0.40s (0.8287) against 0.7295 at zero, and the per-probe argmaxes AGREEING at -0.4/-0.4/-0.4/-0.3/-0.5, i.e. within one step. That agreement is what makes it a measurement rather than an argmax off a flat curve \u2014 contrast energia, whose probes disagree by 2.6s and whose offset is therefore still null. Scanned on the BEST-matching samples on purpose: a shift is only resolvable where the picture already broadly matches.",
+      "captureFps": 30
     }
   ],
   "status": {
