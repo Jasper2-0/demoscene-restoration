@@ -115,3 +115,18 @@ recompressed, resolution-converted). `sweep.mjs` fails clean in that case and
 names the fetch command, which is the right behaviour: the adapter is still
 worth implementing, because the inspector, the schedule and the asset map do
 not need a reference.
+
+## Readiness
+
+Set **`window.__demoReady = true`** after `window.__demo` is assigned and the
+page can accept `render()` calls. Assign the adapter LAST, so that a harness
+waiting on either signal cannot race a half-built object.
+
+This was unspecified until Wonder became the second implementer, and the cost is
+worth recording. `sweep.mjs` waited on `window.__lapsusReady` — the first
+implementer's PRIVATE flag name — so Wonder, which set `__wonderReady`, never
+satisfied it. The wait had a 600s timeout but CDP's own `protocolTimeout` fires
+at 180s, so the failure surfaced as `Runtime.callFunctionOn timed out` from deep
+inside puppeteer, naming neither the production nor the missing flag. The sweep
+now waits on `__demoReady === true || !!window.__demo` and contains no
+production name at all.

@@ -447,8 +447,11 @@ try {
     state: () => lastState,
     assets: (part) => CLIPS.find((x) => x.name === part)?.assets ?? null,
   };
-  // Ready LAST, after __demo exists, so a harness that waits on this flag can
-  // rely on the adapter being installed rather than racing it.
+  // Ready LAST, after __demo exists, so a harness that waits on either flag can
+  // rely on the adapter being installed rather than racing it. __demoReady is
+  // the CONTRACT's flag (tools/inspect/ADAPTER.md); __wonderReady is Wonder's
+  // own, kept because its existing tests and shared/sunflower/test wait on it.
+  window.__demoReady = true;
   window.__wonderReady = true;
 } catch (error) {
   status.textContent = error.message;

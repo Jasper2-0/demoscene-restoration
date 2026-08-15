@@ -2397,6 +2397,10 @@ function accBlit() {
       return parts.get(part)?.assets?.() ?? null;
     },
   };
+  // The contract's readiness flag. The sweep used to wait on __lapsusReady,
+  // which is THIS production's private name and silently excluded every other
+  // one; setting the generic flag here is the other half of that fix.
+  window.__demoReady = true;
   if (inspect) {
     // No autoplay and no click gate: the tooling drives every frame itself.
     setStatus('loading…');

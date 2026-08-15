@@ -119,7 +119,20 @@ await withPage(
   { root: `productions/${prodName}`, path: '/web/index.html', query: '?inspect=1',
     width: W, height: H, viewport: { width: W, height: H } },
   async ({ page, errors }) => {
-    await page.waitForFunction('window.__lapsusReady === true || window.__demoReady === true',
+    // READINESS IS PART OF THE CONTRACT, and this line used to hardcode
+    // `window.__lapsusReady` — the FIRST IMPLEMENTER'S PRIVATE FLAG NAME. Any
+    // second production that did not happen to pick that name hung here until
+    // CDP's protocolTimeout fired, 180s before this wait's own 600s timeout, so
+    // the failure surfaced as an unrelated-looking `Runtime.callFunctionOn
+    // timed out` deep in puppeteer rather than "this page never became ready".
+    // Wonder hit exactly that on its first sweep.
+    //
+    // Wait on the ADAPTER instead: `__demoReady` when a production wants to
+    // signal explicitly after async setup, otherwise the mere existence of
+    // window.__demo — which both implementations now assign LAST for this
+    // reason. No production name appears in this file.
+    await page.waitForFunction(
+      'window.__demoReady === true || !!window.__demo',
       { timeout: 600000 });
     const has = await page.evaluate(() => typeof window.__demo === 'object' && !!window.__demo);
     if (!has) throw new Error(
@@ -127,6 +140,33 @@ await withPage(
 
     let plan = await page.evaluate((s) => window.__demo.plan(s), STEP);
     if (ONLY) plan = plan.filter((p) => ONLY.includes(p.part));
+
+    // A SAMPLE PAST THE END OF THE CAPTURE HAS NO REFERENCE, AND THAT IS NOT AN
+    // ERROR — it is a fact about the recording, and it has to be reported
+    // rather than crashed on. Wonder's clip table runs to 195s while its
+    // executable exits at 186.5s and the capture is ~187s, so the tail of its
+    // schedule simply is not on video. ffmpeg then wrote no PNG, and the score
+    // step died on a missing file several hundred renders later — after all the
+    // expensive work, with a stack trace that named neither the part nor why.
+    //
+    // Drop them here, and SAY SO with the range: a silent truncation would read
+    // as "the whole timeline was swept" when the end of it never was.
+    const durOut = execFileSync('ffprobe', ['-v', 'error', '-show_entries',
+      'format=duration', '-of', 'default=nw=1:nk=1', CAPTURE], { encoding: 'utf8' });
+    const capDur = Number(durOut.trim());
+    if (Number.isFinite(capDur)) {
+      const before = plan.length;
+      // A frame is only reliably extractable a little before the last one.
+      const limit = capDur - 0.05;
+      const dropped = plan.filter((p) => p.captureTime > limit);
+      plan = plan.filter((p) => p.captureTime <= limit);
+      if (dropped.length) {
+        const parts = [...new Set(dropped.map((d) => d.part))];
+        console.log(`  capture is ${capDur.toFixed(2)}s; DROPPED ${dropped.length}/${before} ` +
+          `sample(s) past its end (${dropped[0].captureTime.toFixed(2)}s..` +
+          `${dropped[dropped.length - 1].captureTime.toFixed(2)}s) in: ${parts.join(', ')}`);
+      }
+    }
     console.log(`  ${plan.length} samples across ${new Set(plan.map((p) => p.part)).size} parts`);
 
     let i = 0;
