@@ -47,7 +47,13 @@ try {
   }));
   const scenes = new Map(sceneEntries);
   const fallback = scenes.get('nowheretorun.exp');
-  const showTimeline = new LayeredTimeline([...ENERGIA_PHASE_CLIPS, ...ENERGIA_SCENE_CLIPS]);
+  // The native clock and every gate operand are stored as 32-bit floats.
+  // Per-clip boundary flags distinguish the inclusive EXP manager from the
+  // strict compiled master-frame comparisons.
+  const showTimeline = new LayeredTimeline(
+    [...ENERGIA_PHASE_CLIPS, ...ENERGIA_SCENE_CLIPS],
+    { float32Time: true },
+  );
   const [, rawTextures] = await Promise.all([
     Promise.all([...scenes.values()].map(({ renderer }) => renderer.prepare())),
     uploadEnergiaRawAssets(mgl, assets),
@@ -156,8 +162,8 @@ try {
       'late_effect_pair_410f90_410470',
       'main_effect_mode_3_overlay',
     ].includes(clip.id));
-    let frame;
-    if (seconds < 56) {
+    let frame = 0;
+    if (activeClips.some((clip) => clip.id === 'early_renderer_411e10_410470')) {
       frame = seconds;
       waveField.render(seconds, { clear: true });
       dotField.render(seconds);
@@ -183,9 +189,9 @@ try {
     } else if (lateOverlayClip) {
       frame = renderLateScene(true);
     } else {
-      frame = ((seconds * 30) % fallback.scene.frameEnd + fallback.scene.frameEnd)
-        % fallback.scene.frameEnd;
-      fallback.renderer.render(frame);
+      // The nowheretorun scene was an early diagnostic scaffold, not a native
+      // catch-all layer. Exact strict-gate boundaries have no master effect.
+      mgl.clear();
     }
     const textureClip = activeClips.find((clip) => clip.data?.texture);
     if (textureClip) textureOverlay.render(textureClip.data.texture);
