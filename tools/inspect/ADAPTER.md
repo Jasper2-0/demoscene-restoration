@@ -196,3 +196,29 @@ or a one-variable experiment can be scored rather than only eyeballed.
 no accumulation across calls. `render()` is already required to be repeatable;
 this makes the requirement checkable, because a pixel assertion only says
 "different" while a `state()` assertion says *which field*.
+
+## `prod.json` capture fields
+
+The comparison tools read `captures[0]`. Four fields carry meaning beyond
+"where the file is":
+
+| field | why it exists |
+|---|---|
+| `path` | gitignored; `tools/fetch/capture.mjs <slug>` rehydrates it |
+| `sha256` | pins OUR capture. A mismatch on refetch means the ground truth changed, which is a warning and not routine noise |
+| `captureFps` | the capture's own frame rate. A 30fps capture of a 60fps demo carries an irreducible 0–33ms frame phase; a 60fps one does not. Record it so that ambiguity is visible rather than discovered |
+| `alignmentOffsetMs` / `trackOffsetsMs` | where the port's clock sits against the capture |
+
+**Audio alignment and VISUAL alignment are different measurements**, and both
+ports that looked found the same thing from opposite directions: lapsus's engine
+resets its QPC timer *after* `FSOUND_PlaySound` returns (40ms), wonder's calls
+`FSOUND_SetMixAhead(30)` and drives visuals from `FMUSIC_GetOrder` (~30ms lead).
+So a production may carry `visualTrackOffsetsMs` beside `trackOffsetsMs`, and
+anything comparing FRAMES takes `visualTrackOffsetsMs ?? trackOffsetsMs` while
+anything measuring or aligning AUDIO keeps reading `trackOffsetsMs` — otherwise
+the alignment tool re-measures its own output.
+
+**Never carry an offset across a change of capture.** When wonder's capture was
+replaced with a 60fps source, its `alignmentOffsetMs` was reset to null rather
+than inherited: the old 0ms pin and its 0.7634 correlation score belonged to the
+superseded video and said nothing about the new one. Re-measure, or record null.

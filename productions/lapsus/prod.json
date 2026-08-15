@@ -70,7 +70,7 @@
       ],
       "sha256": "baa56d2299c336546c036dbb158a727549aec205725281ce154f497a464289c2",
       "bytes": 2260,
-      "note": "second scene.org variant — diff against the main zip during RE"
+      "note": "second scene.org variant \u2014 diff against the main zip during RE"
     }
   ],
   "captures": [
@@ -78,6 +78,7 @@
       "youtube": "oP3lrBNVKBs",
       "path": "productions/lapsus/work/reference/lapsus_ref.mkv",
       "format": "bestvideo+bestaudio",
+      "captureFps": 60,
       "sha256": "115f682ffd830f9bc1863a0c21624d767523a2996ef5b1c86933ba047dd6432e",
       "alignmentOffsetMs": 6410,
       "note": "two MP3s play in order with a loading part in the middle. Audio starts at 6.410s / 106.720s; the phase-2 visual clock starts at 106.760s. The 40ms split is measured from moving frames across phase 2 and matches the binary's order: synchronous FSOUND_PlaySound returns before the QPC timer is reset. Keep trackOffsetsMs as the audio alignment used by work/verify/align.mjs and visualTrackOffsetsMs as the frame-comparison origin. mp3#1 is cut early (would run to 117.4s), matching FSOUND_StopSound; mp3#2 would end at 225.8s but the capture ends at 219.1s.",
