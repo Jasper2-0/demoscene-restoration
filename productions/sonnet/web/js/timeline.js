@@ -33,6 +33,34 @@ export function secondsToPosition(sec) {
   return ((Math.floor(totalRows / 64) & 0xff) << 8) | (totalRows % 64);
 }
 
+/**
+ * Which scene object owns a music position — the demo's parts, in show order.
+ *
+ * Recovered in re/scenes/SCENES_2_6.md and SCENES_7_10.md. This lived in
+ * web/test/sweep.mjs, i.e. Node-side, where the PAGE could not see it: the
+ * inspector adapter needs exactly this table to answer schedule(), and a second
+ * copy would be free to drift from the one the sweep attributes samples with.
+ * The Node sweep imports it from here.
+ *
+ * Bands are half-open [from, to) in music position, and exclusive — unlike
+ * wonder and energia, one scene owns the screen at a time.
+ */
+export const SCENE_BANDS = Object.freeze([
+  { obj: 1, name: 'title / poem only', from: 0x0000, to: 0x0400 },
+  { obj: 3, name: 'scene 0 — spires', from: 0x0400, to: 0x0700 },
+  { obj: 4, name: 'scene 1 — lakes', from: 0x0700, to: 0x0a00 },
+  { obj: 5, name: 'scene 2 — trees/butterflies', from: 0x0a00, to: 0x0f00 },
+  { obj: 6, name: 'scene 3 — cloud sea', from: 0x0f00, to: 0x1200 },
+  { obj: 7, name: 'scene 4 — beach / sunset', from: 0x1200, to: 0x1700 },
+  { obj: 8, name: 'scene 5 — autumn forest', from: 0x1700, to: 0x1e00 },
+  { obj: 9, name: 'scene 7 — winter', from: 0x1e00, to: 0x2300 },
+  { obj: 10, name: 'scene 8 — finale', from: 0x2300, to: 0x2b00 },
+  { obj: 1, name: 'credits', from: 0x2b00, to: 0x2c10 },
+]);
+
+/** The band owning a position; falls back to the first, as the sweep always did. */
+export const sceneAt = (p) => SCENE_BANDS.find((s) => p >= s.from && p < s.to) || SCENE_BANDS[0];
+
 export class Timeline {
   /**
    * @param {{events: Array<{t:number,obj:number,m:number,u32:number,f:number}>}} data

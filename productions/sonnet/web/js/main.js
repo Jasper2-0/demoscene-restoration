@@ -27,7 +27,7 @@
 // window.__sonnetClock, window.__sonnetTimings.
 
 import { MiniD3D8 } from './minid3d8.js';
-import { Timeline, seek, positionToSeconds, secondsToPosition, END_POSITION }
+import { Timeline, seek, positionToSeconds, secondsToPosition, END_POSITION, SCENE_BANDS }
   from './timeline.js';
 import { TextEngine } from './text.js';
 import { Compositor } from './compositor.js';
@@ -41,6 +41,12 @@ const params = new URLSearchParams(location.search);
 const AUTHENTIC = params.get('quality') === 'original';
 const DEBUG = params.has('debug');
 const POS_PARAM = params.get('pos');
+// ?inspect=1 installs the production-agnostic tooling adapter (window.__demo,
+// tools/inspect/ADAPTER.md). Sonnet's headless path was already gated on ?pos=,
+// which renders ONE position and stops; inspect takes the same branch but
+// renders nothing until asked, so the caller drives every frame.
+const INSPECT = params.has('inspect');
+const HEADLESS = POS_PARAM !== null || INSPECT;
 const PARTY = params.get('audio') === 'party';
 const ASSET_MODE = params.get('assets') === 'baked' ? 'baked' : 'generated';
 // The D3D-correct inverse-transpose normal transform + FUN_0040e923's shadow
@@ -158,7 +164,7 @@ const TEX_SCALE = (() => {
 // `?preload=1` turns it on there anyway when you want to look at it.
 const PRELOAD = params.has('preload')
   ? params.get('preload') !== '0'
-  : POS_PARAM === null;
+  : !HEADLESS;
 
 // --------------------------------------------------------------------------- timings
 // Every phase of the boot, so the "is generating at load fast enough" question is
@@ -276,7 +282,7 @@ async function loadAssets() {
   // that an AudioContext requires, so the audio phase is pure CPU by the time the
   // preloader reaches it. Failure is not fatal here — buildModule() will retry and
   // report properly.
-  if (ASSET_MODE !== 'baked' && POS_PARAM === null) {
+  if (ASSET_MODE !== 'baked' && !HEADLESS) {
     import('./node_compat.js')
       .then(m => m.preloadFile(new URL(ROOT + 'unpacked/sonnet_img.bin', location.href).href))
       .catch(() => {});
@@ -777,7 +783,7 @@ canvas.addEventListener('webglcontextlost', (e) => {
 
 const assets = await loadAssets().catch(e => { fatal('loading assets', e); throw e; });
 
-if (POS_PARAM !== null) {
+if (HEADLESS) {
   // -------- single-frame debug / capture path, no audio
   overlay.remove();
   const app = await boot(assets);
@@ -835,9 +841,63 @@ if (POS_PARAM !== null) {
     restorePrecip(precipBefore);
     return out;
   };
-  const start = POS_PARAM.startsWith('0x') ? parseInt(POS_PARAM, 16) : parseInt(POS_PARAM, 10);
-  const r = window.__sonnetRender(start);
-  window.__sonnetClock = { pos: r.pos, songMs: r.ms, rowFrac: 0, static: true };
+  // ---- INSPECTOR ADAPTER (tools/inspect/ADAPTER.md).
+  //
+  // Sonnet is the contract's third implementer and the first whose native
+  // coordinate is MUSIC POSITION rather than seconds — (order << 8) | row. The
+  // conversion is the page's own (positionToSeconds/secondsToPosition), so the
+  // tooling never learns what an order is.
+  //
+  // Two things differ from wonder and energia, both worth stating:
+  //
+  //  1. PARTS ARE EXCLUSIVE. SCENE_BANDS is a half-open ladder — one scene owns
+  //     the screen at a time — so state().active is a single name, unlike the
+  //     layered Sunflower ports where several clips are live at once.
+  //
+  //  2. render() IS COLD PER CALL. __sonnetRender restores the boot RNG, replays
+  //     the script from zero and re-renders the last frames so the flare
+  //     integrator settles. That makes sonnet the only port that satisfies the
+  //     contract's repeatability requirement without any change — and it is why
+  //     97-99% of a sample's cost is the replay rather than the draw. Use a
+  //     coarser --step here than for the Sunflower ports.
+  const REF_OFFSET = 0;   // prod.json alignmentOffsetMs, once measured
+  const BANDS = SCENE_BANDS.map((b) => {
+    const start = positionToSeconds(b.from);
+    return { name: b.name, obj: b.obj, from: b.from, to: b.to,
+             start, dur: positionToSeconds(b.to) - start };
+  });
+  let lastState = null;
+  window.__demo = {
+    id: 'sonnet',
+    schedule: () => BANDS.map((b) => ({
+      name: b.name, phase: 1, start: b.start, dur: b.dur,
+      captureStart: b.start + REF_OFFSET,
+    })),
+    // plan() intentionally omitted — tools/inspect/plan.mjs owns the grid.
+    async render({ part, local }) {
+      const b = BANDS.find((x) => x.name === part);
+      if (!b) return null;
+      const r = window.__sonnetRender(secondsToPosition(b.start + local));
+      lastState = { scene: part, pos: r.pos, posHex: '0x' + r.pos.toString(16).padStart(4, '0'),
+                    songMs: r.ms, quads: r.quads, active: [part] };
+      return lastState;
+    },
+    state: () => lastState,
+    assets: () => null,
+    /** Musical coordinate — sonnet's own, and the reason positionAt exists. */
+    positionAt(showTime) {
+      const p = secondsToPosition(showTime);
+      return `order ${p >> 8} row ${p & 0xff}`;
+    },
+  };
+  window.__demoReady = true;
+
+  // ?pos= keeps its original meaning: render that one position and stop.
+  if (POS_PARAM !== null) {
+    const start = POS_PARAM.startsWith('0x') ? parseInt(POS_PARAM, 16) : parseInt(POS_PARAM, 10);
+    const r = window.__sonnetRender(start);
+    window.__sonnetClock = { pos: r.pos, songMs: r.ms, rowFrac: 0, static: true };
+  }
   window.__sonnetReady = true;
 } else {
   overlay.textContent = 'click to start';
