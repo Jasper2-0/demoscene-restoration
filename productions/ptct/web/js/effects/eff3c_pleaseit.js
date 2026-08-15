@@ -51,7 +51,6 @@ export function makeEffect(R) {
   const flash = new Float64Array(256); // this+0x804 (0 = inactive)
   const NTEX = 40;                    // slots with a nonzero texture id
   let tex = null;
-  let lastNow = 0; // trigger() has no pos argument; render tracks pos.ticks
 
   return {
     init() {
@@ -79,7 +78,6 @@ export function makeEffect(R) {
 
     // FUN_00402490 — every frame while armed
     render(t, pos) {
-      lastNow = pos.ticks;
       if (!tex) return;
       const mgl = R.mgl, gl = R.gl;
       mgl.enableBlend(true);
@@ -103,11 +101,26 @@ export function makeEffect(R) {
       mgl.enableTexture(false);
     },
 
-    // FUN_004021f0 — latch the flash time (original: getTicks(); per API.md
-    // we latch pos.ticks, tracked from the last render call)
-    trigger(param) {
+    // FUN_004021f0 — latch the flash time. The original calls getTicks()
+    // INSIDE trigger, i.e. the moment the trigger fired; the timeline now hands
+    // that in. Previously this used the last RENDERED frame's ticks, which was
+    // one frame stale in live playback and seek-order dependent in a harness.
+    trigger(param, pos) {
       const p = param & 0xffff;
-      if (p < 256) flash[p] = lastNow;
+      if (p < 256) flash[p] = pos.ticks;
     },
+
+    // Per-playthrough state only. flash[] otherwise survives a seek and is
+    // cleared only when a slot's age expires, so a slot set by one seek's replay
+    // leaks into the next. Geometry and RNG-derived tables are NOT touched:
+    // rand31's seed is module-global and consumed at init in a fixed
+    // cross-effect order, so rebuilding would desync every other effect.
+    reset() { flash.fill(0); },
+
+    // Per-playthrough state, for work/verify/repeat_test.mjs. A stale flash slot
+    // is often VISUALLY INERT — its age reads as expired, so it changes no
+    // pixels — which is exactly why a pixel-only determinism test passed both
+    // before and after the fix. The probe sees the latch the frame cannot.
+    probe: () => ({ flash: Array.from(flash).map((v, i) => (v ? [i, v] : null)).filter(Boolean) }),
   };
 }

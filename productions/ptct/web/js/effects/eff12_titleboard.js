@@ -17,8 +17,12 @@
 export function makeEffect(R) {
   let scene = null;
   let board = null;
-  let t0 = -1;       // DAT_0041d2f4
-  let lastTicks = 0; // for trigger(), which gets no pos
+  // t0 (DAT_0041d2f4) latched getTicks() on the FIRST RENDER EVER, so seeking
+  // to 520s and then 490s produced a negative dt. The timeline already computes
+  // the layer elapsed (timeline.js: d.elapsed = nowTicks - c.start), which is
+  // exactly "ticks since this activation began" — so dt is that, statelessly.
+  // `restart` is per-playthrough only and reset() clears it.
+  let restart = null;
 
   return {
     init() {
@@ -32,12 +36,10 @@ export function makeEffect(R) {
 
     // FUN_004092a0
     render(t, pos) {
-      lastTicks = pos.ticks;
-      if (t0 === -1) t0 = pos.ticks;
       R.clearDepth();            // glClear(GL_DEPTH_BUFFER_BIT)
       board.additiveBlend = 1;   // +0x48 = 1
       board.texFxMask = 4;       // +0x44 = 4 (flat color)
-      const dt = pos.ticks - t0;
+      const dt = restart === null ? t : pos.ticks - restart;
       let v = dt * 0.03187499940395355;
       if (v > 255.0) v = 255.0;
       v = Math.trunc(v);
@@ -54,8 +56,12 @@ export function makeEffect(R) {
     },
 
     // FUN_00409410 — restart the board clock (unused by the shipped script)
-    trigger(/* param */) {
-      t0 = lastTicks;
+    trigger(param, pos) {
+      restart = pos.ticks;
     },
+
+    reset() { restart = null; },
+
+    probe: () => ({ restart }),
   };
 }

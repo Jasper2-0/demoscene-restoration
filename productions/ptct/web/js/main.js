@@ -142,6 +142,18 @@ if (DEBUG) {
   // Seek = replay the timeline from 0 at row granularity so layer-clock
   // survival and TRIG/TRESET one-shots are in the played-through state.
   window.__ptctSeek = (t) => {
+    // CLEAR PER-PLAYTHROUGH EFFECT STATE FIRST. Re-parsing the script resets
+    // ev.dead and the layer clocks, but the effect OBJECTS are built once in
+    // boot() and shared across every seek, so anything they latch survives —
+    // eff3c's flash[] is cleared only when a slot's age expires, so a slot set
+    // by one seek's replay leaks into the next.
+    //
+    // Deliberately NOT rebuilding the registry: rand31's seed is module-global
+    // (js/scene.js) and consumed at init in a fixed cross-effect order, and
+    // eff3c.init starts an async image load, so a rebuild per seek would
+    // re-consume the stream and re-upload textures on every sample. reset() is
+    // the right seam — it clears playthrough state and nothing generated.
+    for (const eff of ctx.registry.values()) eff.reset?.();
     const timeline = new Timeline(parseScript(assets.scriptBuf), ctx.registry);
     for (const [rt, o, r] of ctx.sync.rows) {
       if (rt >= t) break;
@@ -150,6 +162,15 @@ if (DEBUG) {
     return renderAt(ctx, timeline, t);
   };
   const t0 = parseFloat(params.get('t') || '0');
+  // Per-playthrough state of every effect that exposes it. The determinism test
+  // asserts on THIS as well as on pixels, because a latch can be real and
+  // invisible: eff3c's stale flash slots read as expired and change nothing on
+  // screen, so a pixel-only test was vacuous.
+  window.__ptctProbe = () => {
+    const out = {};
+    for (const [id, eff] of ctx.registry) { const p = eff.probe?.(); if (p) out[id] = p; }
+    return out;
+  };
   window.__ptctReady = true;
   window.__ptctSeek(t0);
 } else {
