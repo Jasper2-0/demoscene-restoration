@@ -258,10 +258,91 @@ This also explains a false start: the payloads all begin `5B FF 0F xx 80 00`,
 which looked like a magic number and is not — the first opcode being implicit
 means those bytes are the root node's operands, not a header.
 
-What remains is the per-opcode operand widths — how many bytes each of the 8
-scene handlers and 5 geometry handlers consumes — which is a matter of reading
-nine short functions that are already decompiled, and then the streams decode
-end to end.
+#### Operand widths, measured
+
+The handlers share the stream pointer in `r31`, so their loads and their
+self-increments give the layout without any guessing:
+
+| op | node | reads from `r31` | consumes |
+|---|---|---|---|
+| 0 | 28 | half@0, half@2 | **6 or 8** bytes (+4, then +2, then +2 on one path) |
+| 1 | 64 | byte@0, byte@1, half@2, half@4 | **2 + 6n** (three separate +6 sites) |
+| 2 | 32 | byte@0, half@1 | **3** |
+| 3 | 76 | byte@0, byte@1, byte@2, half@4 | **3 or 9** |
+| 4 | 32 | byte@0, byte@1, half@2, half@4, half@6 | **2 or 10** |
+
+`op2` reads a halfword at `r31+1` — an **unaligned** 16-bit read. That closes an
+earlier loose end: the stream pointers in the tables are frequently odd
+(`+0x20b1`, `+0x2243`, `+0x2857`), which looked wrong for a `ushort*` and is
+simply what a byte-packed stream with unaligned halfword operands produces. On
+68K/PPC big-endian Amiga this is fine and it saves a byte per record.
+
+The scene level is simpler still: in all 520 bytes of `_generate_scene` there are
+exactly **three** stream reads — `lhz` for the length, then two `lbz`, each
+followed by `addi r31,r31,1`. No multi-byte operands at all.
+
+#### Where static analysis stops paying
+
+The obvious next move — walk the 18 part-one streams as opcode tokens — **does
+not work, and it is worth knowing why before trying it.** If every byte were a
+token with the opcode in bits 0-6, every byte would satisfy `(b & 0x7f) <= 7`.
+Across all 6,098 bytes of part one's streams, only **60%** do.
+
+The decompilation explains it: after reading the operand byte, `_generate_scene`
+does not use its low bits as the next opcode — it uses them as an *index*, and
+takes the next state from `param_3[i]` or (for opcode 5) `param_4[i]`. Those two
+arguments come from globals at `r2+0x288e` and `r2+0x2896`, whose static values
+are `0x101c29f0` and `0x10514120` — both inside **seg 6, the 17 MB BSS hunk** —
+and which no PPC instruction ever writes, only reads (9 and 6 read sites
+respectively, including from `_calculate_obj`, `_calculate_txt`, `_alloc_txt`).
+
+So the scene graph is table-driven through structures that are **built at runtime
+in BSS**. Decoding the streams statically means first reversing whatever
+populates those tables; the alternative is to dump them from a running instance.
+**This is the precise point at which the dynamic trace stops being a nice-to-have
+and starts being the cheaper path** — and it strengthens the case for the stub
+`Warp3DPPC.library`, since running the intro is what produces those tables.
+
+For scale: part one's 18 streams total 6,098 bytes, which is only 47% of seg 3.
+The rest of that segment is unaccounted for and is the obvious place to look next.
+
+#### One structure fully cracked: the font
+
+`_init_scene_generate` is 96 bytes and decodes completely. It is a `0xFF`-
+terminated unpacker turning 5-byte records into 20-byte ones, running each of
+four bytes through `int2float`:
+
+```asm
+loop:  lbz  r24,0(r26)      ; tag
+       stw  r24,0(r25)
+       cmpwi r24,0xff       ; terminator
+       beq  done
+       lbz  r3,1(r26) ; bl int2float ; stfs f0,4(r25)
+       lbz  r3,2(r26) ; bl int2float ; stfs f0,8(r25)
+       lbz  r3,3(r26) ; bl int2float ; stfs f0,0xc(r25)
+       lbz  r3,4(r26) ; bl int2float ; stfs f0,0x10(r25)
+       addi r26,r26,5       ; src += 5
+       addi r25,r25,0x14    ; dst += 20
+       b    loop
+```
+
+Its source is static, at `seg0+0xa8e4`, and the records read
+`(code, x, y, w, h)`. The tags are ASCII. **It is a 40-glyph proportional bitmap
+font atlas**, 200 bytes packed, in a 128×113 region:
+
+```
+ '0' (0,0,19,18)   '1' (20,0,13,18)   '2' (34,0,19,18)  …  'i' (116,0,8,18)
+ 'm' and 'w' 28 wide, 'l' 10, ':' 10, '1' 13 — proportional, one row per 19px
+ charset: 0123456789 a-z " ? :
+```
+
+Two curiosities worth keeping: `'0'` appears **twice** (indices 0 and 11), and
+`'v'` and `'w'` share the **identical** rectangle `(95,76,28,18)` — so `v` is
+drawn as `w`. Whether that is a size-saving shortcut or a bug that shipped, the
+port has to reproduce it, and it is exactly the sort of thing a pixel diff would
+otherwise flag as a porting error.
+
+The caller is `_play_scene_p_end`, so this is the text in the closing scene.
 
 ### The 3D is a bounded, documented API
 
@@ -428,8 +509,8 @@ The natural first milestone is the one you named — a full-frame trace — but 
 static side can be pushed much further first, cheaply:
 
 1. commit the hunk loader + Ghidra import as `work/re/` tooling;
-2. ~~resolve the VM dispatch tables~~, ~~locate the opcode streams~~ — done;
-   next is per-opcode operand widths, after which the streams decode fully;
+2. ~~dispatch tables~~, ~~opcode streams~~, ~~operand widths~~ — done; the scene
+   graph needs its BSS tables, which is a dynamic-trace job, not a static one;
 3. the 22 Warp3D vectors are now named against ReWarp3DPPC — write
    down the state flags actually used;
 4. only then stand up WinUAE for dynamic confirmation.
