@@ -217,6 +217,15 @@ The remaining twenty-three carry dense weights in the 37–88 range with sums in
 the hundreds and a single zero rotating through the nine positions — softening
 filters with a directional bias.
 
+**The buffers rotate between opcodes, though.** Within one convolution the pair
+is fixed and known, which is what makes the 40/40 verification possible. Trying
+the same method on the table-dispatched opcodes does not work: running `op9` then
+each of ops 12, 10 and 17 with three different operands leaves the surface at
+`r2+0x2466` **identical in all nine cases**, so that is not where they write.
+Extending exact reproduction to the main opcode table needs the inter-opcode
+rotation, which is the code at `0x10000880` and is unread. Recorded as the next
+thing to pull rather than guessed at.
+
 They are **generated at run time**, not static: `_generate`'s prologue calls
 `0x1000067c` with `r31 = r2+0x2516` before anything else, and the table lives in
 seg 6. Deterministic, though — the verification runs the opcodes in *separate*

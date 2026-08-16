@@ -10,6 +10,7 @@ Runs the three pure subsystems under the qemu harness and writes:
     out/scenes.json                per scene: ordered typed draw-node list
     out/font.json                  40 glyphs, (code, x, y, w, h)
     out/font_atlas.png             the 128x128 glyph bitmap those index into
+    out/tex_kernels.json           the 40 3x3 convolution kernels, each verified
     out/render_state.json          the Warp3D configuration and fog presets
     out/draws.json                 the recorded Warp3D draw stream, per frame
     out/showorder.json             the show schedule, from the music
@@ -24,6 +25,7 @@ import drawlog
 import ppcrun as H
 import showorder
 import rendertex
+import texconv
 import rungeo
 import runscene
 
@@ -269,6 +271,8 @@ def main():
     print('font        ...', end=' ', flush=True); ng = export_font(d0, out); print(f'{ng} glyphs')
     print('render state...', end=' ', flush=True); nf = export_render_state(d0, r2, out); print(f'{nf} fog presets')
     print('font atlas  ...', end=' ', flush=True); na = export_font_atlas(flat, out); print(f'{na} set pixels')
+    print('tex kernels ...', flush=True)
+    sys.argv = ['x', flat, f'{out}/tex_kernels.json']; texconv.main()
     print('textures    ...', end=' ', flush=True)
     sys.argv = ['x', flat, f'{out}/textures']; rendertex.main()
     print('meshes      ...', end=' ', flush=True); nm, mf = export_meshes(flat, d0, r2, out); print(f'{nm} programs, {mf} failed')
