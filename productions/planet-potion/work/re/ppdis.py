@@ -25,15 +25,28 @@ def main():
                       capstone.CS_MODE_BIG_ENDIAN | capstone.CS_MODE_M68K_020) if m68k
           else capstone.Cs(capstone.CS_ARCH_PPC,
                            capstone.CS_MODE_32 | capstone.CS_MODE_BIG_ENDIAN))
-    for i in md.disasm(d0[lo - BASE:hi - BASE], lo):
-        if i.address in syms:
-            print(f'--- {syms[i.address]}')
-        note = ''
-        if i.mnemonic.startswith('b') and i.op_str.startswith('0x'):
-            t = int(i.op_str.split(',')[-1].strip(), 16)
-            if t in syms:
-                note = '   ; ' + syms[t]
-        print(f'{i.address:#010x}  {i.mnemonic:<9} {i.op_str}{note}')
+    # RESYNC. capstone's linear disassembly stops dead at the first word it
+    # cannot decode, and this program contains several it does not know. Taking
+    # that halt for "end of code" is exactly the mistake that once put this
+    # binary's code extent 13 KB short, so step over the bad word and continue.
+    pc, step = lo, (2 if m68k else 4)
+    while pc < hi:
+        got = None
+        for i in md.disasm(d0[pc - BASE:hi - BASE], pc):
+            got = i
+            if i.address in syms:
+                print(f'--- {syms[i.address]}')
+            note = ''
+            if i.mnemonic.startswith('b') and i.op_str.startswith('0x'):
+                t = int(i.op_str.split(',')[-1].strip(), 16)
+                if t in syms:
+                    note = '   ; ' + syms[t]
+            print(f'{i.address:#010x}  {i.mnemonic:<9} {i.op_str}{note}')
+            pc = i.address + i.size
+        if got is None:
+            w = int.from_bytes(d0[pc - BASE:pc - BASE + step], 'big')
+            print(f'{pc:#010x}  .long     {w:#0{step * 2 + 2}x}   ; undecoded')
+            pc += step
 
 
 if __name__ == '__main__':

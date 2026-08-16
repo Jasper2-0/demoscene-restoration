@@ -210,7 +210,29 @@ at `r2+0x24e2`.
 leave alpha. All 40 verified exact. `0x55` is not a kernel: it is
 `max(255 − x, 0)`.
 
-**Opcodes 0…19** are the table-dispatched set, 17 distinct handlers. Read so far:
+**Opcodes 0…19** are the table-dispatched set, and the 20 slots hold **17
+distinct addresses** because three pairs share a handler that branches on the
+opcode number in `r21`:
+
+| slots | handler | |
+|---|---|---|
+| 0, 17 | `0x10000acc` | 3 operands each |
+| 11, 12 | `0x10000cfc` | 1 operand each |
+| 14, 15 | `0x10001324` | 1 operand each |
+
+`0x10000cfc` is the worked example. It loads the operand, computes
+`f16 = operand - 128`, then `cmpwi cr4, r21, 11` picks the path: opcode 11 takes
+`frsqrte(128 - |f16|)`, negated when the operand is below 128, and calls the
+kernel at `0x10000714`; opcode 12 doubles `f16` when the operand exceeds 128,
+divides by 128 unless the operand is exactly 128, and calls `0x100006bc`. Both
+then run the symmetry blit at `0x10000820`.
+
+So a port that builds a 20-entry table of function pointers must pass the opcode
+in, not just the operands. Note this is **not** the same as ops 2, 3 and 5, which
+have three genuinely distinct handler addresses and different operand counts
+(13, 12, 10) despite producing identical output on the differential test.
+
+Read so far:
 `op10` permutes channels by two swaps, `op11` applies an `frsqrte` curve about
 128, `op12` is `out = in + (in − 128)·k` with `k = (operand − 128)/128` doubled
 above 128, `op13` copies a channel into the mask, `op14`/`op15` add to and scale
