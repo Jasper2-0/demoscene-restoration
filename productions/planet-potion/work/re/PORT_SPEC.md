@@ -544,11 +544,24 @@ one:
   above is about what the code should read; this shows what it does read, on the
   first iteration. `drawlog.run`'s `probe` argument dumps a memory range but not
   registers, so this needs a small addition to the harness.
-* **patch the disputed byte and see whether the output changes.** Tried, and it
-  did not discriminate: walking the arena dump from its base gives a node type of
-  1062, because the base is not the list head — the same obstacle `animdump.py`
-  hit and solved by seeding the walk from the draw log's node addresses. The
-  experiment is sound and wants that seeding applied to `runscene` first.
+* **patch the disputed byte and see whether the output changes.** Done, through
+  `animdump.py` because it seeds its walk from the draw log's node addresses
+  rather than from the arena base. **The result is decisive: unpatched, the scene
+  builds `[3, 3, 3, 4, 4]`; with the byte at `stream+2` changed from `0x5b` to
+  `0x00`, the run CRASHES.** So that byte is read and is load-bearing.
+
+**Which resolves it as far as measurement can.** The byte cannot be an opcode —
+the opcode space is eight wide and the handler table ends at index 7 — and it
+cannot be inert, because changing it breaks the build. So it is consumed as an
+**operand**, and the only node in play before the first stream opcode is the
+type-7 root that `li r29, 7` synthesises. The fixed `0xff 0x0f` at offsets 3 and
+4 of every scene fits the same reading: the root's operands are constant across
+the production.
+
+That is a measured fact rather than a seventh reading, and it is the one the six
+readings before it were all trying to guess. What remains is to read the type-7
+path at `0x10002250`–`0x10002298` for the operand widths, now knowing what to
+look for.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
