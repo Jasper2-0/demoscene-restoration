@@ -573,6 +573,52 @@ For a port this is the sync model in full. There is no separate beat detection
 and no timeline of animation events — one halfword per frame, compared against a
 byte per node.
 
+#### Two structs, and the chain between them
+
+`_calc_matrix`'s three helpers are three passes over the same list, and reading
+the second and third settles what the first was producing.
+
+There are **two objects per list entry**, not one:
+
+| render node (`r14`, and `r30` in `_show_scene`) | | animation object (`[node+0]`) |
+|---|---|---|
+| `+0x00` the animation object | | `+0x00` type |
+| `+0x04` texture | | `+0x02`, `+0x03` flags |
+| `+0x08` render type × 4 | | `+0x04` **parent** |
+| `+0x0e` clip enable | | `+0x08` keyframe track |
+| `+0x10` next | | `+0x0c…` evaluated channels |
+| `+0x14/18/1c` **cx, cy, scale** | | `+0x6c` time origin |
+| `+0x24` object | | `+0x70` music trigger |
+
+**Pass 2 (`0x10005394`) is the scene hierarchy.** `[anim+3]` bit 0 is a dirty
+flag; the pass reads the **parent** at `[anim+4]`, defers if the parent is itself
+still dirty, and otherwise composes — a component-wise `fmul` of the node's four
+channels at `+0x48…+0x54` by the parent's, gated by flag bit `0x40`. So nodes
+inherit from their parents by multiplication, not by matrix concatenation.
+
+**Pass 3 (`0x10005510`) writes the answers where the renderer reads them.**
+
+```
+  lfs f13, 0x54(r31)     ; r31 = anim + 0xc, so anim + 0x60
+  stfs f13, 0x14(r14)    ; -> the render node's cx
+  ... +0x58 -> +0x18 (cy),  +0x5c -> +0x1c (scale)
+```
+
+`+0x14`, `+0x18`, `+0x1c` are exactly the three fields the emitter loads as
+`cx`, `cy` and `scale`. That closes the chain end to end: **keyframe →
+`anim+0x3c…` → parent composition → `anim+0x60…` → `node+0x14…` → the
+projection**. It also explains why the projection is per-node — those numbers are
+animated channels, not camera state.
+
+The same pass then dispatches on the render type (`lhz r3, 8(r14)`), skipping
+`0x1c` (type 7, the root sentinel) and giving type 6 its own preparation: 24
+words copied out of the animation object into the buffer at `[r14+0x2c]` before
+a call to `0x10005b34`.
+
+So stage C's structure is: evaluate cubic keyframe tracks, compose down the
+parent hierarchy, publish into the render node. Three passes, in that order,
+over a list the harness can already dump.
+
 ### Scene length comes from the music — and the schedule comes out whole
 
 Every scene driver — `_play_scene`, `_play_scene_synchro`, `_play_scene_dalej`,
