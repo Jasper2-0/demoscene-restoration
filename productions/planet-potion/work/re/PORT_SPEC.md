@@ -595,15 +595,24 @@ rebuilding the scene, against an unpatched `[3, 3, 3, 4, 4]`:
   +7  0x00 -> 0x01   unchanged    bit 0 does not
 ```
 
-**Read the right-hand column literally.** A flip that changes nothing means that
-BIT does not matter, which is weaker than "the byte is not read" — a byte that is
-masked, compared against a range, or used only in its high bits absorbs a low-bit
-flip silently. `+6` is `0x80` in this scene and its bit 7 is plainly the kind of
-flag this VM uses elsewhere; flipping bit 0 says nothing about that.
+A flip that changes nothing means that BIT does not matter, which is weaker than
+"the byte is not read" — a masked or coarsely-compared byte absorbs a low-bit
+flip silently. So the insensitive entries were re-probed at the other end:
 
-What the probes do establish is a lower bound: `+2`, `+3` and `+5` are read and
-matter. That is enough to rule out "skip a fixed header", and not enough to say
-where the header ends.
+```
+  +4  0x0f -> 0x8f   unchanged    bit 7 does not matter either
+  +6  0x80 -> 0x00   unchanged    bit 7 does not matter either
+```
+
+Insensitive at both ends is much stronger. `+4` and `+6` do not affect the node
+structure at all, and `+6` losing its `0x80` without effect rules out the flag
+reading specifically.
+
+Scope it correctly: what is observed is the **node type list**. A byte could
+still steer a colour or a position without changing which nodes get built. The
+probes establish that `+2`, `+3` and `+5` are read and matter to the graph, and
+that `+4` and `+6` do not — which is enough to rule out "skip a fixed header" and
+not enough to say where the header ends.
 
 `+4` is still worth noting: identical in all 29 streams *and* insensitive, where
 `+3` is identical in all 29 *and* sensitive. "Constant across the production" and
