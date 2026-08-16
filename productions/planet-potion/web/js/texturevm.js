@@ -316,7 +316,11 @@ export function op9(s, ops) {
     const h = st >> 1;
     for (let y = 0; y < 0x800; y += ystep) {
       for (let x = 0; x < 0x800; x += st) {
-        mid(at((x - h) & 0x7f0, y), at(x & 0x7f0, y), at((x + st) & 0x7f0, y));
+        // The original advances x BEFORE computing the destination:
+        // `add r25, r25, r9` then `subf r16, r11, r25` = (x + step) − half.
+        // So the midpoint sits at x + half, between x and x + step — writing it
+        // at x − half puts every interpolated value one step early.
+        mid(at((x + h) & 0x7f0, y), at(x & 0x7f0, y), at((x + st) & 0x7f0, y));
       }
     }
     st = h;
@@ -325,7 +329,7 @@ export function op9(s, ops) {
     const h = st >> 1;
     for (let x = 0; x < 0x800; x += 0x10) {
       for (let y = 0; y < 0x800; y += st) {
-        mid(at(x, (y - h) & 0x7f0), at(x, y & 0x7f0), at(x, (y + st) & 0x7f0));
+        mid(at(x, (y + h) & 0x7f0), at(x, y & 0x7f0), at(x, (y + st) & 0x7f0));
       }
     }
     st = h;
