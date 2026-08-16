@@ -165,7 +165,10 @@ export function convolve(src, dst, k) {
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
       const o = (y * SIZE + x) * 4;
-      for (let c = 0; c < 3; c++) {
+      // Channels 1..3 only. The handler accumulates f21, f20, f19 and stores
+      // f25, f24, f23, leaving f26 — channel 0 — exactly as loaded. Channel 0
+      // is the untouched one, not channel 3.
+      for (let c = 1; c < 4; c++) {
         let acc = 0;
         for (let ky = -1; ky <= 1; ky++) {
           for (let kx = -1; kx <= 1; kx++) {
@@ -175,7 +178,7 @@ export function convolve(src, dst, k) {
         }
         dst[o + c] = acc / sum;
       }
-      dst[o + 3] = src[o + 3];
+      dst[o] = src[o];
       clamp4(dst, o);
     }
   }
@@ -659,6 +662,10 @@ export function toARGB(surf) {
 export function run(ops, kernels, opts = {}) {
   const s = new Surfaces();
   const saved = new Float32Array(PIXELS * 4);
+  // The mask is double-buffered the same way: _generate copies mask -> extra
+  // before each opcode and extra -> mask afterwards, through the SAME clipped
+  // path, so op13/14/15 are rectangle-bounded exactly like the colour ops.
+  const savedMask = new Float32Array(PIXELS);
   for (const { op, operands } of ops) {
     // THE DRAW RECTANGLE CLIPS EVERY OPERATION. _generate reads r2+0x25a6..9
     // after each handler returns and uses it to bound the copy, so an opcode's
@@ -667,7 +674,7 @@ export function run(ops, kernels, opts = {}) {
     // solid fill, whose reference has an untouched one-pixel border.
     const clip = s.rect[0] !== 0 || s.rect[1] !== 0
       || s.rect[2] !== 128 || s.rect[3] !== 128;
-    if (clip) saved.set(s.current);
+    if (clip) { saved.set(s.current); savedMask.set(s.mask); }
     if (op >= 0x50 && op <= 0x78) {
       const k = kernels[op];
       if (!k) throw new Error(`no kernel for ${op.toString(16)}`);
@@ -704,6 +711,7 @@ export function run(ops, kernels, opts = {}) {
           if (x >= x0 && x < x1 && y >= y0 && y < y1) continue;
           const o = (y * SIZE + x) * 4;
           for (let c = 0; c < 4; c++) s.current[o + c] = saved[o + c];
+          s.mask[y * SIZE + x] = savedMask[y * SIZE + x];
         }
       }
     }

@@ -841,6 +841,16 @@ before taking the length. That term is the whole difference between bump
 looks nearly right without it and every composed program is wrong. The gradient
 samples a channel *combination*, mask `(mode >> 4) & 7`.
 
+**The convolution preserves channel 0, not channel 3.** The handler accumulates
+`f21, f20, f19` and stores `f25, f24, f23`, leaving `f26` exactly as loaded — so
+"alpha is not touched by the convolution" means the FIRST channel, the same one
+the core mix uses as its weight. It also ends by tail-calling the symmetry blit
+with selector 0, so its blit is the identity.
+
+**The mask is double-buffered like the colour surfaces.** `_generate` copies
+`mask -> extra` before each opcode and `extra -> mask` after, through the same
+rectangle-clipped path, so `op13`, `op14` and `op15` are rectangle-bounded too.
+
 **`op1` and `op6` are more specific than section 7 says.** `op1` is a
 bilinearly-shaded rectangle with four corner colours, not "a two-point gradient,
 one fill"; `op6` is a Bresenham line, not "a two-point distance op" — that
