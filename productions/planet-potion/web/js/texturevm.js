@@ -387,12 +387,50 @@ export function op3(s, ops) {
   }
 }
 
+/**
+ * The four symmetry transforms at r2+0x24e2, in PIXEL units — read from the
+ * binary rather than named from their effect:
+ *   0 identity, 1 mirror x, 2 mirror y, 3 transpose with flip.
+ */
+export const TRANSFORMS = [
+  [0, 0, 1, 128], [127, 0, -1, 128], [0, 16256, 1, -128], [0, 127, 128, -1],
+];
+
+/**
+ * op4 — apply symmetry transforms in pairs. The single operand byte holds four
+ * 2-bit selectors; each iteration takes two, blitting current -> work with the
+ * first and work -> current with the second, then shifts right by 4. A zero
+ * operand does nothing at all.
+ */
+export function op4(s, [sel]) {
+  let v = sel;
+  while (v !== 0) {
+    symmetryBlit(s.current, s.work, TRANSFORMS[v & 3]);
+    symmetryBlit(s.work, s.current, TRANSFORMS[(v >> 2) & 3]);
+    v >>= 4;
+  }
+}
+
+/**
+ * op16 — literal upload. Converts bytes to floats straight into the surface.
+ *
+ * Its source is the pointer at r2+0x24ce, which is 0x100d0000 — the start of the
+ * big BSS arena, and the same buffer `_init_txtgen` later expands the font into.
+ * In the shipped sequence every texture is generated BEFORE `_init_txtgen` runs,
+ * so at texture time that buffer is still zeroed BSS. The harness reproduces
+ * that, which is why the 69 exported PNGs are what they are. Pass `src` to
+ * override if a caller ever has something else there.
+ */
+export function op16(s, _ops, src = null) {
+  for (let i = 0; i < PIXELS * 4; i++) s.current[i] = src ? src[i] : 0;
+}
+
 /** op18 — set the draw rectangle. op19 — reset it to the full surface. */
 export const op18 = (s, o) => { s.rect = [o[0], o[1], o[2], o[3]]; };
 export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 
 /** Opcodes whose bodies are specified but not yet written here. */
-export const UNIMPLEMENTED = new Set([1, 2, 4, 6, 8, 16]);
+export const UNIMPLEMENTED = new Set([1, 2, 6, 8]);
 
 /** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
 export function toARGB(surf) {
