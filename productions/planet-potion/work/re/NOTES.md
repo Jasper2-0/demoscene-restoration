@@ -191,6 +191,38 @@ normalise-by-sum with 0 → 1.0, wrapped addressing, the `[0, 255]` clamp, alpha
 untouched, and source and destination named. The earlier float-domain failure
 was reading the destination as if it were the input, and nothing else.
 
+### All forty, verified — `texconv.py`
+
+`python3 texconv.py flat/ kernels.json` dumps the table, decodes it, runs every
+opcode and reproduces each from the source surface. **40 of 40 exact**, worst
+error `1e-5` across the family.
+
+The listing shows two halves:
+
+```
+  0x50   8.0  [ 1  1  1 / 1  0  1 / 1  1  1]   blur, centre excluded
+  0x52   0.0  [ 0 -1  0 /-1  4 -1 / 0 -1  0]   Laplacian
+  0x54   0.0  [ 0  1  0 / 0  0 -1 / 0  0  0]   difference
+  0x58   2.0  [-2 -2 -2 /-2 18 -2 /-2 -2 -2]   sharpen
+  0x5c   0.0  [ 5  5 -5 /10  0 -20/ 5  5 -5]   directional edge
+  0x61   0.0  [ 0  0  0 / 0  0  0 / 0  0  0]   a NO-OP kernel
+  ...
+  0x6c 424.2  [68  0 60 /67 50  0 /43 59 74]   dense weights, one rotating zero
+```
+
+Seventeen are small-integer hand-designed filters — blur, Laplacian, emboss,
+sharpen, directional edge — and one, `0x61`, is **all zeros**: a kernel that
+does nothing, which the sum-0 rule turns into a divide by 1 and a black result.
+The remaining twenty-three carry dense weights in the 37–88 range with sums in
+the hundreds and a single zero rotating through the nine positions — softening
+filters with a directional bias.
+
+They are **generated at run time**, not static: `_generate`'s prologue calls
+`0x1000067c` with `r31 = r2+0x2516` before anything else, and the table lives in
+seg 6. Deterministic, though — the verification runs the opcodes in *separate*
+processes from the dump and still matches exactly. A port can ship the forty
+kernels (`tex_kernels.json`) instead of reimplementing the generator.
+
 **`0x55` is special-cased** out of the table and is not a convolution at all:
 `max(255 − x, 0)` over the surface — **invert**.
 
@@ -1506,6 +1538,7 @@ synchronous stall needing an occlusion query rather than a literal translation.
 | `rungeo.py` | runs `_generate_obj` with Warp3D stubbed; dumps the decoded node list |
 | `texops.py` | one-opcode texture programs, for naming the texture ops |
 | `texops2.py` | generator-then-opcode pairs, which separates modifiers from setters |
+| `texconv.py` | dumps, decodes and **verifies** the 40 convolution kernels; writes them as JSON |
 | `runscene.py` | runs the scene interpreter; dumps the typed draw-node graph |
 | `drawlog.py` | runs `_show_scene` with recording vector stubs; dumps the draw stream and, with `nodes=True`, the per-frame scene graph |
 | `runsynth.py` | runs the softsynth; returns the generated DBM0 module |
