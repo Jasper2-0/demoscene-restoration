@@ -44,6 +44,19 @@ function op21(rgba, dh, dsByte, dvByte) {
   return [...img.p];
 }
 
+// ASSERTIONS, added because this file stated its expectations in prose and
+// checked none of them. Every tolerance below is the one already written beside
+// the number it guards — one byte step is 1/255 = 0.00392, and the S==0 branch
+// zeroing all four channels is read out of FUN_00413b24 @0x413b53. Nothing here
+// is a new expectation; they were simply not enforceable before, and the script
+// exited 0 whatever it printed.
+const BYTE_STEP = 1 / 255;
+let failed = 0;
+const say = (ok, what, detail = '') => {
+  if (!ok) failed++;
+  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${what}${detail ? `  ${detail}` : ''}`);
+};
+
 console.log('=== 1. op 21 — HSV chain ===');
 console.log('  1a. identity: dh=0, sat byte 128 (delta ~= 0), val byte 128 -> RGB must survive');
 const PROBES = [
@@ -65,6 +78,8 @@ for (const [name, px] of PROBES) {
     + `  out ${out.slice(1).map(v => v.toFixed(3)).join(' ')}  |err| ${e.toFixed(4)}`);
 }
 console.log(`    worst |err| = ${worst.toFixed(4)} (expected ~0.004 = one sat/val byte step)`);
+say(worst <= BYTE_STEP * 1.01, 'the identity round trip stays within one byte step',
+  `worst |err| ${worst.toFixed(4)} vs ${BYTE_STEP.toFixed(5)}`);
 
 console.log('  1b. hue -> the port\'s rgb2hsv vs an independent reference');
 let hmax = 0;
@@ -80,6 +95,8 @@ for (const [name, px] of PROBES) {
     + `  ref ${exp.map(v => v.toFixed(3)).join(' ')}  |err| ${e.toFixed(4)}`);
 }
 console.log(`    worst |err| = ${hmax.toFixed(4)}`);
+say(hmax <= BYTE_STEP * 1.01, 'the hue rotation agrees with the independent reference',
+  `worst |err| ${hmax.toFixed(4)} vs ${BYTE_STEP.toFixed(5)}`);
 
 function hsvToRGB(h, s, v) {
   if (s === 0) return h === 600 ? [v, v, v] : [0, 0, 0];
@@ -93,6 +110,8 @@ console.log('  1c. the S==0 && H!=600 branch (FUN_00413b24 @0x413b53 zeroes ALL 
   const out = op21([1, 0.6, 0.5, 0.5], 0, 0, 128);   // sat byte 0 -> ds = -1, forces s=0
   console.log(`    in A=1 RGB=0.6 0.5 0.5, ds=-1 -> out ${out.map(v => v.toFixed(3)).join(' ')}`
     + `   (alpha must be 0.000, matching the binary)`);
+  say(out.every((v) => v === 0), 'the S==0 branch zeroes all four channels, alpha included',
+    `got ${out.map((v) => v.toFixed(3)).join(' ')}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +170,18 @@ for (const [name, bytes] of CASES) {
   console.log(`  ${name.padEnd(48)} ${r.width}x${r.height}  distinct colours ${String(uniq.size).padStart(5)}`
     + `  changed vs op-3 base ${pct.padStart(5)}%`
     + (r.unimplemented.length ? `  UNIMPLEMENTED ${r.unimplemented}` : ''));
+  // The claim this section makes is deliberately weak — these ops appear in no
+  // real program, so there is no oracle and none is invented here. But "the code
+  // path executes and produces structured output" IS falsifiable: an op that
+  // silently no-ops leaves the base untouched, and an unported handler names
+  // itself in `unimplemented`. Both were only printed before.
+  say(r.unimplemented.length === 0, `${name.trim()}: every handler is implemented`,
+    r.unimplemented.join(' '));
+  say(uniq.size > 1 && diff > 0, `${name.trim()}: produces structure and changes the base`,
+    `${uniq.size} colours, ${pct}% changed`);
   if (PNGDIR) writeFileSync(`${PNGDIR}/synthetic_${i}.png`, encodePNG(r.width, r.height, r.rgba));
   i++;
 }
+
+console.log(failed === 0 ? '\nall checks passed' : `\n${failed} checks FAILED`);
+process.exit(failed ? 1 : 0);
