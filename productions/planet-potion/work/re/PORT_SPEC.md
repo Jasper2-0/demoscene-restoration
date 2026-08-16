@@ -505,10 +505,25 @@ an opcode stream does. So there is a fixed header after the length, and the five
 values at offset 2 are a field of it rather than opcodes that are invalid by
 coincidence in all 29.
 
-**This is where the trail stops, with a measurement rather than a guess.** What
-the header is, and how far past it the opcode walk begins, needs the loop at
-`0x100021f4` read against a live `r31` — the harness can print it, and one run
-would replace the whole chain of inference above.
+**And the reason the decode failed is that `> 6` is not invalid.** The common
+tail at `0x10002298` stores `type*4` at `node+0x08`, then looks the handler up in
+the table at `r2+0x28aa` — the same `0x1000a8a8` — indexed by that `type*4`, and
+does `cmpwi r14, -1; beq`: **a handler of −1 means no handler, and the node is
+allocated and left inert.** So the opcode space really is the full seven bits,
+most of it sparse, and a byte like `0x5b` is a legal opcode with no behaviour
+rather than a decode error.
+
+Every decoder attempt above stopped on `op > 6`, which is the wrong rule. The
+right one is: mask bit 7 into `node+0x0e`, look the size up at `r2+0x28ca`,
+allocate, look the handler up at `r2+0x28aa`, and skip it when it is −1. The size
+table's eight non-zero entries are the eight opcodes that DO something, not the
+eight that exist.
+
+That leaves the fixed `0xff 0x0f` at offsets 3 and 4 unexplained — they are legal
+inert opcodes under this reading, which is possible but is exactly the kind of
+"consistent, therefore true" step this section has been punished for four times.
+It wants the size and handler tables dumped past index 7 before anyone believes
+it.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
