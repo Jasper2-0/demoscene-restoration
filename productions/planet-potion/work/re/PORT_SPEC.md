@@ -259,7 +259,8 @@ After that the work is per node type, read from `node+0x08` (the type times four
 |---|---|
 | 7 (`0x1c`) | nothing further |
 | 6 (`0x18`) — **camera** | copy the WHOLE 24-float channel block into the sub-structure at `node+0x2c`, run `0x10005b34` against the parent's block, and walk `+0x64` to the next — so a camera pushes its full state down a chain rather than publishing three numbers |
-| 5 (`0x14`) — mesh | a separate path at `0x1000570c`, **unread** |
+| 5 (`0x14`) — mesh | its body runs from `0x100055b0`, **unread** |
+| 4 (`0x10`) — text | `0x1000570c`. Reads the `+0x3c…+0x50` channels and the `+0x30…+0x38` triple, steps to the sub-object on `+0x74`, divides two channels by 255 where they are non-zero, and combines them with the render node's own `+0x2c`/`+0x30` through an `fmadd` and two `fdiv`s — glyph layout, and it uses constants at `r2+0x2bd6` and `r2+0x2da6`. **Read only this far** |
 
 **`anim+0x60/0x64/0x68` in the table above is the same location as
 `(+0x0c)+0x54/0x58/0x5c`** — the offsets differ only in what they are measured
