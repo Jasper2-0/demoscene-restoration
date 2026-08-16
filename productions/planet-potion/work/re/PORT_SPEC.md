@@ -102,12 +102,21 @@ non-clamping one rewinds `r21` and re-enters the search at `0x1000502c`:
 | `0x60` | **modulo the whole track** — subtract the last keyframe's tick from local time, search again from the head |
 | `0x80` | **modulo the final span** — subtract `last.tick − prev.tick`, using `+0x100` to reach the previous keyframe |
 | `0xa0` | modulo the last TWO spans — `+0x100` twice |
-| `0xe0` | subtract the final span, then compare against the one before it (`0x10005150`–`0x10005178`); the tail beyond that is **unread** |
-| `0xc0` | **unread** |
+| `0xe0` | **ping-pong** — walk BACKWARD through `+0x100` subtracting each span until one is longer than what remains, then REFLECT within it: `r11 = span − r11 + prev.tick`, `f15 = prev.t0 + (span − f15)` (`0x100051b8`). Running out going backward restarts from the head |
+| `0xc0` | falls through `0x100051a0` to the skip path — the node is not evaluated this frame |
 
-A local time BEFORE the first keyframe takes a separate path at `0x10005370`,
-also unread. So the modes are a family of "how far back do I wind" rules rather
-than distinct behaviours, and only the first four are fully read.
+So the modes are a family of "how far back do I wind" rules, and the set is
+complete: clamp, restart, modulo by the whole track, modulo by one span, modulo
+by two, ping-pong, and skip.
+
+**`0x10005370` is not a special case for early time — it is the loop tail**, and
+it is where the two passes meet. It stores `r26` into `anim+0x00` and then walks
+the sub-object chain on `+0x74` and the node list on `+0x10`. `r26` is 0 when the
+node was skipped and 1 when it evaluated (`0x100051cc`), and `anim+0x00` is
+exactly the byte §3b tests before composing (`cmpwi r3, 1`). So **a node only
+inherits from a parent that resolved this frame**; a parent whose track has not
+started yet — the `bgt` at `0x10005084`, first keyframe still in the future —
+publishes 0 there and its children are left alone.
 
 Keyframes are `0x104` bytes, doubly linked (`+0xfc` next, `+0x100` prev):
 
