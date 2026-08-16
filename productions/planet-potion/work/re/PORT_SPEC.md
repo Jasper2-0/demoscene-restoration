@@ -508,22 +508,24 @@ coincidence in all 29.
 **And the reason the decode failed is that `> 6` is not invalid.** The common
 tail at `0x10002298` stores `type*4` at `node+0x08`, then looks the handler up in
 the table at `r2+0x28aa` — the same `0x1000a8a8` — indexed by that `type*4`, and
-does `cmpwi r14, -1; beq`: **a handler of −1 means no handler, and the node is
-allocated and left inert.** So the opcode space really is the full seven bits,
-most of it sparse, and a byte like `0x5b` is a legal opcode with no behaviour
-rather than a decode error.
+does `cmpwi r14, -1; beq`. Dumping the table settles what that −1 is for:
 
-Every decoder attempt above stopped on `op > 6`, which is the wrong rule. The
-right one is: mask bit 7 into `node+0x0e`, look the size up at `r2+0x28ca`,
-allocate, look the handler up at `r2+0x28aa`, and skip it when it is −1. The size
-table's eight non-zero entries are the eight opcodes that DO something, not the
-eight that exist.
+```
+  r2+0x28aa   0 0x10002a54   1 0x10002a78   2 0x10002a9c   3 0x10002b08
+              4 0x10002e10   5 0x10002f14   6 0x10002f24   7 0xffffffff
+  r2+0x28ca   the SIZE table starts here — 0x28ca − 0x28aa = 0x20 = 8 × 4
+```
 
-That leaves the fixed `0xff 0x0f` at offsets 3 and 4 unexplained — they are legal
-inert opcodes under this reading, which is possible but is exactly the kind of
-"consistent, therefore true" step this section has been punished for four times.
-It wants the size and handler tables dumped past index 7 before anyone believes
-it.
+**Exactly eight entries, and the −1 is entry 7 alone**: the synthesised root,
+which has a node size but no handler. The table boundary is arithmetic, not
+inference — index 8 reads the first two sizes as a pointer. So opcodes above 7
+are NOT legal-but-inert; they call garbage.
+
+**The opcode space is 0..7 and the contradiction stands.** A byte of `0x5b` at
+offset 2 cannot be an opcode, the pointer is measured correct, and the prologue
+measurably skips two bytes. The walk therefore does not begin at `+2`, and this
+section stops there — with the opcode space closed and the header unidentified,
+rather than with a fifth explanation.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
