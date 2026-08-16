@@ -670,11 +670,18 @@ Splitting four streams on that marker shows the same shape in every one:
   p1_3   0185 5b | ff0f 008000ffffff 850868 | ff0f 0180 0000...
 ```
 
-So the stream is a u16 length, then a **constant `0x5b`**, then records each
-introduced by `ff 0f`. The first record's body is `00 80 00 ff ff ff` — identical
-in every scene — followed by three bytes that vary. `0x5b` being constant across
-all 29 streams *and* load-bearing under a bit flip fits a type or version marker
-rather than an opcode, which is what the probes were already saying about it.
+**`ff 0f` is NOT a record marker.** Counting its occurrences inside each stream's
+declared length and comparing against the node count matches on only **6 of 29**
+scenes, and misses badly in both directions — `p1_7` has 15 occurrences for 2
+nodes, `p3_0` has 23 for 29. So the pattern that looked like framing across four
+hand-picked streams does not survive counting all of them; it is a byte pair
+common in the data, not a delimiter.
+
+What DOES survive: the u16 length, and a **constant `0x5b`** at `+2` — identical
+in all 29 streams and load-bearing under a bit flip, which fits a type or version
+marker rather than an opcode. The `00 80 00 ff ff ff` that follows is identical
+in every scene sampled, but "identical in four" has now been wrong once, so it
+wants the same count before it is believed.
 
 `scenegram.py` prints this split at the end of its run, so the data is in front
 of whoever picks this up rather than needing to be re-derived.
