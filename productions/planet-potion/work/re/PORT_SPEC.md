@@ -626,12 +626,20 @@ So the u16 at offset 0 is the length, it bounds the walk, and one byte of slack
 past the real end changes nothing. The prologue's `lhz`/`addi`/`add r30` reading
 is not just plausible — it is measured.
 
-Which sharpens the contradiction rather than dissolving it: the walk provably
-starts at `+2`, the byte there provably matters, and the opcode space is provably
-eight wide. The next probe worth running is against the SIZE and HANDLER tables
-themselves — patch `r2+0x28aa`'s entry 7 or the size at index 7 and see whether
-the root changes — because the tables are the one link still resting on my
-reading of their extent rather than on a measurement.
+**The handler table's entry 7 is live too.** Patching it from `0xffffffff` to a
+real handler address crashes the build, so the `cmpwi r14, -1` really is
+consulted for the synthesised root and the table really does reach index 7.
+(Patching the SIZE at index 7 from 60 to 512 changes nothing, which is expected:
+it only affects how much memory the node gets, not which nodes exist — a probe
+that cannot discriminate, recorded so it is not re-run.)
+
+So every link is now measured except the table's upper bound, which rests on
+`0x28ca − 0x28aa = 0x20` — arithmetic, not inference. The walk starts at `+2`,
+the byte there matters, the length bounds the walk, the opcode space is eight
+wide, and the bytes at `+2`, `+3`, `+5` reach the graph while `+4` and `+6` do
+not. **They still do not compose into a decoder**, and that is where this section
+stands: a dozen readings and eleven probes, every individual claim measured,
+and the assembly of them still wrong somewhere.
 
 `+4` is still worth noting: identical in all 29 streams *and* insensitive, where
 `+3` is identical in all 29 *and* sensitive. "Constant across the production" and
