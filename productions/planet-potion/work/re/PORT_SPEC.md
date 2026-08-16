@@ -268,8 +268,25 @@ Only needed if you reimplement rather than ship `textures/*.png`. It runs on
 | current | `r2+0x2472` | where results land, via the blit |
 | mask | `r2+0x246e` | one float per pixel, its own opcode set |
 
-Values are **0…255 floats**, clamped two-sided on store. Alpha is not touched by
-the convolution.
+Values are **0…255 floats**. The per-pixel primitive library at
+`0x100006ac`–`0x10000714` is what every opcode body is built from:
+
+| | |
+|---|---|
+| `0x100006ac` | load four floats from `r15` — the second operand pixel |
+| `0x100006bc` | load four floats from `r16` — the destination pixel |
+| `0x100006d0` | **clamp** all four to `[0, 255]` with `fsel`, then fall through |
+| `0x10000700` | **store** the four floats to `r16` |
+| `0x10000714` | combine channels under the `r14` bitmask, one bit selecting a channel and another inverting it as `255 - x` |
+
+**Clamping is a separate entry point, and not every path takes it.** `0x100006d0`
+falls *into* `0x10000700`, so calling the clamp entry clamps and stores while
+calling the store entry stores raw. Opcodes do both — `op0` and `op17` clamp,
+`op2` stores unclamped at one point. A port that clamps unconditionally on store
+is not reproducing this; the out-of-range values propagate.
+
+The clamp is branchless `fsel`, which also means it does not behave like a
+comparison on NaN. Alpha is not touched by the convolution.
 
 **Every operation ends with a symmetry blit** — copy the work surface to the
 current one through one of four transforms selected per operation: identity,
