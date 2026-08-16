@@ -1519,10 +1519,10 @@ a missing dependency. What they emit is not raw sample data but a complete
 | part 1 | `"part1"` | 56 | 19 | 18 | 2,800 | 274 | 14,574 | 5,306,496 |
 | part 3 | `"part3"` | 38 | 17 | 16 | 1,900 | 546 | 9,978 | 3,002,748 |
 
-Total module sizes: **part 1 ≈ 5,324,890 bytes, part 3 = 3,015,404**. The part-one
+Total module sizes: **part 1 = 5,324,378 bytes, part 3 = 3,015,404**. The part-one
 figure is confirmed twice over — the chunk walk gives it, and
 `_generate_samples_part1` *opens* by loading the immediate `0x513e5a`, which is
-5,324,890: the function states the size of the module it is about to build in its
+5,324,378: the function states the size of the module it is about to build in its
 first two instructions.
 
 `DSPE` is DigiBooster Pro 2's DSP-effect chunk (28 and 26 bytes). Roughly 37 KB
@@ -1548,9 +1548,34 @@ part three is dominated by `0x1000742c` (18 calls). The primitives span
 and animation put together (6.9 KB) and the biggest single subsystem in the
 intro.
 
-`_generate_samples_part1` opens by loading `0x513e5a` = 5,324,890, the size of
+`_generate_samples_part1` opens by loading `0x513e5a` = 5,324,378, the size of
 the module it is about to build, which is how that figure was confirmed twice
 over.
+
+### The audio acceptance test — `synthhash.py`
+
+The generators are pure functions of the binary, so their output is fixed and a
+reimplementation either produces the same bytes or does not. `synthhash.py`
+records the sizes, the whole-module SHA-256 and a **per-chunk digest**, because
+"the module differs" is not a useful failure and "SMPL differs" is.
+
+```
+  p1  5,324,378 bytes  sha256 dfd0826755b81fba…
+        NAME 44 · INFO 10 · SONG 80 · INST 2800 · VENV 274
+        DSPE 28 · PATT 14,574 · SMPL 5,306,496
+  p3  3,015,404 bytes  sha256 460939ceb5d2bbbd…
+        NAME 44 · INFO 10 · SONG 80 · INST 1900 · VENV 546
+        DSPE 26 · PATT 9,978 · SMPL 3,002,748
+```
+
+Running it caught a stale number in this file, and the mistake is instructive.
+`0x513e5a` is **5,324,378**; the figure `5,324,890` appeared here three times and
+is simply the hex converted wrong. It had already been corrected once during the
+chunk walk, and then got copied back out of the older paragraphs into
+`synthhash.py`'s size constant, where the generator's own prefix disagreed with
+it on the first run. The chunk sum settles it independently: 44 + 10 + 80 + 2800
++ 274 + 28 + 14,574 + 5,306,496, plus an 8-byte header and eight 8-byte chunk
+headers, is exactly 5,324,378.
 
 **A port therefore needs a DBM0 replayer plus these two generators** — and the
 generators now run byte-exactly without an Amiga.
