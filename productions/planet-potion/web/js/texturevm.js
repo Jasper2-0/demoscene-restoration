@@ -465,7 +465,13 @@ export function falloff(dist, start, span, mode) {
 export function distance(dx, dy, mode) {
   if (mode & 4) dy = 0;
   if (mode & 8) dx = 0;
-  return Math.sqrt(dx * dx + dy * dy);
+  const sq = dx * dx + dy * dy;
+  if (sq === 0) return 0;
+  // fres(frsqrte(x)) — TWO single-precision roundings, not one sqrt. qemu
+  // computes both exactly in float32, so the reference textures carry the
+  // double rounding even though real hardware would add estimate error on top.
+  const r = Math.fround(1 / Math.fround(Math.sqrt(sq)));
+  return Math.fround(1 / r);
 }
 
 /**
@@ -482,7 +488,11 @@ export function op2(s, ops) {
   const A = ops.slice(0, 4);
   const delta = [0, 1, 2, 3].map((i) => ops[4 + i] - ops[i]);
   const [cx, cy] = [ops[8], ops[9]];
-  const start = ops[10], span = (ops[11] - ops[10]) || 1;
+  // THE SPAN IS SUBTRACTED TWICE. op2's own body does `fsub f22, f22, f26`
+  // before calling 0x10000990, which opens with the same instruction — so the
+  // span is end - 2*start, not end - start. op8 does not pre-subtract, which is
+  // why its span is the plain difference.
+  const start = ops[10], span = (ops[11] - 2 * ops[10]) || 1;
   const mode = ops[12];
   const shaded = new Float32Array(4);
   for (let y = 0; y < SIZE; y++) {
