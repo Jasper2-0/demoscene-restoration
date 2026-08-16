@@ -171,6 +171,27 @@ def main():
                  and ((word(BASE + a) >> 1) & 0x3ff) in fpscr)
     check('nothing writes FPSCR, so the rounding mode is the default', writes, 0)
 
+    # --- the scene stream's three operand widths
+    #
+    # Section 4a's grammar rests on these being lbz / lha / lhz, and the signed
+    # one being signed. Primary opcodes: 34 lbz, 42 lha, 40 lhz.
+    check('scene operand readers are u8, s16, u16',
+          [struct.unpack_from('>I', d0, a - BASE)[0] >> 26
+           for a in (0x10002738, 0x10002744, 0x1000274c)],
+          [34, 42, 40])
+
+    # --- op 3's constants, which are what say it draws a bevelled rectangle
+    #
+    # 0.5 makes p0/p1 full widths rather than half-extents, and the three insets
+    # are what the flag bits select. Read as float32 out of the small-data area.
+    def f32(disp):
+        return struct.unpack_from('>f', d0, R2 + disp - BASE)[0]
+
+    check('op 3 scales by 0.5 — its operands are full widths', f32(0x2bd6), 0.5)
+    check('op 3 insets are a halving series',
+          [round(f32(d), 4) for d in (0x2e46, 0x2e4a, 0x2e4e)],
+          [0.032, 0.016, 0.008])
+
     # --- section 3c's publish, confirmed three ways and guarded once
     #
     # The channels the publish pass moves onto the render node are the whole
