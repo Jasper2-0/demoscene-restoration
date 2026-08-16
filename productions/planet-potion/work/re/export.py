@@ -77,6 +77,13 @@ def export_render_state(d0, r2, out):
         'filter': ['W3D_LINEAR', 'W3D_LINEAR'],
         'texture_format': 'W3D_A8R8G8B8 (format 6), 128x128',
         'primitives': ['W3D_DrawTriFan', 'W3D_DrawLineStrip'],
+        'framebuffer': {'width': 640, 'height': 480, 'depth': 16,
+                        'bitmapHeight': 960,
+                        'note': 'double-height bitmap, swapped by RyOffset + '
+                                'ScrollVPort; W3D_CC_DOUBLEHEIGHT is set. A '
+                                '16-bit target means the Permedia 2 dithers, so '
+                                'the original bands where an 8-bit-per-channel '
+                                'port will not.'},
         'notes': ['no SetTexEnv, no SetWrapMode — both at defaults',
                   'W3D_ReadZPixel used once, for an occlusion-tested element; '
                   'it is a synchronous stall and needs an occlusion query in WebGL2'],

@@ -361,7 +361,8 @@ From Permedia 2 / GLINT documentation and the Hyperion Permedia2 driver notes:
   exponential. The driver fakes linear fogging through interpolation. This is the
   single most port-relevant item here. `documented`
 - **A8R8G8B8 uploads unconverted** to a direct-colour target; dithering only
-  applies when the framebuffer is 15/16-bit. `documented`
+  applies when the framebuffer is 15/16-bit. `documented` — and the screen this
+  intro opens is **16-bit** (see the bootstrap section), so it applies here.
 - **`W3D_ReadZPixel` returns a `W3D_Double` normalised to [0..1]**, requires the
   hardware to be locked, and the autodoc says outright it "is slow and should
   normally not be called" — a synchronous stall, as suspected. `documented`
@@ -396,6 +397,41 @@ the answer is nothing.
   RunPPC(_main)                    ; 0x10001898 pushed as the entry
   ... free the screen, DeleteFile("ram:dbplayer.library") ...
 ```
+
+### The framebuffer is 16-bit, and the buffer is double-height
+
+The screen the bootstrap opens, from its `OpenScreenTagList` tag list at
+`0x10000304`:
+
+```
+  0x80000023  640      width
+  0x80000024  960      height  — 2 x 480
+  0x80000025   16      depth
+  0x80000032    0      display ID: any
+```
+
+and `_W3D_ContextTag` at `0x1000035c` agrees:
+
+```
+  W3D_CC_BITMAP       0   (filled in at run time)
+  W3D_CC_YOFFSET      0
+  W3D_CC_DRIVERTYPE   2   hardware
+  W3D_CC_DOUBLEHEIGHT 1
+  W3D_CC_FAST         1
+```
+
+**960 = 2 × 480 with `W3D_CC_DOUBLEHEIGHT`** is the double buffer, and it is the
+same 480 the 68K frame routine writes into `RyOffset` before `ScrollVPort`. So
+buffer swapping is a scroll, not a bitmap switch.
+
+**Depth 16 is the port-relevant one.** The driver notes above record that
+`A8R8G8B8` uploads unconverted to a direct-colour target and that *dithering only
+applies when the framebuffer is 15/16-bit* — that condition is now resolved, and
+it applies. The original composites 32-bit textures into a **16-bit** target with
+the Permedia 2's dither, so its output carries banding and a dither pattern that
+a WebGL2 port rendering to 8-bit-per-channel RGBA will not reproduce by default.
+It is the sort of difference that shows up immediately in a frame diff and is
+easy to mistake for a blending error.
 
 **seg 1 is explained.** The embedded `dbplayer.library 2.0` is written out to
 `ram:`, opened as a library, and deleted on exit — the period trick for shipping
