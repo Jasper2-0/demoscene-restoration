@@ -377,11 +377,27 @@ overwrites it with 100,800 when `r8` is non-zero, which a linear scan cannot
 model, so the tool reports both values rather than picking one. Nine of its
 thirteen calls run with `r8 = 0`; 1 + 1 + 9 is exactly the 11 the module holds.
 
-**The residual is two samples, and there are exactly two unattributed routines.**
-100,800 comes out 16 against the module's 17, and one 25,200 sample is claimed by
-nobody. Part one calls two routines whose length comes from neither an immediate
-nor the script — `0x10008adc` and `0x10009a68`, one call each. Two orphan
-samples, two orphan routines. That is where to look, and it is not yet proven.
+**Counting lengths is the weak test. Position is decidable.** Samples are
+appended to `r31` in script order, so the *N*th sample-producing call is the
+*N*th sample:
+
+```
+positional check: 56 sample-producing calls vs 56 samples in the module
+  56/56 positions agree
+```
+
+Every sample in part one is now attributed to a named routine, which the
+histogram could not do: it resolves `0x10009510`'s `r8` branch by construction
+and pins the three calls whose length is not an immediate at all —
+`0x10008c9c` at positions 2 and 42 (120,000 and 150,000) and `0x10009a68` at
+position 25 (100,800).
+
+Two routines had looked orphaned because they have no sample start of their own.
+Both are **alternate entry points**: six instructions that set their own `r18`
+and `r19` and branch into the *next* routine's body. `0x10008adc` enters
+`0x10008b00` with 25,200 frames at 3,150 — 8 steps — and `0x10009a68` enters
+`0x10009aa4` with a step of 6,300. `synthlen.py` follows the branch, so they are
+no longer special cases.
 
 ### 8f. The three table accessors
 
