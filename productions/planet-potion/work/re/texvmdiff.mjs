@@ -48,7 +48,7 @@ for (const p of progs) {
   let got;
   try {
     const { ops } = decode(Uint8Array.from(Buffer.from(p.hex, 'hex')), WIDTHS);
-    got = toARGB(run(ops, kernels).current);   // .current — run() returns Surfaces
+    got = toARGB(run(ops, kernels));           // the whole Surfaces: alpha is the mask
     ran++;
   } catch (e) { failed++; continue; }
   const want = readPNG(png);
@@ -75,5 +75,7 @@ console.log(`EXACT MATCHES on NON-TRIVIAL references: ${exact}`);
 console.log(`(plus ${trivialHits} uniform references matched, which proves nothing)`);
 console.log('\nclosest five:');
 for (const d of dist.filter((x) => !x.trivial).slice(0, 5)) console.log(`  ${d.id.padEnd(8)} ${d.diff} differing subpixels, max delta ${d.maxd}`);
-console.log('worst two:');
-for (const d of dist.slice(-2)) console.log(`  ${d.id.padEnd(8)} ${d.diff} differing subpixels, max delta ${d.maxd}`);
+console.log('\nevery non-trivial reference still differing:');
+for (const d of dist.filter((x) => !x.trivial && x.diff)) {
+  console.log(`  ${d.id.padEnd(8)} ${String(d.diff).padStart(6)} differing subpixels, max delta ${d.maxd}`);
+}

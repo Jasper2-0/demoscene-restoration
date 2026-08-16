@@ -21,6 +21,37 @@
 export const SIZE = 128;
 export const PIXELS = SIZE * SIZE;
 
+// --- what `stfs` actually does here ------------------------------------------
+//
+// EVERY float32 store in this VM TRUNCATES. Not rounds — truncates. PowerPC
+// treats a value in an FPR as already single-representable when `stfs` writes
+// it, so the store is defined as a repack of the bits rather than a rounding
+// conversion, and qemu implements exactly that: keep the sign and the top
+// exponent bit, take the next 30 bits, drop the low 29 mantissa bits on the
+// floor. A JS `Float32Array` assignment rounds to nearest, which is the sane
+// thing and the wrong one.
+//
+// This was found from the other end. `op1`'s ramp was one level high at exactly
+// the twelve pixels where the ideal value lands on `.5`, and reading the float
+// surface out of the original (work/re/texfloat.py) gave a step of
+// 3.363095283508301 where multiplying in JS gives 3.36309552192688 — one ulp
+// apart, and the truncated one is the original's. A PPC probe storing the same
+// product twice, once with `stfd` and once with `stfs`, showed the double
+// 4.047619281336665 landing as 0x40818618 when correct rounding gives
+// 0x40818619.
+//
+// The conversion is qemu's `helper_tosingle`, transcribed.
+const _bits = new DataView(new ArrayBuffer(8));
+
+/** PowerPC `stfs`: double -> single by truncation, not by rounding. */
+export function f32(v) {
+  _bits.setFloat64(0, v);
+  const hi = _bits.getUint32(0), lo = _bits.getUint32(4);
+  const s = ((hi & 0xc0000000) | ((((hi << 3) | (lo >>> 29)) >>> 0) & 0x3fffffff)) >>> 0;
+  _bits.setUint32(0, s);
+  return _bits.getFloat32(0);
+}
+
 /** One 128x128 RGBA surface, 0..255 floats, four per pixel. */
 const surface = () => new Float32Array(PIXELS * 4);
 
@@ -36,17 +67,28 @@ export class Surfaces {
 
 // --- the per-pixel primitive library, 0x100006ac..0x10000a50 -----------------
 
-/** 0x100006d0 — clamp four channels to [0,255]. Branchless fsel in the original. */
+const clamp1 = (v) => (v < 0 ? 0 : (v > 255 ? 255 : v));
+
+/**
+ * 0x100006d0 -> 0x10000700 — clamp four channels with `fsel`, then store.
+ *
+ * `vals` are the values as they sit in the FPRs, i.e. doubles; the store
+ * truncates them. Callers must NOT write to the surface first and clamp
+ * afterwards, because that would round on the way in and truncate a
+ * already-rounded value on the way out.
+ */
+export function clampStore(px, o, vals) {
+  for (let i = 0; i < 4; i++) px[o + i] = f32(clamp1(vals[i]));
+}
+
+/** 0x100006d0 in place, for the callers whose values are already in memory. */
 export function clamp4(px, o) {
-  for (let i = 0; i < 4; i++) {
-    const v = px[o + i];
-    px[o + i] = v < 0 ? 0 : (v > 255 ? 255 : v);
-  }
+  for (let i = 0; i < 4; i++) px[o + i] = f32(clamp1(px[o + i]));
 }
 
 /** 0x100007a4 — add the operand pixel to the destination, store RAW (no clamp). */
 export function addStore(dst, d, src, s) {
-  for (let i = 0; i < 4; i++) dst[d + i] += src[s + i];
+  for (let i = 0; i < 4; i++) dst[d + i] = f32(dst[d + i] + src[s + i]);
 }
 
 /**
@@ -68,10 +110,13 @@ export function addStore(dst, d, src, s) {
  *
  * Channel 0 of the destination is preserved: the three fnmsubs cover 1..3 only.
  */
+const _mix = [0, 0, 0, 0];
+
 export function blend(dst, d, src, s) {
   const t = src[s] / 255;
-  for (let i = 1; i < 4; i++) dst[d + i] = src[s + i] - (src[s + i] - dst[d + i]) * t;
-  clamp4(dst, d);
+  _mix[0] = dst[d];                      // f26 is never touched, only re-stored
+  for (let i = 1; i < 4; i++) _mix[i] = src[s + i] - (src[s + i] - dst[d + i]) * t;
+  clampStore(dst, d, _mix);
 }
 
 /** 0x10000850 — scaled difference across four channels. Does not store. */
@@ -79,8 +124,14 @@ export function scaledDiff(out, dst, d, src, s, k) {
   for (let i = 0; i < 4; i++) out[i] = (src[s + i] - dst[d + i]) * k;
 }
 
-/** 0x1000080c — fres(b - a). The original uses the ESTIMATE, not a divide. */
-export const reciprocalSpan = (a, b) => 1 / (b - a);
+/**
+ * 0x1000080c — fres(b - a). The original uses the ESTIMATE, not a divide, and
+ * `fpest.py` settles what the estimate actually is under the harness that
+ * produced the references: `fres` rounds its result to single precision,
+ * `frsqrte` does not. So this is a float32 reciprocal, and computing it in
+ * double costs exactly the delta-1 residue op1 was carrying.
+ */
+export const reciprocalSpan = (a, b) => Math.fround(1 / (b - a));
 
 /**
  * 0x100008e4 — the PRNG. Shift/xor/add mixing on three words, so the "random"
@@ -167,15 +218,26 @@ export function decode(bytes, operandWidths) {
   return { ops: out, exact: i === end };
 }
 
-/** 3x3 convolution: normalise by the kernel sum (0 means 1), wrap, clamp, leave alpha. */
+/**
+ * 3x3 convolution: normalise by the kernel sum (0 means 1), wrap, clamp, leave
+ * alpha.
+ *
+ * NOT a divide. `0x10000ff0` is `fres f18, f18` — the handler takes the
+ * reciprocal ESTIMATE of the kernel sum and multiplies by it, which is exact
+ * only when the sum is a power of two. That is why 0x50 (sum 8) and 0x5b
+ * (sum -2) matched while 0x51 and 0x59 (sum 6) were one level off at two
+ * subpixels each.
+ */
 export function convolve(src, dst, k) {
   const sum = k.reduce((a, b) => a + b, 0) || 1;
+  const inv = Math.fround(1 / sum);
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
       const o = (y * SIZE + x) * 4;
       // Channels 1..3 only. The handler accumulates f21, f20, f19 and stores
       // f25, f24, f23, leaving f26 — channel 0 — exactly as loaded. Channel 0
       // is the untouched one, not channel 3.
+      _mix[0] = src[o];
       for (let c = 1; c < 4; c++) {
         let acc = 0;
         for (let ky = -1; ky <= 1; ky++) {
@@ -184,10 +246,9 @@ export function convolve(src, dst, k) {
             acc += src[((sy * SIZE) + sx) * 4 + c] * k[(ky + 1) * 3 + (kx + 1)];
           }
         }
-        dst[o + c] = acc / sum;
+        _mix[c] = acc * inv;
       }
-      dst[o] = src[o];
-      clamp4(dst, o);
+      clampStore(dst, o, _mix);
     }
   }
 }
@@ -214,17 +275,17 @@ const clamp255 = (v) => (v < 0 ? 0 : (v > 255 ? 255 : v));
 
 /** op13 — write the mask from a channel combination chosen by the operand. */
 export function op13(s, [m]) {
-  for (let i = 0; i < PIXELS; i++) s.mask[i] = combineChannels(s.current, i * 4, m);
+  for (let i = 0; i < PIXELS; i++) s.mask[i] = f32(combineChannels(s.current, i * 4, m));
 }
 
 /** op14 — mask += (128 - operand). op15 — mask = (mask-128)*(operand/128) + 128. */
 export function op14(s, [v]) {
   const k = 128 - v;
-  for (let i = 0; i < PIXELS; i++) s.mask[i] = clamp255(s.mask[i] + k);
+  for (let i = 0; i < PIXELS; i++) s.mask[i] = f32(clamp255(s.mask[i] + k));
 }
 export function op15(s, [v]) {
   const k = v / 128;
-  for (let i = 0; i < PIXELS; i++) s.mask[i] = clamp255((s.mask[i] - 128) * k + 128);
+  for (let i = 0; i < PIXELS; i++) s.mask[i] = f32(clamp255((s.mask[i] - 128) * k + 128));
 }
 
 /**
@@ -233,8 +294,9 @@ export function op15(s, [v]) {
  * than blending toward the reference), then clamp and store.
  */
 export function contrastStep(px, o, ref, k) {
-  for (let i = 1; i < 4; i++) px[o + i] += (px[o + i] - ref) * k;
-  clamp4(px, o);
+  _mix[0] = px[o];
+  for (let i = 1; i < 4; i++) _mix[i] = px[o + i] + (px[o + i] - ref) * k;
+  clampStore(px, o, _mix);
 }
 
 /**
@@ -247,7 +309,9 @@ export function contrastStep(px, o, ref, k) {
  * uses a different mask.
  */
 export function op11(s, [v]) {
-  let k = Math.sqrt(1 / (128 - Math.abs(v - 128)));   // frsqrte on hardware
+  // frsqrte, which is 1/sqrt in full double under the harness — not sqrt(1/x),
+  // which rounds differently on the way through.
+  let k = 1 / Math.sqrt(128 - Math.abs(v - 128));
   if (v < 128) k = -k;
   for (let i = 0; i < PIXELS; i++) {
     const o = i * 4;
@@ -297,6 +361,12 @@ export function op9(s, ops) {
     for (let x = 0; x < 0x800; x += xstep) {
       const o = at(x, y);
       for (let c = 0; c < 4; c++) buf[o + c] = base[c] + rng.next() * amp[c];
+      // (clamp4 below is the store, so the values land truncated there)
+      // The seed store is `bl 0x100006d0` — the CLAMP entry, which falls into
+      // the store. The refinement store below is `bl 0x10000700`, the raw one.
+      // With base 36 and amplitude 255 the seed reaches 291, so the difference
+      // is visible: unclamped seeds feed high midpoints one octave later.
+      clamp4(buf, o);
     }
     // One extra draw per ROW — the `bl 0x100008e4` at 0x100011d8, between the x
     // loop ending and y advancing. Without it row 0 matches and everything after
@@ -309,7 +379,7 @@ export function op9(s, ops) {
   // levels compound. Halving instead would drift brighter with every octave.
   const K = 128 / 255;
   const mid = (o, a, b) => {
-    for (let c = 0; c < 4; c++) buf[o + c] = (buf[a + c] + buf[b + c]) * K;
+    for (let c = 0; c < 4; c++) buf[o + c] = f32((buf[a + c] + buf[b + c]) * K);
   };
 
   for (let st = xstep; st > 0x10; ) {
@@ -365,8 +435,8 @@ export function op0(s, ops, ch0 = 0) {
   const src = [ch0 - 128, ops[0] - 128, ops[1] - 128, ops[2] - 128];
   for (let i = 0; i < PIXELS; i++) {
     const o = i * 4;
-    for (let c = 0; c < 4; c++) s.current[o + c] += src[c];
-    clamp4(s.current, o);
+    for (let c = 0; c < 4; c++) _mix[c] = s.current[o + c] + src[c];
+    clampStore(s.current, o, _mix);
   }
 }
 
@@ -376,8 +446,7 @@ export function op17(s, ops, ch0 = 0) {
     const o = i * 4;
     // The add happens first and is then overwritten — visible in the original
     // as a store that is immediately superseded, so only the fill survives.
-    for (let c = 0; c < 4; c++) s.current[o + c] = src[c];
-    clamp4(s.current, o);
+    clampStore(s.current, o, src);
   }
 }
 
@@ -506,10 +575,11 @@ export function distance(dx, dy, mode) {
   if (mode & 8) dx = 0;
   const sq = dx * dx + dy * dy;
   if (sq === 0) return 0;
-  // fres(frsqrte(x)) — TWO single-precision roundings, not one sqrt. qemu
-  // computes both exactly in float32, so the reference textures carry the
-  // double rounding even though real hardware would add estimate error on top.
-  const r = Math.fround(1 / Math.fround(Math.sqrt(sq)));
+  // fres(frsqrte(x)) — and the two instructions do NOT round alike. `fpest.py`
+  // ran both on known inputs and read the result bits back: `frsqrte` returns
+  // the full double reciprocal square root, `fres` rounds to single. So exactly
+  // ONE rounding falls here, on the outer reciprocal.
+  const r = 1 / Math.sqrt(sq);
   return Math.fround(1 / r);
 }
 
@@ -598,21 +668,33 @@ export function op8(s, ops) {
  * All the deltas are precomputed with fres() spans, not divides.
  */
 export function op1(s, ops) {
-  const [x0, x1, y0, y1] = ops.slice(0, 4);
-  const TL = ops.slice(4, 8), TR = ops.slice(8, 12);
-  const BL = ops.slice(12, 16), BR = ops.slice(16, 20);
-  const rows = Math.max(y1 - y0, 1), cols = Math.max(x1 - x0, 1);
-  const left = TL.slice(), right = TR.slice(), c = new Float32Array(4);
-  const dl = TL.map((v, i) => (BL[i] - v) / rows);
-  const dr = TR.map((v, i) => (BR[i] - v) / rows);
-  for (let y = y0; y <= y1; y++) {
-    for (let i = 0; i < 4; i++) c[i] = left[i];
-    const step = right.map((v, i) => (v - left[i]) / cols);
-    for (let x = x0; x <= x1; x++) {
-      blend(s.current, (((y & 127) * SIZE) + (x & 127)) * 4, c, 0);
-      for (let i = 0; i < 4; i++) c[i] += step[i];
+  // Written as the handler is, not as the shape it draws. The difference is not
+  // cosmetic: every running value lives in the float32 parameter block, so each
+  // accumulation rounds to single, and both steps come from `fres` rather than a
+  // divide. A double-precision paraphrase of the same quad drew 36 subpixels one
+  // level off — small enough to look like nothing, and not nothing.
+  //
+  //   P[0..3]   x0, x1, y0, y1
+  //   P[4..11]  the top edge, left then right
+  //   P[12..19] the bottom edge — but P[12..15] is REUSED as the running colour
+  //             once the vertical deltas are out of it
+  //   P[20..27] scratch: the per-row deltas   (r22+0x50)
+  //   P[28..31] scratch: the per-pixel delta  (r22+0x70)
+  const P = new Float32Array(32);
+  for (let i = 0; i < ops.length; i++) P[i] = ops[i];
+  const kv = reciprocalSpan(P[2], P[3]);          // 0x1000080c on r22+8
+  for (let i = 0; i < 8; i++) P[20 + i] = f32((P[12 + i] - P[4 + i]) * kv);
+  const kh = reciprocalSpan(P[0], P[1]);          // 0x1000080c on r22+0
+  for (let y = ops[2]; y <= ops[3]; y++) {
+    for (let i = 0; i < 4; i++) P[12 + i] = P[4 + i];
+    for (let i = 0; i < 4; i++) P[28 + i] = f32((P[8 + i] - P[4 + i]) * kh);
+    for (let x = ops[0]; x <= ops[1]; x++) {
+      // `add r16, r25, r24; slwi r16, r16, 4` — no wrap. The handler trusts its
+      // operands and would write past the surface if they left the square.
+      blend(s.current, (y * SIZE + x) * 4, P, 12);
+      for (let i = 0; i < 4; i++) P[12 + i] = f32(P[12 + i] + P[28 + i]);
     }
-    for (let i = 0; i < 4; i++) { left[i] += dl[i]; right[i] += dr[i]; }
+    for (let i = 0; i < 8; i++) P[4 + i] = f32(P[4 + i] + P[20 + i]);
   }
 }
 
@@ -638,7 +720,7 @@ export function op6(s, ops) {
   // visible as exactly one wrong pixel at (127,64) in p3_8.
   for (let i = 0; i < major; i++) {
     blend(s.current, (((y & 127) * SIZE) + (x & 127)) * 4, c, 0);
-    for (let k = 0; k < 4; k++) c[k] += delta[k];
+    for (let k = 0; k < 4; k++) c[k] = f32(c[k] + delta[k]);
     err += minor;
     if (err >= major && major !== 0) { err -= major; x += sx; y += sy; }
     else if (steep) y += sy; else x += sx;
@@ -653,31 +735,48 @@ export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 export const UNIMPLEMENTED = new Set([]);
 
 /**
- * Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them.
+ * Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them — the epilogue at
+ * `0x10000618`, which is not the loop it looks like from the outside.
  *
- * Takes the Float32Array, NOT the Surfaces object. Passing the object indexes
- * undefined, which becomes NaN, which `| 0` turns into 0 — so every texture
- * comes out black and a diff against the 25 uniform-black references reports
- * matches. Guard rather than trust the caller.
+ * THE ALPHA BYTE DOES NOT COME FROM THE SURFACE. The loop walks 65,536 bytes
+ * and converts the surface float for every one of them, but on each iteration
+ * where the counter is divisible by four it throws that result away and stores
+ * `255 - mask` instead. So channel 0 of the current surface never reaches the
+ * texture: the alpha is the mask, inverted, one float per pixel. The 69 PNG
+ * references are RGB, so nothing in the whole-program diff could see this — it
+ * showed up as a reference alpha of 255 everywhere against a computed 0.
+ *
+ * AND THE STORE IS `stbu`, NOT A CLAMP. `float2int` is a bare `fctiw`, and only
+ * the low byte of the result is kept, so a surface value of 300 lands as 44 and
+ * -5 lands as 251. Clamping here would be the sane choice and the wrong one.
+ *
+ * Takes the Surfaces object, because it needs both the colour and the mask.
+ * Passing a bare Float32Array used to be the correct call and is now a bug, so
+ * it throws rather than quietly emitting alpha from the wrong place.
  */
-export function toARGB(surf) {
-  if (!(surf instanceof Float32Array)) {
-    throw new TypeError('toARGB expects a Float32Array — pass surfaces.current');
+export function toARGB(s) {
+  if (s instanceof Float32Array) {
+    throw new TypeError('toARGB now needs the mask too — pass the Surfaces object');
+  }
+  if (!(s && s.current instanceof Float32Array && s.mask instanceof Float32Array)) {
+    throw new TypeError('toARGB expects a Surfaces object');
   }
   // ROUND TO NEAREST, TIES TO EVEN — PowerPC's default fctiw mode, not
   // truncation. Measured across all 69 programs: truncating gives 29 exact and
   // 1,496,133 differing subpixels; nearest-even gives 30 and 1,460,146. The
   // giveaway was a ramp reading 87.83, 77.5 and 56.83 against a reference of
   // 88, 78 and 57 — every one rounded, none truncated.
-  const round = (v) => {
+  const fctiw = (v) => {
+    if (!(v > -2147483648)) return -2147483648;    // NaN included
+    if (v > 2147483647) return 2147483647;
     const f = Math.floor(v), d = v - f;
     return d > 0.5 ? f + 1 : (d < 0.5 ? f : (f % 2 === 0 ? f : f + 1));
   };
   const out = new Uint8Array(PIXELS * 4);
   for (let i = 0; i < PIXELS; i++) {
-    for (let c = 0; c < 4; c++) {
-      const v = surf[i * 4 + c];
-      out[i * 4 + c] = v < 0 ? 0 : (v > 255 ? 255 : round(v));
+    out[i * 4] = fctiw(255 - s.mask[i]) & 0xff;
+    for (let c = 1; c < 4; c++) {
+      out[i * 4 + c] = fctiw(s.current[i * 4 + c]) & 0xff;
     }
   }
   return out;
@@ -707,26 +806,27 @@ export function run(ops, kernels, opts = {}) {
     const clip = s.rect[0] !== 0 || s.rect[1] !== 0
       || s.rect[2] !== 128 || s.rect[3] !== 128;
     if (clip) { saved.set(s.current); savedMask.set(s.mask); }
+    // The copy-back at 0x10000568 runs after EVERY opcode, the convolution
+    // family included — it is in _generate's loop, not in any handler. Letting
+    // the convolutions skip it blurred the whole surface where the original
+    // blurs fifteen rows: p1_23 and p1_33 both end `op18(0,15,128,30)` then
+    // 0x57, and both were wrong by ~32,000 subpixels for exactly this reason.
     if (op === 0x55) {
       // NOT a convolution: 0x55 sits inside the range but is an inversion,
       // max(255 - x, 0), per section 7. p3_17 is the only program that uses it.
       for (let i = 0; i < PIXELS; i++) {
         for (let c = 1; c < 4; c++) {
           const v = 255 - s.current[i * 4 + c];
-          s.current[i * 4 + c] = v < 0 ? 0 : v;
+          s.current[i * 4 + c] = f32(v < 0 ? 0 : v);
         }
       }
-      continue;
-    }
-    if (op >= 0x50 && op <= 0x78) {
+    } else if (op >= 0x50 && op <= 0x78) {
       const k = kernels[op];
       if (!k) throw new Error(`no kernel for ${op.toString(16)}`);
       s.source.set(s.current);
       convolve(s.source, s.work, k);
       s.current.set(s.work);
-      continue;
-    }
-    switch (op) {
+    } else switch (op) {
       case 0:  op0(s, operands, opts.ch0 ?? 0); break;
       case 1:  op1(s, operands); break;
       case 2:  op2(s, operands); break;

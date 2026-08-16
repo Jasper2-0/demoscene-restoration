@@ -27,11 +27,11 @@ for (const [opStr, meta] of Object.entries(index.ops)) {
   const ops = [{ op: ref.seed.op, operands: ref.seed.operands },
     { op, operands: ref.operands }];
   let got;
-  try { got = toARGB(run(ops, kernels).current); }
+  try { got = toARGB(run(ops, kernels)); }
   catch (e) { rows.push({ op, err: e.message }); continue; }
   let diff = 0, maxd = 0;
   for (let i = 0; i < PIXELS; i++) {
-    for (let c = 1; c < 4; c++) {          // RGB; channel 0 is the weight
+    for (let c = 0; c < 4; c++) {          // all four: alpha is 255 - mask
       const d = Math.abs(got[i * 4 + c] - want[i * 4 + c]);
       if (d) { diff++; if (d > maxd) maxd = d; }
     }
