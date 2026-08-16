@@ -339,7 +339,7 @@ Measured from `FlashUpdates-26042002.lha`
 `HOW_TO_INSTALL_THE_FLASH.txt` is unambiguous: *"for a CyberstormPPC with a
 128KB Flash use PPCUpdate"*.
 
-### There is no v44.71
+### The version label is not what the archive says — verify by hash, not by name
 
 `Cybppc.notes` carries the firmware changelog, and its versions run:
 
@@ -351,15 +351,25 @@ It rolls **44.69 → 45.70**. The string `44.71` does not appear in any file in
 the archive. The newest CSPPC firmware here is **V45.71** ("Added PCI BootMenu
 info").
 
-So the three CSPPC images an emulator ROM database would plausibly know —
-remembered as "44.67, 44.69 and 44.71" — are almost certainly **44.67, 44.69 and
-45.71**, and the SHA-1 `c7cb3c4fa66e260f43bff7044049a264a729e590` belongs to
-**45.71**. Worth confirming against the emulator's own ROM table before relying
-on the label; that check was not run here, since fetching another project's
-source is outside this session's repository scope.
+**But `4471` is a real label elsewhere.** FS-UAE's ROM lookup, seen live in its
+own log, is:
 
-The good news is that the archive is the right one either way: what it flashes
-is 45.71, which is the newest and the one most likely to be in the database.
+```
+[ROM] Did not find cyberstormppc.rom
+[ROM] Trying ralphschmidt-cyberstorm-ppc-4471.rom
+```
+
+So the emulator/Amiga Forever side genuinely uses `4471` as a filename. The two
+facts do not contradict each other, because `Cybppc.notes` is a changelog of
+**`cybppc.device`** behaviour — SCSI units, CDROM quirks, mount gadgets, PCI
+BootMenu info — and the device driver's version is not necessarily the flash
+BIOS version, even though the driver ships inside the flash.
+
+What can be said without guessing: **the archive never claims 44.71 anywhere,
+and the newest thing it documents is 45.71.** So do not trust the version label
+on either side. Verify the image the updater actually produces by its SHA-1, and
+treat the filename as a filename. That is what the plan already does, so nothing
+about the approach changes — only the confidence in the name.
 
 ### The image cannot be lifted out statically — the emulator round-trip is real
 
@@ -409,3 +419,92 @@ only matters on real hardware.
 we want the 128 KB `PPCUpdate` — but it means the documentation is shared across
 releases and does not describe this archive's contents exactly. Do not treat it
 as a manifest.
+
+### The roundtrip was run, and it does not bootstrap from a blank flash
+
+The emulation side works, and works better than expected — but the recipe as
+usually described ("make an empty `cyberstormppc.rom`, run the updater") does
+**not** produce a ROM, for a reason that is in the updater's own code.
+
+What ran, all of it inside a headless Linux container:
+
+```
+fs-uae 3.1.66        (Ubuntu noble/universe)      + Xvfb
+amiga_model          = A4000/040
+accelerator          = cyberstorm-ppc
+cpuboard_flash_file  = cyberstormppc.rom          (131,072 bytes of 0xFF)
+hard_drive_0         = hd0/                       (a host directory)
+hd0/s/Startup-Sequence -> PPCUpdate >DH0:out.txt
+```
+
+FS-UAE logged `CPUBoard 'CyberStorm PPC' flash file './cyberstormppc.rom'
+loaded, RW.`, mapped `CPUBoard F00000` and `CPUBoard MAPROM`, booted, mounted
+the directory, ran the startup-sequence, executed the 2001 68K binary, and its
+output came back to the host filesystem:
+
+```
+	CyberstormPPC 128KB FlashTool V1.6
+
+No CyberstormPPC installed
+```
+
+The flash file was still 131,072 bytes of `0xFF` afterwards — zero bytes
+changed.
+
+**No Kickstart ROM was needed.** FS-UAE has an AROS Kickstart replacement built
+in (`AROS KS ROM (built-in)`), and it booted far enough to mount a filesystem
+and run a program. That removes what looked like the first blocker entirely.
+
+#### Why it refuses — from the updater's own 68K
+
+Disassembling `PPCUpdate` around the failure string gives the whole check:
+
+```asm
+    move.l  a6,-(a7)
+    lea     "CyberstormPPC.IDTag"(pc),a1
+    movea.l $4.w,a6                  ; ExecBase
+    jsr     -$60(a6)                 ; OpenResource()
+    tst.l   d0
+    bne.b   ok                       ; found -> proceed to flash
+    lea     "CyberstormMK3.IDTag"(pc),a1
+    jsr     -$60(a6)                 ; OpenResource()
+    tst.l   d0
+    bne.b   ok
+    lea     "No CyberstormPPC installed"(pc),a0
+    move.l  a0,d1
+    movea.l $188.l,a6                ; DOSBase
+    jsr     -$3ba(a6)                ; PutStr()
+    moveq   #0,d0
+    bra     exit
+```
+
+It requires an **exec resource** named `CyberstormPPC.IDTag` to already exist.
+Nothing in the updater creates that resource — on real hardware it is published
+by the board's own firmware during early boot. With a blank flash there is no
+firmware, so there is no resource, so the tool exits before touching anything.
+
+**The flash updater upgrades a CyberStorm PPC; it cannot create one.** The seed
+problem is not removed by this route, only moved: you still need *some* working
+CSPPC image to start from, after which the updater will roll it forward and
+FS-UAE will write the result back to `cpuboard_flash_file`. That is still
+worth doing — it is how you get a *known, reproducibly derived* image rather
+than a mystery dump — but it is not a bootstrap from nothing.
+
+One caveat stated plainly: this run used AROS rather than Kickstart 3.1, and
+separating "blank flash" from "AROS" as the cause would need a valid CSPPC ROM —
+the exact thing being sought. The disassembly makes the blank-flash explanation
+much the likelier of the two, since the requirement is a resource and resources
+come from firmware, but it has not been isolated experimentally.
+
+#### What this harness is good for anyway
+
+Independent of the ROM question, the container can now **boot an Amiga and run
+period 68K binaries headlessly, with stdout captured back to the host**, needing
+no Kickstart and no license. For this project that is a real instrument: it will
+run 68K Amiga tools, unpackers and the many small utilities that show up in
+restoration work, and it costs one `apt-get install`.
+
+It will **not** run Planet Potion. The PPC CPU in FS-UAE is supplied by the
+`qemu-uae` plugin (`PPC CPU was started but qemu-uae plugin was not found`),
+which Ubuntu does not package — so PPC execution, and therefore any dynamic
+tracing of the intro, still needs that plugin built or a WinUAE setup elsewhere.
