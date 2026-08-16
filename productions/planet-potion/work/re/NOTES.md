@@ -141,6 +141,30 @@ rectangle, so `v` renders as `w`.
 **All 69 textures**, byte-exactly, via `ppcrun.py` + `rendertex.py`. 66 carry
 varied content; 3 are a single uniform colour.
 
+**All 38 decodable geometry programs**, via `rungeo.py`.
+
+## Texture opcodes — first pass
+
+`texops.py` synthesises one-opcode programs (`[u16 len][op][operands]`, operand
+count from the table at `0x1000a500`) and renders each with operands all `0x00`
+and all `0x40`. Eight of the twenty show observable behaviour from a single call;
+the rest need state a prior opcode would have set.
+
+| op | operands | observed with a single call |
+|---|---|---|
+| 1 | 20 | two colours — a pattern generator |
+| 2, 3, 5, 17 | 13, 12, 10, 3 | uniform fill, value tracking the operands (`op3` loops forever on all-zero operands) |
+| 6 | 12 | two colours — a pattern generator |
+| **9** | 12 | **noise / turbulence — 3,607 distinct colours, vertical banding.** The only op that fills the surface with detail on its own |
+| 12 | 1 | uniform grey; `0x00`→`0x80`, `0x40`→`0x40`, i.e. `128 − operand` |
+| 13 | 1 | drives **alpha** to 0 |
+| 14, 15 | 1 | set **alpha** = `127 + operand`; the two behave identically |
+| 0, 4, 7, 8, 10, 11, 16, 18, 19 | | no visible effect alone |
+
+`op19` takes zero operands. `op16`'s table entry is `127`, special-cased to 1 in
+the dispatch. Opcodes `0x50..0x78` are outside this table entirely and all route
+to the single parameterised handler at `0x10000f58`.
+
 ## Tools here
 
 | file | what |
@@ -148,6 +172,8 @@ varied content; 3 are a single uniform colour.
 | `hunkload.py` | Hunk parser + relocator → flat images, `symbols.csv`, `layout.txt` |
 | `ppcrun.py` | hand-built PPC ELF; runs the pure subsystems under `qemu-ppc-static` |
 | `rendertex.py` | every texture program → PNG + contact sheet |
+| `rungeo.py` | runs `_generate_obj` with Warp3D stubbed; dumps the decoded node list |
+| `texops.py` | one-opcode texture programs, for naming the texture ops |
 | `PPLoad.java` | Ghidra: load segments, apply symbols, decompile the named functions |
 | `PPVm.java` | Ghidra: pin `r2`, name the VM handlers, decompile them |
 
