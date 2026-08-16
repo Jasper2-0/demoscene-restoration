@@ -39,7 +39,7 @@ displacements, 260 landing on a recovered symbol.
 | texture | `0x1000a47c` | 20 | 17 | ops inside `_generate` |
 | scene | `0x1000a8a8` | 7 | 7 | ops 0–6; op 7 is the inline root |
 | geometry build | `0x1000a9b0` | 5 | 5 | construct pass |
-| geometry eval | `0x1000a9c4` | 5 | 5 | evaluate pass |
+| geometry eval | `0x1000a9c4` | 5 | **1 live** | evaluate pass; slots 0 and 4 are `blr`, 1 and 2 belong to unused opcodes |
 | render | `0x1000aa20` | 7 | 6 | draw-node types |
 
 Supporting tables: scene node sizes `0x1000a8c8` (u16 ×8), geometry node sizes
@@ -247,6 +247,49 @@ at `+0x1c` to an array of 20-byte records — `(x, y, z, w)` floats plus a flag
 word. Program `0x10030b56` yields two control vertices at `z = ±1024, w = 100`.
 So geometry is extractable as data on the same terms as the textures, without
 reimplementing a single handler.
+
+## The geometry evaluate pass — one handler, three transforms
+
+The fifth table (`0x1000a9c4`, five slots) turns out to be almost entirely
+inert. Slots 0 and 4 both point at a bare `blr`, and slots 1 and 2 belong to the
+two geometry opcodes that **never appear in the shipped data**. So exactly one
+body ever runs: **slot 3 at `0x10004e64`**.
+
+It is a transform interpreter, and it explains the operand-width rule recorded
+earlier for build-op 3 (`3 + 6·(nonzero 2-bit groups)`):
+
+```
+  outer = byte[node+0x19]
+  repeat outer times:
+      sel = byte[node+0x1b]          ; up to FOUR packed 2-bit selectors
+      vec = node + 0x1c              ; one 3-float vector each
+      while sel:
+          switch (sel & 3):
+              1 -> translate     0x100041b0
+              2 -> rotate        0x100042cc
+              3 -> scale         0x100041ec
+              0 -> skip
+          vec += 12; sel >>= 2
+```
+
+All three walk the object's vertex list (`node+4`, chained by `+0x68`) and act on
+each vertex's position at `+0x24…+0x2c`:
+
+- **translate** adds the vector;
+- **rotate** goes through the `_sinus` table and its quarter-turn cosine offset;
+- **scale** first divides the operand by **255.0** (`r2+0x2dee`) — so scale
+  factors are authored in 0…255 units, the same convention as the texture VM's
+  colour maths — then multiplies, and afterwards rescales the per-vertex normals
+  at `+0x3a/+0x3e/+0x42` and renormalises them.
+
+**Two approximations, both deliberate.** That renormalisation uses `frsqrte`
+with **no Newton refinement** — a reciprocal-square-root *estimate*, about five
+bits — just as the projection uses `fres` rather than a divide. A port that
+normalises exactly and divides exactly will not match the original's shading or
+its perspective, and the difference is systematic rather than noise.
+
+With this the **five dispatch tables are all read**: texture, scene, geometry
+build, geometry evaluate, render.
 
 ## Warp3D surface — 22 functions, 29 sites
 
