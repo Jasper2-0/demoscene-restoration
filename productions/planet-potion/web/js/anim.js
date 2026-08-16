@@ -82,6 +82,46 @@ export function normalise(t, t0, invSpan) {
 }
 
 /**
+ * The track search for loop mode 0, from 0x10005054.
+ *
+ * Walk `+0xfc` while the NEXT keyframe's tick is below the local time — so the
+ * chosen keyframe is the last one whose tick is at or before it, which is what
+ * animcheck.mjs confirms against the running program.
+ *
+ * AND THE END OF A TRACK CLAMPS. When `next` is zero the original does not keep
+ * evaluating the final keyframe with a growing `u`: it loads `key+0x04` into the
+ * time itself (`lfs f15, 4(r21)`), so `t − t0` is zero and the value freezes at
+ * `c0`. Letting `u` run on past the end instead is the obvious implementation
+ * and it makes every finished track keep accelerating away — cubically, since
+ * `c2` is on `u³`.
+ */
+export function search(track, localTime) {
+  let k = track[0];
+  if (!k) return null;
+  for (;;) {
+    const next = track.find((x) => x.addr === k.nextAddr)
+      ?? track[track.indexOf(k) + 1];
+    if (!next) return { key: k, t: k.t0 };       // clamped: u = 0
+    if (next.tick >= localTime) return { key: k, t: localTime };
+    k = next;
+  }
+}
+
+/**
+ * Local time, and the beat sync. `t − anim[+0x6c]`, EXCEPT that in loop mode 0
+ * the frame's music signal is compared against the trigger byte at `anim+0x70`
+ * first (`0x10005034`): on a match the origin is reset to the current tick and
+ * local time restarts at zero. That is the whole mechanism by which the visuals
+ * lock to the music, and it is gated on the loop mode — a looping track does not
+ * check the trigger at all.
+ */
+export function localTime(t, anim, musicSignal) {
+  const mode = (anim.flags2 & 0xe0) >> 5;
+  if (mode === 0 && musicSignal === anim.trigger) return { t: 0, reset: true };
+  return { t: t - anim.origin, reset: false };
+}
+
+/**
  * The frame's clear colour, which is not a constant and is not black.
  * `_calc_matrix` finishes by reading the first node's animation channels at
  * +0x40/+0x44/+0x48, scaling each by 255 and packing them into `r2+0x2846`

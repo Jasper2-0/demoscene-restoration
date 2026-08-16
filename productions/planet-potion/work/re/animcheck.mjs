@@ -40,8 +40,19 @@ const say = (ok, what, detail = '') => {
   console.log(`${ok ? 'ok  ' : 'FAIL'}  ${what}${detail ? `  ${detail}` : ''}`);
 };
 
-/** The last keyframe whose tick is at or before the local time. */
-const active = (track, t) => track.reduce((b, k) => (k.tick <= t ? k : b), null);
+/**
+ * The last keyframe whose tick is at or before the local time — and if the walk
+ * runs off the end of the track, the time CLAMPS to that keyframe's t0 rather
+ * than running on (0x10005060). Returns both, since the clamp changes `u`.
+ */
+function active(track, t) {
+  let k = track[0];
+  for (let i = 1; i < track.length; i++) {
+    if (track[i].tick >= t) return { key: k, t };
+    k = track[i];
+  }
+  return { key: k, t: k.t0 };
+}
 
 // Confirmed on the sampled scenes: these three blocks are cx, cy and scale.
 const PUBLISHED = [[12, 21, 'cx'], [13, 22, 'cy'], [14, 23, 'scale']];
@@ -69,10 +80,10 @@ for (let n = 0; n < nodeCount; n++) {
     for (const f of doc.frames) {
       const node = f.nodes[n];
       if (!node?.anim) continue;
-      const k = active(node.track, f.t);
-      if (!k) continue;
-      const { u, u2, u3 } = normalise(f.t, k.t0, k.invSpan);
-      const got = channel(k.blocks[block], u, u2, u3, k.flags);
+      const a = active(node.track, f.t);
+      if (!a) continue;
+      const { u, u2, u3 } = normalise(a.t, a.key.t0, a.key.invSpan);
+      const got = channel(a.key.blocks[block], u, u2, u3, a.key.flags);
       const want = node.anim.channels[ch];
       if (first === null) first = want; else if (want !== first) moved++;
       worst = Math.max(worst, Math.abs(got - want));
@@ -87,10 +98,11 @@ for (let n = 0; n < nodeCount; n++) {
     let ok = true;
     for (const f of doc.frames) {
       const node = f.nodes[n];
-      const k = active(node.track, f.t);
-      if (!k) continue;
-      const { u, u2, u3 } = normalise(f.t, k.t0, k.invSpan);
-      if (Math.abs(channel(k.blocks[b], u, u2, u3, k.flags) - node.anim.channels[b + 9]) > 1e-3) {
+      const a = active(node.track, f.t);
+      if (!a) continue;
+      const { u, u2, u3 } = normalise(a.t, a.key.t0, a.key.invSpan);
+      if (Math.abs(channel(a.key.blocks[b], u, u2, u3, a.key.flags)
+        - node.anim.channels[b + 9]) > 1e-3) {
         ok = false;
       }
     }

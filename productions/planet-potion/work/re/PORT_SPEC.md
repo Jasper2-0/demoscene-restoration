@@ -70,6 +70,25 @@ Local time is `t − anim[0x6c]`. Loop modes subtract keyframe spans from it bef
 the search. **If the frame's music signal equals `anim[0x70]`, reset the origin to
 `t` and restart the track** — this is the entire beat-sync mechanism.
 
+Three details from `0x10004fdc`, all of which a port gets wrong by default:
+
+* **the trigger is checked only in loop mode 0.** `cmpwi r20, 0; bne` skips the
+  comparison entirely for a looping track, so beat sync and looping are
+  alternatives, not layers. The signal is `r2+0x23bc` and the new origin is the
+  current tick from `r2+0x2862`;
+* **the dirty flag is set only when the node has a parent.** `cmpwi r3, -1; beq`
+  leaves `+0x03` bit 0 clear for a root, so a root is resolved from the start and
+  the §3b iteration only ever waits on real chains;
+* **the end of a track clamps.** When the walk reaches a keyframe whose `+0xfc`
+  is zero, the original loads `key+0x04` into the TIME (`lfs f15, 4(r21)`), so
+  `t − t₀` is zero and the value freezes at `c0`. Continuing to evaluate the last
+  keyframe with a growing `u` is the obvious implementation and makes every
+  finished track accelerate away cubically, since `c2` sits on `u³`.
+
+The mode-0 search itself is `0x10005054`: advance while the NEXT keyframe's tick
+is below the local time. That is the same selection as "the last keyframe at or
+before it", which `animcheck.mjs` confirms against the running program.
+
 Keyframes are `0x104` bytes, doubly linked (`+0xfc` next, `+0x100` prev):
 
 ```
