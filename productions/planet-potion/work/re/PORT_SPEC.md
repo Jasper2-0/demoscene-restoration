@@ -432,12 +432,29 @@ own prologue at `0x100021bc`:
   the root unconditionally. It is not in the stream, which is why every list
   `scenes.json` records starts with a 7 that is not a scene opcode.
 
-**And the opcode bytes still do not decode.** `work/re/scenegram.py` walks all 29
-streams with the length prefix honoured and the first byte after it is `0x5b`,
-`0x9b`, and similar — nowhere near `0..6`. So the dispatch at `0x100021f4` is not
-a bare byte indexing seven handlers, and the remaining unknown is how that byte
-becomes an opcode: a mask, a bias, a wider table than the seven at `0x1000a8a8`,
-or the handler table not being the thing it indexes at all.
+**The dispatch is not a bare byte, and the opcode space is not seven wide.**
+`0x10002204` reads:
+
+```
+  andi. r24, r29, 0x80        /* bit 7 is a FLAG, stored to node+0x0e   */
+  andi. r29, r29, 0x7f        /* the opcode is the LOW SEVEN BITS       */
+  addi  r25, r2, 0x28ca
+  slwi  r3, r29, 1
+  lhzx  r3, r25, r3           /* index a u16 SIZE table by opcode       */
+  bl    alloc_mem             /* and allocate that many bytes           */
+  ...
+  slwi  r26, r29, 2           /* type = opcode * 4, into node+0x08      */
+```
+
+So a stream byte carries a flag in bit 7 — the one `drawlog` reads back as
+`clip` — and an opcode in the low seven, and that opcode indexes a **size table
+at `r2+0x28ca`** with room for far more than seven entries. The node type
+`_show_scene` dispatches on is the same opcode times four.
+
+That is why `scenegram.py` still fails: the seven handlers at `0x1000a8a8` are not
+the whole opcode set, and a decoder needs the size table, not a hand-written
+width list. **Read `r2+0x28ca` next** — it gives every opcode's node size directly,
+and its length gives the opcode count.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
