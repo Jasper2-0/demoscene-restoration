@@ -28,7 +28,7 @@ FAKEOBJ=0x20560000
 def lis(d,v): return (15<<26)|(d<<21)|(v&0xFFFF)
 def ori(a,s,v): return (24<<26)|(s<<21)|(a<<16)|(v&0xFFFF)
 def addi(d,a,v): return (14<<26)|(d<<21)|(a<<16)|(v&0xFFFF)
-def run(stream, txt_tab=0x2642, obj_tab=0x2706, dump=0x20000, steps=99, want_alloc=False):
+def run(stream, txt_tab=0x2642, obj_tab=0x2706, dump=0x20000, steps=99, want_alloc=False, pre=()):
     c=[]
     c+=H.load32(1,H.STACK); c+=H.load32(2,R2); c+=H.load32(13,H.STACK-0x1000)
     for k,w in enumerate([lis(3,FAKEOBJ>>16), ori(3,3,FAKEOBJ&0xFFFF), blr()]):
@@ -49,6 +49,11 @@ def run(stream, txt_tab=0x2642, obj_tab=0x2706, dump=0x20000, steps=99, want_all
         # for a 0xFF terminator. Without it that walk runs off mapped memory.
         c+=H.call32(12,INIT_TXTGEN)
         c+=H.call32(12,INIT_SCENE_GEN)
+        for ps in pre:                      # run earlier scenes first, same process
+            c+=H.load32(3,ARENA)+H.call32(12,SET_ALLOC)
+            c+=H.load32(4,ps)
+            c+=H.load32(5,g(0x288e))+H.load32(6,g(0x2896))
+            c+=H.call32(12,GEN_SCENE)
         c+=H.load32(3,ARENA)+H.call32(12,SET_ALLOC)
         c+=H.load32(4,stream)
         c+=H.load32(5,g(0x288e))+H.load32(6,g(0x2896))

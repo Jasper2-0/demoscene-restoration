@@ -181,6 +181,18 @@ That is the timeline for the whole demo: **27 of 29 scenes decoded** (16 of 18 i
 part one, 11 of 11 in part three), each an ordered list of typed draw nodes, with
 the running order readable from `_play_part_1` and `_play_part_3`.
 
+**The two that fail are both text scenes**, and both die in the same place: the
+loop at `0x10002e44` in scene handler [4], inside the unterminated glyph scan
+described above. Cross-scene state was ruled out — `runscene.py` takes a `pre=`
+list to run earlier scenes first in the same process, and `0x25aa` still fails
+after `0x25d2`, `0x25ee` after `0x25e6`. So the residue is one identified code
+path with a known latent bug, not two unexplained failures.
+
+For a port this matters little: the glyph scan is the *renderer's* character
+lookup, and the text content itself is ordinary scene data. It does mean the
+harness cannot currently dump those two graphs, and it is a reminder that a port
+must bound that scan rather than translate it literally.
+
 **Geometry.** Opcode byte, then operands — but **do not try to model the
 widths**. Three attempts failed and the reason is instructive:
 
