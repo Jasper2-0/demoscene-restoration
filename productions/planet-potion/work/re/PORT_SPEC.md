@@ -258,6 +258,29 @@ the work is entirely in the primitives.
 Spanning `0x10006ef0`–`0x10009a8c`. Larger than the renderer and animation
 together, and **the biggest unread subsystem in the intro**.
 
+`synthscript.py` extracts both scripts with each call's register setup, which is
+recoverable without understanding a single primitive. Four things it shows:
+
+- **Both open with `0x10006ef0(module size)`** — `0x513e5a` and `0x2e02ec`. The
+  generator is told how much to build before it builds anything.
+- **Part one is block-driven.** 42 parameter-block pointers, `r2+0x315a` through
+  `r2+0x342a`, on `0x10` or `0x20` centres. `0x10009510`'s `r8` flag chooses
+  which: `r8=1` walks blocks `0x10` apart, `r8=0` walks them `0x20` apart, which
+  matches the two parameter triples the routine itself selects between.
+- **Instruments are combinatorial.** `0x10009020` takes *three* pointers — a
+  per-instrument block plus one of three shared tables at `r2+0x2f2a/0x2f3a/
+  0x2f4a` and one of two at `r2+0x306a/0x307a`. Eight calls, eight combinations.
+  That is how 37 KB covers 56 instruments.
+- **Part three is stream-driven.** It ends with sixteen consecutive `0x1000742c`
+  calls carrying **no setup at all**, because the routine consumes a halfword
+  stream and advances its own cursor (`lhz r19, 0(r25); addi r25, r25, 2`). Its
+  seed data is a tape, not a table.
+
+So a port transcribes the scripts mechanically and implements 32 routines. The
+two dominant ones are `0x10009510` (13 calls, fixed-size builder with two length
+presets, 201,600 and 100,800) and `0x1000742c` (18 calls, the stream reader,
+which lerps toward each target with `fmadd`).
+
 ### 8c. The container
 
 Chunk order is `NAME, INFO, SONG, INST, VENV, DSPE, PATT, SMPL` — legal but not
