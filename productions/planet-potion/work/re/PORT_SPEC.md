@@ -129,9 +129,40 @@ the last triple, and they are the **projection** parameters `cx`, `cy` and
 That is why they check out one-for-one while ten of the other blocks only appear
 to.
 
-**3b. Compose down the hierarchy.** For a node whose parent is resolved,
-component-wise multiply four channels by the parent's, gated by flag bit `0x40`.
-Multiplication, not matrix concatenation.
+**3b. Compose down the hierarchy** — `0x10005394`, and it is four independent
+operations rather than one.
+
+It is a **fixed-point iteration**, not a single sweep. Bit 0 of `anim+0x03` is
+the dirty flag; a node is skipped while its PARENT is still dirty, `r26` records
+whether anything was left unresolved, and the whole pass repeats until nothing
+is. So parents need not precede children in the list. Resolving a node clears the
+low nibble of `+0x03` (`andi r25, 0xf0`).
+
+A node only composes when the parent's byte at `+0x00` is `1`; otherwise that
+byte is copied down and the node is left alone. The four operations are gated by
+bits of the node's own `+0x03`, and all offsets below are relative to the channel
+block at `anim+0x0c`:
+
+| bit | | |
+|---|---|---|
+| `0x40` | `+0x3c … +0x48` | **multiply** four floats by the parent's, component-wise |
+| `0x80` | `+0x4c`, `+0x50` | **add** two floats from the parent |
+| `0x20` and `0x10` | `+0x54 … +0x5c` | **copy** three floats from the parent, then `0x10005c10(node, parent)` |
+| `0x20` without `0x10` | `+0x30 … +0x38` | transform the triple through `0x10005b34(·, parent)` |
+| `0x10` without `0x20` | `+0x30 … +0x38` | **add** the parent's triple |
+
+Only the first of those is multiplication, and only the fourth is anything like
+matrix concatenation — so "multiplication, not matrix concatenation" was true of
+the case it described and not of the pass.
+
+The walk is two nested chains: sub-objects on `+0x74` inside, the node list on
+`+0x10` outside — the same `+0x74` chain `_restore_time` uses, which is why the
+animation and the geometry hang off one structure.
+
+This is read but not yet checked. `animdump.py` already exports the parent link
+and the channels, so the check is available: the sampled scene's second node is
+parented, its own blocks are zero, and its published `cx`/`cy`/`scale` equal its
+parent's — consistent with the copy path, which is what to confirm first.
 
 **3c. Publish.** `anim+0x60/0x64/0x68` become the render node's `cx`, `cy`,
 `scale` — channels 21, 22 and 23 of the block at `+0x0c`. **Confirmed against
