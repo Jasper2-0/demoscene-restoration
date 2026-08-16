@@ -17,7 +17,7 @@ this file is the address notebook.
 |---|---|---|---|
 | 0 | CODE | 46,960 | 68K bootstrap, all the PPC code, globals, float pool |
 | 1 | DATA | 16,960 | `dbplayer.library 2.0 (16.8.98)` — written to `ram:` by the bootstrap, opened, then deleted |
-| 2 | DATA | 2,048 | table, entropy 2.99 |
+| 2 | DATA | 2,048 | **the font bitmap** — 128×128 at 1bpp, expanded by `_init_txtgen` |
 | 3 | DATA | 12,796 | **part one's** scene / texture / geometry programs |
 | 4 | DATA | 52,500 | **part three's** programs (28%) + softsynth data (~72%) |
 | 5 | BSS | 513,248 | four lookup tables the **68K bootstrap** fills: sin, atan, 2^x, e^x |
@@ -1134,6 +1134,15 @@ middle × 8 bit iterations = **128 × 128 pixels**, writing one 32-bit word per 
 bit and leaving cleared bits untouched. That is the font mask: 2,048 bytes of
 1bpp expanded to a 128×128 32-bit image, matching the 128×113 glyph atlas the
 font table indexes.
+
+**And the source is seg 2**, the one segment that had stayed unidentified as
+"table, entropy 2.99". The pointer at `r2+0x247a` reads `0x1001ffff` — one below
+`0x10020000` because the loop uses `lbzu` — so the source is seg 2's 2,048 bytes,
+which is 128×128 bits exactly. Expanding it in Python reproduces the harness's
+output **byte for byte**, 4,241 set pixels, and rendering it shows the glyph
+sheet with `0` visibly appearing twice, matching the quirk the font table
+records. `export.py` now writes it as `font_atlas.png`: without it a port has the
+letter positions but not the letters.
 
 The word it writes is **`0x00FFFFFF`** — in `W3D_A8R8G8B8` that is alpha 0 with
 white RGB, which under a replacing texture environment would be invisible. Since

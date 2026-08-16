@@ -9,6 +9,7 @@ Runs the three pure subsystems under the qemu harness and writes:
     out/meshes.json                per geometry program: opcodes + vertices
     out/scenes.json                per scene: ordered typed draw-node list
     out/font.json                  40 glyphs, (code, x, y, w, h)
+    out/font_atlas.png             the 128x128 glyph bitmap those index into
     out/render_state.json          the Warp3D configuration and fog presets
     out/draws.json                 the recorded Warp3D draw stream, per frame
     out/showorder.json             the show schedule, from the music
@@ -56,6 +57,24 @@ def export_font(d0, out):
                           'the renderer glyph scan is unbounded for absent chars']},
               open(f'{out}/font.json', 'w'), indent=2)
     return len(recs)
+
+
+INIT_TXTGEN, FONT_DEST = 0x1000139c, 0x100d0000
+
+
+def export_font_atlas(flat, out):
+    """The glyph bitmap, expanded the way `_init_txtgen` expands it.
+
+    seg 2 is 2,048 bytes = 128x128 bits: the font mask, 1bpp. The expander turns
+    each set bit into 0x00FFFFFF and leaves cleared bits zero, giving a 128x128
+    image the glyph rectangles in font.json index into. Without this a port has
+    the letter positions but not the letters.
+    """
+    img, _ = H.run(flat, INIT_TXTGEN, {}, out_addr=FONT_DEST, out_len=128 * 128 * 4)
+    if len(img) != 128 * 128 * 4:
+        return 0
+    rendertex.png(f'{out}/font_atlas.png', 128, 128, img)
+    return sum(1 for i in range(0, len(img), 4) if img[i:i + 4] != b'\0' * 4)
 
 
 def export_render_state(d0, r2, out):
@@ -249,6 +268,7 @@ def main():
                                        H.preload_tables(d0).items()))
     print('font        ...', end=' ', flush=True); ng = export_font(d0, out); print(f'{ng} glyphs')
     print('render state...', end=' ', flush=True); nf = export_render_state(d0, r2, out); print(f'{nf} fog presets')
+    print('font atlas  ...', end=' ', flush=True); na = export_font_atlas(flat, out); print(f'{na} set pixels')
     print('textures    ...', end=' ', flush=True)
     sys.argv = ['x', flat, f'{out}/textures']; rendertex.main()
     print('meshes      ...', end=' ', flush=True); nm, mf = export_meshes(flat, d0, r2, out); print(f'{nm} programs, {mf} failed')
@@ -257,7 +277,7 @@ def main():
 
     json.dump({'production': 'planet-potion',
                'source': 'planet-potion_dcr.exe, see prod.json for hashes',
-               'font_glyphs': ng, 'fog_presets': nf,
+               'font_glyphs': ng, 'font_atlas_pixels': na, 'fog_presets': nf,
                'mesh_programs': nm, 'mesh_failures': mf,
                'scenes': ns, 'scene_failures': sf,
                'draw_scenes': nd, 'draw_failures': df, 'draw_samples_per_scene': NSAMPLES,
