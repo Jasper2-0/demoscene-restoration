@@ -400,6 +400,70 @@ No `DrawTriangle`, no `DrawTriStrip`, no `DrawArray`, no `DrawElements`. That is
 a hard constraint on what `_generate_obj`'s VM can be emitting, and it collapses
 the primitive-assembly question in the WebGL2 port to a single path.
 
+#### Where those calls actually sit
+
+Mapping every call site to its enclosing function has to be read with one
+caveat: attribution by nearest *exported* symbol is coarse, because the binary is
+full of unnamed file-local statics. Where a function's true extent is known the
+attribution is exact, and those cases are the informative ones:
+
+- **`_alloc_txt`** (0x202c–0x20c4) contains `AllocTexObj`, `UploadTexture`,
+  `SetFilter` — the entire texture upload path, in one 152-byte function.
+- **`_dealloc_txt`** (0x20c4–0x2120) contains `FreeTexObj`. That is the whole
+  texture lifecycle, in two functions.
+- The **context lifecycle** — `CreateContext`, `AllocZBuffer`, `Hint`,
+  `SetZCompareMode`, `SetBlendMode`, `SetFogParams`, then `FreeZBuffer`,
+  `DestroyContext`, plus `SetDrawRegion` twice, `ClearDrawRegion` and
+  `ClearZBuffer` — is **12 of the 29 call sites clustered in one region**
+  (0x1c80–0x1e40). Setup and teardown live together, and the per-frame path
+  touches almost nothing else.
+- **`_show_scene`** holds the rest: `DrawLineStrip`, `DrawTriFan` ×3,
+  `ReadZPixel`, `WaitIdle`, `ClearZBuffer`.
+
+`_zet` is loaded immediately before the `ClearZBuffer` at 0x6488, so that global
+is the depth-clear value.
+
+#### A fourth dispatch table — the renderer is table-driven too
+
+`_show_scene` dispatches through `PTR_LAB_1000aa20` indexed by a halfword at
+node+8. Bounding it the same way as the others — the word after the last entry
+is zero, and the next symbol is the float pool at `0x1000aa6c` — gives **7 slots
+over 6 distinct handlers**:
+
+| slot | handler | note |
+|---|---|---|
+| 0 | `0x10005de8` | ~24 B — a thin wrapper around `W3D_DrawLineStrip` |
+| 1, 2 | `0x10005e00` | ~24 B — a thin wrapper around `W3D_DrawTriFan` (shared) |
+| 3 | `0x10005ddc` | ~12 B — smaller still |
+| 4 | `0x10005e18` | the bounds-test + `ReadZPixel` + `DrawTriFan` handler |
+| 5 | `0x100061a0` | |
+| 6 | `0x1000644c` | the largest; owns the `ClearZBuffer` |
+
+So the engine is **four tables end to end**: 8 scene operations feed 5 geometry
+build ops and 5 eval ops, which feed 7 render node types. Three of the seven
+render handlers are ~24 bytes or less — they are literally "call this W3D
+primitive".
+
+#### The one readback in the whole intro
+
+Slot 4's handler is the only place anything is read *back* from the hardware. It
+performs a four-way float comparison — two values tested against two lower and
+two upper bounds — and, if that passes, calls `W3D_ReadZPixel` before a
+`DrawTriFan`.
+
+Project a point, check it is on screen, sample the depth buffer there, and draw
+only if nothing is in front: that is the shape of an **occlusion-tested
+screen-space element**, the standard construction for a lens flare or a
+visibility-gated sprite. Stated as the reading of the evidence rather than a
+fact — the bounds arrive in float registers from the caller, so they could not
+be tied to the named `__clip_x` / `__clip_y` / `__border*` globals from here.
+
+It matters for the port regardless of what it draws: `W3D_ReadZPixel` is a
+synchronous single-pixel depth read, and the naive WebGL2 equivalent
+(`readPixels` on a depth attachment) stalls the pipeline. This is the one call in
+the surface that does not map cleanly, and it wants an occlusion-query or
+deferred-readback design rather than a literal translation.
+
 **Porting the renderer therefore means implementing 22 Warp3D calls on WebGL2**,
 not reverse-engineering a triangle loop. Warp3D of this era is essentially
 fixed-function — state flags, a texture unit, gouraud, fog, z-buffer — which maps
