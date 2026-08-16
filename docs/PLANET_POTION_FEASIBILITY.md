@@ -1174,11 +1174,50 @@ calls whose *semantics* need a reference. That is where the WinUAE-Warp3D
 question, the CSPPC seed ROM and the stub-library idea belong — and it is one
 subsystem out of five, not the gate on the project.
 
+### Tier 3 turned out to be smaller than that
+
+The renderer was put in Tier 3 because it "ends in library calls", and a
+function that ends in library calls cannot be run as a pure function. That was
+the wrong conclusion drawn from a true premise. **The library calls are the
+output.** Point every Warp3D vector at a stub that records its arguments and
+returns, and running `_show_scene` produces the intro's own draw stream —
+`work/re/drawlog.py`, and it needs no Amiga, no Warp3D and no capture.
+
+What that yields is not a hint about the renderer, it is the renderer's result:
+for any `(scene, frame)`, the ordered list of primitives, which texture each
+binds, and the 64-byte screen-space vertices as the original computed them. 27 of
+the 29 scenes record; part three's busiest submits 200 primitives in a frame.
+
+It also settles by reading, not by fitting, three things that would otherwise
+have been guessed:
+
+- **The projection.** `sx = x·(scale/z) + cx`, `sy = y·(scale/z) + cy`, depth
+  `4/z` as a double, `w = 1/z` — where the reciprocal is PowerPC `fres`, an
+  *estimate* good to about one part in 256, not a divide. The original's
+  perspective is approximate and the approximation is part of the picture.
+- **Texture coordinates are in texels, wrapped** (values up to 5888 on a 128-wide
+  texture), because the intro never calls `W3D_SetTexEnv` or `W3D_SetWrapMode`.
+- **Clipping** is Sutherland–Hodgman in view space against four planes, with 640
+  and 480 read from the float pool rather than assumed.
+
+The three genuinely capture-only unknowns are unchanged and are all
+*rasterisation* questions — fill rule, blend overflow, raw Z encoding. Everything
+above the rasteriser is now measurable offline.
+
 ### The one true gate
 
 **A reference capture.** Nothing can be *scored* against the original without a
 video and an audio-alignment offset, and that is the standard this repo holds
 its restorations to. It gates verification, not construction.
+
+One qualification, added after `drawlog.py`: the capture is no longer the *only*
+oracle. A port can now be checked primitive-by-primitive against the recorded
+draw stream before a single pixel is rasterised — a stricter comparison than a
+video in the parts it covers, and one that runs offline. What the capture still
+uniquely settles is everything below the draw call: the fill rule, the blend
+behaviour, the fog interpolation, and whether the whole thing *looks* like the
+original. So it remains the gate on a signed-off release; it is no longer the
+gate on knowing whether the port is right.
 
 **A source is now identified and pinned** in `prod.json` — a direct 640×480
 H.264 + FLAC file, not a YouTube re-encode. Two things make it unusually good

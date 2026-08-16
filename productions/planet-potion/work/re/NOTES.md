@@ -225,7 +225,14 @@ reimplementing a single handler.
 
 ## Warp3D surface — 22 functions, 29 sites
 
-Named against ReWarp3DPPC's `VecTable68K[]` (LGPL-3.0, github.com/Sakura-IT),
+`vecscan.py` recovers this from the code alone: an AmigaOS call is
+`lwz rA, disp(rBase)` where `rBase` came from one of the eight library-base
+globals, so tracking which register holds which base and collecting the negative
+displacements gives the surface exactly. 22 distinct vectors over 29 sites, plus
+two `powerpc.library` vectors and nothing else — no `dos.library`, no
+`graphics.library` from the PowerPC side at all.
+
+Names come from ReWarp3DPPC's `VecTable68K[]` (LGPL-3.0, github.com/Sakura-IT),
 where index 4 is `W3D_CreateContext` at LVO −30, so `LVO = −6·(index+1)`.
 
 | group | functions |
@@ -343,6 +350,149 @@ triangle fan. `ReadZPixel` appears once, in render slot 4's handler, after a
 four-way float bounds test and before a `DrawTriFan` — an occlusion-tested
 screen-space element. It is the only readback in the intro and the only call
 that does not map cleanly onto WebGL2.
+
+## The renderer, recorded — `drawlog.py`
+
+The three pure subsystems could be run as functions because they touch no
+library. `_show_scene` cannot: it *ends* in library calls. But those calls are
+the interesting part, so rather than stub them to nothing, point every Warp3D
+vector at a stub that **writes its arguments down** and returns. Run a scene at a
+chosen frame and the log is the intro's own draw stream.
+
+```
+python3 drawlog.py flat/
+  t=  0    10 draws     30 triangles  4 textures
+      trifan n=5 tex=5  v0=(320.0,240.0) w=0.0016 uv=(0.00,0.00) a=0.63
+```
+
+Three things had to be arranged, and each is a fact about the program:
+
+* **Time is a 50 Hz counter at `r2+0x2862`.** The frame function at `0x10001d9c`
+  reads the system clock and reduces it to `secs·50 + micros/20000`. Writing that
+  word directly makes the whole renderer a deterministic function of
+  `(scene, frame)` — no clock, no OS, reproducible.
+* **`W3D_AllocTexObj`'s return value has to be unique.** The generic recorder
+  returns *its own log record's address*, so every call gets a distinct non-null
+  handle and the draw calls that bind a texture can be tied back to which one.
+  Allocation order is table order, so the handle maps straight to a texture
+  index.
+* **The vertex array is one shared buffer, reused every call.** Left alone, only
+  the last primitive of the frame survives. The stub advances the pointer past
+  the slice it was just handed — in *both* primitive templates, since fans and
+  line strips interleave and write into the same array. It also has to point at
+  fresh scratch first: the intro's buffer sits `0x500` bytes below the clip-buffer
+  pointer arrays, so accumulating in place corrupts them within twenty vertices.
+
+### The vertex pipeline, in closed form
+
+The emitter at `0x10006630` is the whole of it. Reading it settles the
+projection without any fitting against a capture:
+
+```c
+  /* per node: cx = node[0x14], cy = node[0x18], scale = node[0x1c] */
+  float rz = fres(z);              /* PPC reciprocal ESTIMATE, not 1.0f/z */
+  out.x = x * (scale * rz) + cx;
+  out.y = y * (scale * rz) + cy;
+  out.z = (double)(4.0f * rz);     /* stfd — the depth value, a W3D_Double */
+  out.w = rz;
+  out.u = u;  out.v = v;           /* copied through untouched */
+  out.rgb   = src.rgb;
+  out.alpha = firstVertex[0x0c];   /* ONE alpha for the whole primitive */
+```
+
+`fres` is a **reciprocal estimate** instruction, not a divide — accurate to about
+one part in 256. The original's perspective divide is therefore approximate, and
+that approximation is part of what the picture looks like.
+
+The per-primitive alpha is taken from the first source vertex only, and
+`if (alpha <= 0) return;` skips the primitive entirely — which is how elements
+fade out of the scene. It is also why a scene's draw count falls over its life:
+`r2+0x25d2` submits 10 primitives at t=0, 3 by t=1, 2 by t=26, and none from
+t=52.
+
+**Two vertex layouts, both measured.**
+
+| source vertex — 36 bytes | | `W3D_Vertex` — 64 bytes | |
+|---|---|---|---|
+| `+0x00` | `x y z` | `+0x00` | `float x, y` |
+| `+0x0c` | `alpha` (primitive-wide) | `+0x08` | `double z` |
+| `+0x10` | `r g b` | `+0x10` | `float w` |
+| `+0x1c` | `u v` | `+0x14` | `float u, v` |
+| | | `+0x20` | `float r, g, b, a` |
+
+36 is confirmed independently: `_init_scene_show` builds two arrays of 100 clip
+vertices on **`0x24`-byte centres**.
+
+`W3D_Triangles` as this program builds it is `{ ULONG count; W3D_Vertex *v;
+W3D_Texture *tex; }`, and the line-strip template carries a fourth word holding
+`1.0f` — the line width.
+
+**UVs are in texels, not normalised.** Recorded values run `0.0 … 128.0` for a
+single tile and reach `5888.0` (46 tiles) where a texture scrolls. The intro
+never calls `W3D_SetTexEnv` or `W3D_SetWrapMode`, so a port divides by 128 and
+uses `REPEAT`.
+
+### The clipper
+
+`0x10006734`, called twice per primitive when `node[0x0e]` is set. It is
+Sutherland–Hodgman in **view space against four planes**, two per call:
+
+```
+  call 1:  f4 = +1.0   x + z·(cx/scale) > 0     y + z·(cy/scale) > 0
+  call 2:  f4 = -1.0  -x + z·((640-cx)/scale) > 0   -y + z·((480-cy)/scale) > 0
+```
+
+640 and 480 come from `r2+0x2e16` and `r2+0x2e0a` as float literals, so the
+resolution is in the data, not assumed. Output ping-pongs between the two
+`_init_scene_show` arrays, all nine source fields are interpolated, and a
+primitive left with fewer than `r22` vertices (3 for fans, 2 for line strips) is
+dropped.
+
+### Scene length comes from the music
+
+Every scene driver — `_play_scene`, `_play_scene_synchro`, `_play_scene_dalej`,
+`_play_scene_new_camera`, `_play_scene_p_start/p_end` — has the same loop:
+`_calc_matrix`, `_show_scene`, `rmb_mouse`, repeat. `rmb_mouse` exits on the
+right mouse button **or** when the halfword at `r2+0x23ba` reads 1, and nothing
+in the PowerPC code ever writes 1 there.
+
+The 68K frame routine `__refresh` does (`ppdis.py flat/ 0x1000025e 0x100002bc -m`):
+
+```
+  a1->0xa = d5                 ; RyOffset 0 or 480 — the double buffer flip
+  jsr -$24c(GfxBase)           ; ScrollVPort
+  jsr -$192(GfxBase)
+  jsr -$3c(DBMBase)  -> d0     ; dbplayer.library, LVO -60
+  if (d0 && d0 != last && d0 == 1)  *0x23ba = 1
+  last = d0
+```
+
+So **a scene ends when `dbplayer.library` reports signal 1** — the module drives
+the timeline, and the previous frame's value is kept so only the transition
+counts. Since `_generate_samples_part1/3` already run byte-exactly under the
+harness, the timeline is recoverable offline: it is in the generated DBM0's
+pattern data, not in the code.
+
+### What the recording covers, and what it does not
+
+27 of 29 scenes record. Part three is the heaviest — `r2+0x277e` submits 200
+primitives at t=20 — and part one's early scenes run from 11 to 89. The two that
+fail are the same two text scenes as before, on the same unbounded glyph scan.
+
+Six part-one scenes (`0x25da`, `0x25d6`, `0x25de`, `0x25e2`, `0x25ea`, `0x25e6`)
+record the overlay and **nothing of their own**. They are the ones whose graphs
+are all type-5 nodes, and render handler 5 at `0x100061a0` bails immediately when
+`node+0x24` — its object pointer — is zero, which it is here. `_restore_time` is
+not the cause: it only writes the frame into `node+0x6c`, which a fresh arena
+already holds as 0. In the show these six are each followed by
+`_play_scene_new_camera` calls, so the missing state is most likely something
+that sequence establishes. Recorded as an open item rather than guessed at.
+
+The running order recorded above also needs a correction. `_play_part_1` loads
+`r2+0x25d2` first, but hands it to **`_init_synchro`** — it is the overlay built
+once into its own arena (`r2+0x2836`) and drawn on top of every scene, not the
+first scene. The first scene *played* is `r2+0x25aa`, and `drawlog.py` takes an
+`overlay=` argument so the recorded stream matches what the screen showed.
 
 ## Fully decoded
 
@@ -555,8 +705,16 @@ python3 export.py flat/ out/
   out/scenes.json              29 scenes: ordered typed draw-node lists
   out/font.json                40 glyphs with the shipped quirks recorded
   out/render_state.json        Warp3D configuration, fog presets, port notes
+  out/draws.json               the recorded draw stream: 28 scenes x 3 frames
   out/manifest.json            counts and what failed
 ```
+
+`draws.json` is the one a port is checked against rather than built from: every
+primitive the original submits at a given frame, with its texture index and its
+screen-space vertices. A reimplementation that produces the same list is right
+for reasons that can be pointed at, and one that does not can be diffed
+primitive by primitive — without a video capture, and before a single pixel is
+rasterised.
 
 About 2 MB, dominated by the textures, and **regenerable from the original
 archive by this one command** — so it is not committed, per the README's rule for
@@ -579,6 +737,9 @@ synchronous stall needing an occlusion query rather than a literal translation.
 | `texops.py` | one-opcode texture programs, for naming the texture ops |
 | `texops2.py` | generator-then-opcode pairs, which separates modifiers from setters |
 | `runscene.py` | runs the scene interpreter; dumps the typed draw-node graph |
+| `drawlog.py` | runs `_show_scene` with recording vector stubs; dumps the draw stream |
+| `vecscan.py` | every library vector the code fetches, by tracking the base registers |
+| `ppdis.py` | ranged disassembly with symbol names; `-m` for the 68K bootstrap |
 | `lvo.py` | reads a Warp3D library's own vector table from its ROMTag |
 | `export.py` | runs all of the above and writes the whole dataset |
 | `PPLoad.java` | Ghidra: load segments, apply symbols, decompile the named functions |

@@ -10,6 +10,7 @@ Runs the three pure subsystems under the qemu harness and writes:
     out/scenes.json                per scene: ordered typed draw-node list
     out/font.json                  40 glyphs, (code, x, y, w, h)
     out/render_state.json          the Warp3D configuration and fog presets
+    out/draws.json                 the recorded Warp3D draw stream, per frame
     out/manifest.json              counts, provenance, what failed
 
 Nothing here is committed to the repository — it is all regenerable from the
@@ -17,6 +18,7 @@ original archive by this script, which is the rule the README applies to baked
 intermediates. What is committed is the script.
 """
 import json, os, struct, sys, zlib
+import drawlog
 import ppcrun as H
 import rendertex
 import rungeo
@@ -137,11 +139,52 @@ def export_scenes(flat, d0, r2, out):
     return len(res), fails
 
 
+P1_ORDER = [0x25aa, 0x25ba, 0x25ce, 0x25ae, 0x25b2, 0x25b6, 0x25ca, 0x25be,
+            0x25c2, 0x25c6, 0x25da, 0x25d6, 0x25de, 0x25e2, 0x25ea, 0x25e6, 0x25ee]
+P1_OVERLAY = 0x25d2                       # _init_synchro's, drawn over every scene
+SAMPLES = (0, 20, 40)
+
+
+def export_draws(d0, r2, out, samples=SAMPLES):
+    """Record what the renderer actually submits, by running it (see drawlog.py)."""
+    res, fails = [], 0
+    jobs = [('p1', P1_ORDER, P1_OVERLAY, 0x2642, 0x2706),
+            ('p3', [0x277a + i * 4 for i in range(11)], None, 0x27a6, 0x27fe)]
+    for part, disps, over, txt, obj in jobs:
+        for order, disp in enumerate(disps):
+            strm = g(d0, r2, disp)
+            o, _ = drawlog.run(strm, frames=samples, txt_tab=txt, obj_tab=obj,
+                               overlay=g(d0, r2, over) if over else None)
+            frames = drawlog.parse(o)
+            if not frames:
+                fails += 1
+                res.append({'part': part, 'order': order, 'slot': hex(disp),
+                            'frames': None,
+                            'note': 'text scene; harness hits the unbounded glyph scan'})
+                continue
+            res.append({'part': part, 'order': order, 'slot': hex(disp),
+                        'overlay': hex(over) if over else None,
+                        'frames': [{'t': f['time'], 'draws': [
+                            {'prim': d['prim'], 'texture': d['texture'],
+                             # flat per-vertex records: x y z w u v r g b a
+                             'v': [round(c, 5) for vx in d['vertices'] for c in
+                                   (vx['x'], vx['y'], vx['z'], vx['w'], vx['u'],
+                                    vx['v'], *vx['rgba'])]}
+                            for d in f['draws']]} for f in frames]})
+    json.dump({'screen': [640, 480], 'tick_hz': 50,
+               'vertex_fields': ['x', 'y', 'z', 'w', 'u', 'v', 'r', 'g', 'b', 'a'],
+               'uv_space': 'texels (0..128), wrapped — not normalised',
+               'z': '4/z as a W3D_Double; w = 1/z; both from a PPC fres estimate',
+               'scenes': res}, open(f'{out}/draws.json', 'w'))
+    return len(res), fails
+
+
 def main():
     flat = sys.argv[1] if len(sys.argv) > 1 else 'flat'
     out = sys.argv[2] if len(sys.argv) > 2 else 'out'
     os.makedirs(f'{out}/textures', exist_ok=True)
     H.FLAT = rungeo.FLAT = runscene.FLAT = flat
+    drawlog.setflat(flat)
     base = H.read_layout(flat)[0][0]
     r2 = base + H.R2_BIAS
     d0 = open(os.path.join(flat, next(f for f in os.listdir(flat)
@@ -153,12 +196,14 @@ def main():
     sys.argv = ['x', flat, f'{out}/textures']; rendertex.main()
     print('meshes      ...', end=' ', flush=True); nm, mf = export_meshes(flat, d0, r2, out); print(f'{nm} programs, {mf} failed')
     print('scenes      ...', end=' ', flush=True); ns, sf = export_scenes(flat, d0, r2, out); print(f'{ns} scenes, {sf} failed')
+    print('draw stream ...', end=' ', flush=True); nd, df = export_draws(d0, r2, out); print(f'{nd} scenes x {len(SAMPLES)} frames, {df} failed')
 
     json.dump({'production': 'planet-potion',
                'source': 'planet-potion_dcr.exe, see prod.json for hashes',
                'font_glyphs': ng, 'fog_presets': nf,
                'mesh_programs': nm, 'mesh_failures': mf,
                'scenes': ns, 'scene_failures': sf,
+               'draw_scenes': nd, 'draw_failures': df, 'draw_samples': list(SAMPLES),
                'regenerate': 'python3 export.py flat/ out/'},
               open(f'{out}/manifest.json', 'w'), indent=2)
     print(f'\nwrote {out}/  — regenerable, not committed')
