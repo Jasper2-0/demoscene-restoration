@@ -229,7 +229,31 @@ Per-primitive alpha comes from the **first** source vertex's `+0x0c`, and
   out.u = u;  out.v = v;               /* TEXELS, 0..128, wrapped */
 ```
 
-Verified against the program: 1,059 vertices, zero mismatches.
+Verified against the program: 1,059 vertices, zero mismatches, and against the
+whole exported stream by `work/re/projcheck.mjs` — `z == 4w` on all 144,744
+vertices, none outside the export's own rounding.
+
+**There are two different `z`s here and confusing them wastes a session.** The
+`z` FIELD in a draw record is the depth value `4·rz`; eye-space depth is `1/w`.
+Checking the record's `z` against `1/w`, finding a ratio of four everywhere and
+concluding the emitter is misdescribed is reading the wrong field.
+
+**And `draws.json` is a poor oracle for far-field depth.** It rounds every
+coordinate to five decimals, and `w` is a reciprocal, so the recovered eye depth
+`1/w` degrades quadratically with distance:
+
+```
+  z_eye <= 10        21 vertices   depth recoverable to ~0.01
+  z_eye <= 100    2,138           ~0.1
+  z_eye <= 1000 102,014           ~5
+  z_eye <= 10000 39,325           ~500
+  beyond          1,246           ~12,500
+```
+
+So a reimplemented `_calc_matrix` can be held to the screen positions tightly and
+to depth only for the near field. Checking it against the far field needs the
+stream re-exported at full precision, which is a change to `export.py` rather
+than a limit of the method.
 
 ## 5. Render state
 
