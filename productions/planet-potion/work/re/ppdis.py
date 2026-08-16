@@ -26,9 +26,11 @@ def main():
           else capstone.Cs(capstone.CS_ARCH_PPC,
                            capstone.CS_MODE_32 | capstone.CS_MODE_BIG_ENDIAN))
     # RESYNC. capstone's linear disassembly stops dead at the first word it
-    # cannot decode, and this program contains several it does not know. Taking
-    # that halt for "end of code" is exactly the mistake that once put this
-    # binary's code extent 13 KB short, so step over the bad word and continue.
+    # cannot decode. Across 0x10000404..0x1000a334 that happens 15 times: seven
+    # `fcmpo` instructions (op 63, xo 32) this capstone build does not know, all
+    # inside the texture VM, plus eight 0x00000000 alignment words. Taking such a
+    # halt for "end of code" is exactly the mistake that once put this binary's
+    # code extent 13 KB short, so step over the word and continue.
     pc, step = lo, (2 if m68k else 4)
     while pc < hi:
         got = None

@@ -1791,6 +1791,28 @@ reversed depth convention, the blend factors as WebGL2 names, fog as
 per-vertex-interpolated linear, and the note that `W3D_ReadZPixel` is a
 synchronous stall needing an occlusion query rather than a literal translation.
 
+### Where capstone stops, and what it cost
+
+`ppdis.py` originally ended a listing at the first undecodable word, which is
+capstone's behaviour and not obviously wrong until you notice a routine that
+appears to be four instructions long. Sweeping the whole PowerPC range with the
+resync in place finds **15 such words**: eight `0x00000000` alignment fills and
+**seven `fcmpo`** (op 63, extended opcode 32) that this capstone build does not
+know.
+
+All seven are inside the texture VM — `0x10000784`, `0x100007cc`, `0x100009d8`,
+`0x10000d0c`, `0x10000fc0`, `0x10000fe4`, `0x10001104`. Checking them against
+every routine read so far, none falls inside the emitter, the clipper,
+`_calc_matrix`, `_show_scene`, or any of the four synth voices; the only hit is
+`0x10000d0c`, in the shared op11/op12 handler, which was read *with* the resync.
+So nothing recorded earlier is truncated — but two of the sites sit in the op7
+and op8 handlers, which is worth knowing before reading those.
+
+This audit was itself wrong once. The first sweep reported zero undecoded words,
+because it ran from the wrong directory and the tool never started; `grep -c` on
+a failed command's empty output is a confident-looking `0`. Redirecting stderr
+to `/dev/null` is what hid it.
+
 ## Tools here
 
 | file | what |
@@ -1810,7 +1832,7 @@ synchronous stall needing an occlusion query rather than a literal translation.
 | `dbmpatt.py` | unpacks DBM0 song and pattern data; finds the scene-advance signals |
 | `showorder.py` | the show schedule: call order from the code, durations from the music |
 | `vecscan.py` | every library vector the code fetches, by tracking the base registers |
-| `ppdis.py` | ranged disassembly with symbol names; `-m` for the 68K bootstrap |
+| `ppdis.py` | ranged disassembly with symbol names; `-m` for the 68K bootstrap. Resyncs past words capstone cannot decode instead of stopping |
 | `lvo.py` | reads a Warp3D library's own vector table from its ROMTag |
 | `export.py` | runs all of the above and writes the whole dataset |
 | `PORT_SPEC.md` | the current answer, organised for someone implementing it |
