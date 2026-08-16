@@ -14,6 +14,7 @@ Runs the three pure subsystems under the qemu harness and writes:
     out/tex_operands.json          per-operand sensitivity for all 20 opcodes
     out/render_state.json          the Warp3D configuration and fog presets
     out/draws.json                 the recorded Warp3D draw stream, per frame
+    out/tex_programs.json          the 69 texture programs, as bytecode
     out/showorder.json             the show schedule, from the music
     out/manifest.json              counts, provenance, what failed
 
@@ -112,6 +113,37 @@ def export_render_state(d0, r2, out):
                   'it is a synchronous stall and needs an occlusion query in WebGL2'],
     }, open(f'{out}/render_state.json', 'w'), indent=2)
     return len(fog)
+
+
+def export_programs(flat, d0, r2, out):
+    """The texture bytecode itself, so a reimplemented VM has an input.
+
+    Every program in every language is `u16 length` then the opcode stream (bit
+    15 of the length is a flag). The 69 rendered PNGs are the oracle; these are
+    what a JS texture VM has to consume to produce them.
+    """
+    segs = {va: open(os.path.join(flat, fn), 'rb').read()
+            for va, sz, fn in H.read_layout(flat) if fn}
+
+    def fetch(addr):
+        for va, data in segs.items():
+            if va <= addr < va + len(data):
+                o = addr - va
+                n = struct.unpack_from('>H', data, o)[0] & 0x7FFF
+                return data[o:o + 2 + n], n
+        return None, 0
+
+    res = []
+    for part, disp, n in (('p1', 0x2642, 48), ('p3', 0x27a6, 21)):
+        for i, prog in enumerate(table(d0, r2, disp, n)):
+            blob, ln = fetch(prog)
+            res.append({'part': part, 'index': i, 'at': hex(prog), 'bytes': ln,
+                        'hex': blob.hex() if blob else None})
+    json.dump({'note': 'u16 length (bit 15 is a flag) then the opcode stream. '
+                       'Operand counts are in tex_operands.json; the 0x50..0x78 '
+                       'range is the 3x3 convolution family in tex_kernels.json.',
+               'programs': res}, open(f'{out}/tex_programs.json', 'w'), indent=2)
+    return len(res), sum(1 for r in res if not r['hex'])
 
 
 def export_meshes(flat, d0, r2, out):
@@ -277,6 +309,7 @@ def main():
     sys.argv = ['x', flat, f'{out}/tex_kernels.json']; texconv.main()
     print('tex operands...', flush=True)
     sys.argv = ['x', flat, f'{out}/tex_operands.json']; texprobe.main()
+    print('tex programs...', end=' ', flush=True); npg, pgf = export_programs(flat, d0, r2, out); print(f'{npg} programs, {pgf} unreadable')
     print('textures    ...', end=' ', flush=True)
     sys.argv = ['x', flat, f'{out}/textures']; rendertex.main()
     print('meshes      ...', end=' ', flush=True); nm, mf = export_meshes(flat, d0, r2, out); print(f'{nm} programs, {mf} failed')
@@ -288,6 +321,7 @@ def main():
                'font_glyphs': ng, 'font_atlas_pixels': na, 'fog_presets': nf,
                'mesh_programs': nm, 'mesh_failures': mf,
                'scenes': ns, 'scene_failures': sf,
+               'tex_programs': npg, 'tex_program_failures': pgf,
                'draw_scenes': nd, 'draw_failures': df, 'draw_samples_per_scene': NSAMPLES,
                'regenerate': 'python3 export.py flat/ out/'},
               open(f'{out}/manifest.json', 'w'), indent=2)
