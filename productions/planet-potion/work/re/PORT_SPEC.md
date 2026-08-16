@@ -329,7 +329,35 @@ instrument by instrument:
 `r8 = 0` gives 201,600 and non-zero gives 100,800 — but it is not the only
 producer of either, so do not read the histogram as a routine census.
 
-### 8g. `0x1000742c` — part three's voice, read
+### 8g. `0x10009510` — part one's voice, and what `r18` is for
+
+13 of part one's 57 calls. The emitter's period counter `r16` is a **step
+index**: the routine reads one byte per step from four tables — the per-call
+parameter block plus three shared ones the script selects — so each sample is a
+sequenced pattern, not a single tone.
+
+The arithmetic closes exactly. The caller sets `r18 = 0x189c` = **6,300 frames
+per step**, and the two length presets are
+
+```
+  r8 != 0   100,800 frames  =  16 steps
+  r8 == 0   201,600 frames  =  32 steps
+```
+
+so the `r8` flag chooses a 16- or 32-step pattern, and the two parameter-block
+strides the script uses (`0x10` and `0x20`) are the same choice seen from the
+data side.
+
+Per step: a note byte becomes a target pitch, which `f23` **glides** toward with
+coefficient `r2+0x2ac6` when the step's flag byte is set and jumps to when it is
+not — portamento as a per-step flag. `0x1000a1b4` turns the pitch into two phase
+increments. Two accumulators wrap against `r2+0x2df2`, and on wrap they reset an
+envelope to 1.0 and **flip a sign** — a square/pulse pair. `r8 == 1` doubles the
+second oscillator's wrap point again, so the flag is octave as well as length.
+Envelopes decay as `x *= (1 - k)` via `fnmsubs`, and a filter pair `f10, f9`
+smooths toward `f8, f7`.
+
+### 8h. `0x1000742c` — part three's voice, read
 
 18 of part three's 39 calls, sixteen of them consecutive with no setup. Per call
 it reads **ten consecutive `u16`** from the tape at `r25+0x00…0x12` and runs each
