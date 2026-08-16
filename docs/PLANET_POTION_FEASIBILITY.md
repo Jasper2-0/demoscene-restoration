@@ -392,8 +392,42 @@ populates those tables; the alternative is to dump them from a running instance.
 and starts being the cheaper path** — and it strengthens the case for the stub
 `Warp3DPPC.library`, since running the intro is what produces those tables.
 
-For scale: part one's 18 streams total 6,098 bytes, which is only 47% of seg 3.
-The rest of that segment is unaccounted for and is the obvious place to look next.
+#### seg 3 is now fully accounted for
+
+Part one's 18 scene streams cover 6,134 bytes — 47% of seg 3 — and the remainder
+is **one contiguous block at the front, `0x0000..0x1a05`, 6,661 bytes**.
+
+The texture VM has exactly one caller (`_calculate_txt+0xa4`), and that block is
+its data. Tiling it with the same container format the other languages use — a
+`u16` length whose bit 15 is a flag, then a payload — gives **76 programs
+consuming 6,661 bytes exactly**, with nothing left over. A wrong hypothesis does
+not tile 6,661 bytes across 76 records.
+
+```
+seg 3 = 6,661 bytes of texture programs (76)  +  6,134 bytes of scene streams (18)
+      = 12,795 of 12,796                       (1 byte of padding)
+```
+
+The flag splits them into two visibly different populations: programs 0–47 are
+mostly flag=1 and littered with `255,255,255` triples, programs 48–75 are flag=0
+with `128,160,128`-style mid-greys. Those are RGB parameters either way.
+
+**The inner decode is only partial, and this is the honest state of it.** Walking
+each program with the operand-count table at `r2+0x2502` lands exactly on the end
+for **37 of 76**. Broken down by first opcode, programs beginning with op 2, 11,
+16 or 18 decode at 100% and op 9 at 68%, while ops 0 and 4 — the flag=0
+population — almost always overrun. Re-testing that population against the
+*geometry* VM's widths instead does no better (21%), so it is not simply the
+object streams misfiled.
+
+The explanation is almost certainly the one already seen on the geometry side:
+those widths are a **base** count, and individual handlers consume conditionally
+— `op0` there takes 6 *or* 8 bytes depending on a sign bit. Finishing the decode
+means reading the conditional advances out of the 17 texture handlers, the same
+exercise already done for the five geometry ones. Bounded work, not a wall.
+
+By contrast seg 4 is 63% covered by its 32 streams with no gap over 64 bytes, so
+its remainder is interstitial rather than a second block.
 
 #### One structure fully cracked: the font
 
