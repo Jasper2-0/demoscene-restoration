@@ -613,11 +613,20 @@ export function toARGB(surf) {
   if (!(surf instanceof Float32Array)) {
     throw new TypeError('toARGB expects a Float32Array — pass surfaces.current');
   }
+  // ROUND TO NEAREST, TIES TO EVEN — PowerPC's default fctiw mode, not
+  // truncation. Measured across all 69 programs: truncating gives 29 exact and
+  // 1,496,133 differing subpixels; nearest-even gives 30 and 1,460,146. The
+  // giveaway was a ramp reading 87.83, 77.5 and 56.83 against a reference of
+  // 88, 78 and 57 — every one rounded, none truncated.
+  const round = (v) => {
+    const f = Math.floor(v), d = v - f;
+    return d > 0.5 ? f + 1 : (d < 0.5 ? f : (f % 2 === 0 ? f : f + 1));
+  };
   const out = new Uint8Array(PIXELS * 4);
   for (let i = 0; i < PIXELS; i++) {
     for (let c = 0; c < 4; c++) {
       const v = surf[i * 4 + c];
-      out[i * 4 + c] = v < 0 ? 0 : (v > 255 ? 255 : v | 0);
+      out[i * 4 + c] = v < 0 ? 0 : (v > 255 ? 255 : round(v));
     }
   }
   return out;
