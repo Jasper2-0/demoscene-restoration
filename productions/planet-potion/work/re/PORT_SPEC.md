@@ -52,7 +52,29 @@ Nothing else. There is no separate update or physics step.
 
 ## 3. Animation — `_calc_matrix`
 
-Three passes over the node list, in order.
+Three passes over the node list, in order. **All three are read end to end**, and
+so is every branch of the publish pass's type dispatch. What is verified against
+the running program is a smaller set than what is read, and the difference
+matters, so it is stated once here rather than inferred from the prose:
+
+| | |
+|---|---|
+| **verified** against the original's own answers, via `animdump.py` + `animcheck.mjs` | the keyframe search; `u = (t − t₀)·invSpan`; the polynomial `c0 + c1·u + c2·u³ − c3·u²` on a scene whose scale really moves; the end-of-track clamp; the publish of channels 21–23 as `cx`, `cy`, `scale`; §3b's `0x20\|0x10` copy and `0x80` add |
+| **read** from the instructions, no test yet | the mode-gated music trigger; the dirty-flag rule; all seven loop modes; the four matrix builders; §3b's `0x40` multiply and its `0x10005b34` transform; the publish pass's camera, mesh and text tails |
+| **undecidable from the shipped data** | §3b's `0x10` add-triple — every occurrence has child, parent and result all zero, and no part-one scene has a non-zero one |
+
+The two "read, no test" compose gates are testable in principle: point
+`animdump.py` at a scene whose parented nodes use them. The third is not, and a
+port may implement it either way without any shipped scene telling the
+difference.
+
+**The first twelve channels are a 3x4 matrix.** That is the fact that makes the
+rest of this section legible, and it is easiest to miss: the builders in §3a
+write rows at `+0x00/+0x0c/+0x18` and a translation at `+0x30` into the animation
+object's own channel block, and §3c's type-5 path reads exactly those back to
+transform mesh vertices. Channels 15–18 and 19–20 are the compose groups, 21–23
+the projection triple. Fifteen coefficient blocks feed twelve matrix slots and
+three published ones, which is why they never mapped one-to-one onto channels.
 
 **3a. Evaluate keyframe tracks.** Each list entry has an *animation object* at
 `node+0`:
