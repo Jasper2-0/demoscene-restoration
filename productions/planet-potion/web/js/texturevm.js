@@ -675,6 +675,17 @@ export function run(ops, kernels, opts = {}) {
     const clip = s.rect[0] !== 0 || s.rect[1] !== 0
       || s.rect[2] !== 128 || s.rect[3] !== 128;
     if (clip) { saved.set(s.current); savedMask.set(s.mask); }
+    if (op === 0x55) {
+      // NOT a convolution: 0x55 sits inside the range but is an inversion,
+      // max(255 - x, 0), per section 7. p3_17 is the only program that uses it.
+      for (let i = 0; i < PIXELS; i++) {
+        for (let c = 1; c < 4; c++) {
+          const v = 255 - s.current[i * 4 + c];
+          s.current[i * 4 + c] = v < 0 ? 0 : v;
+        }
+      }
+      continue;
+    }
     if (op >= 0x50 && op <= 0x78) {
       const k = kernels[op];
       if (!k) throw new Error(`no kernel for ${op.toString(16)}`);
