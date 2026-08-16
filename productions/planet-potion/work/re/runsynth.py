@@ -12,6 +12,20 @@ BASE=0x10000000; R2=BASE+0x7FFE
 d0=open(os.path.join(FLAT,'seg0_CODE_10000000.bin'),'rb').read()
 def g(d): return struct.unpack_from('>I',d0,R2+d-BASE)[0]
 GEN1=0x10006b6c; GEN3=0x10006da0; SET_ALLOC=0x10006b14
+def setflat(path):
+    """Point the module at a different flat/ (showorder.py imports us)."""
+    global FLAT, d0
+    FLAT=H.FLAT=path
+    d0=open(os.path.join(FLAT,'seg0_CODE_10000000.bin'),'rb').read()
+def module(part, n=0x40000, timeout=2400):
+    """Generate one part's DBM0 module. n need only cover the chunks you want:
+    NAME through PATT is under 20 KB, SMPL is megabytes.
+
+    The generous timeout is not caution — part one's synth builds 5.3 MB of
+    samples under qemu and takes minutes. With the default 300s it returns an
+    empty buffer, which then fails much later as 'not a DBM0 module'."""
+    out,_=run(GEN1 if part=='p1' else GEN3, g(0x2886), n, timeout=timeout)
+    return out
 ARENA=0x20340000
 def stw(s,a,d): return (36<<26)|(s<<21)|(a<<16)|(d&0xFFFF)
 def run(target, dump_addr, dump_len, timeout=300):

@@ -448,7 +448,7 @@ resolution is in the data, not assumed. Output ping-pongs between the two
 primitive left with fewer than `r22` vertices (3 for fans, 2 for line strips) is
 dropped.
 
-### Scene length comes from the music
+### Scene length comes from the music — and the schedule comes out whole
 
 Every scene driver — `_play_scene`, `_play_scene_synchro`, `_play_scene_dalej`,
 `_play_scene_new_camera`, `_play_scene_p_start/p_end` — has the same loop:
@@ -472,6 +472,50 @@ the timeline, and the previous frame's value is kept so only the transition
 counts. Since `_generate_samples_part1/3` already run byte-exactly under the
 harness, the timeline is recoverable offline: it is in the generated DBM0's
 pattern data, not in the code.
+
+**LVO −60 is a pure getter.** The library is embedded in seg 1, so `lvo.py` reads
+its own ROMTag: 11 vectors, 7 library functions, and index 9 (LVO −60) is six
+instructions long —
+
+```
+  movea.l  $10010040.l, a6      ; the player context
+  move.l   $3a(a6), d0          ; return the signal
+```
+
+`$3a` is cleared by LVO −30 (play), and written by an effect handler at
+`0x100231c6` as `param & 0xFF`. So the *value* is a pattern effect's parameter.
+
+**Which effect, decided by counting.** `_play_part_1` contains 26 calls to the
+scene drivers and `_play_part_3` contains 13, each of which waits for one
+signal-1. Walking the order lists of the generated modules, **effect 7 with
+parameter 1 occurs exactly 26 times in part one and exactly 13 in part three**.
+No other (effect, parameter) pair matches either count, and the agreement holds
+on both parts independently. Effect 7 is ProTracker's tremolo; here it is
+DigiBooster's set-signal, and its other parameter values (0, 2, 3, 4, 10, 11)
+are signals the demo reads through `*0x23bc` for other purposes.
+
+**Tempo.** Effect 15 read as ProTracker `Fxx` — below 32 sets ticks-per-row, at
+or above sets BPM — gives part one speed 12 at 105 BPM and part three speed 6 at
+128 BPM. That reading checks out against the result rather than being assumed:
+part three's boundaries land on 15.000, 60.000, 75.000, 90.000 and 135.000
+seconds exactly. Part one runs 288.4 s, part three 149.9 s.
+
+`showorder.py` puts the two halves together — the call order from the code, the
+durations from the music — and writes the whole schedule:
+
+```
+  [ 0] synchro       0x25aa      0.000..  18.429s  (  921 ticks)
+  ...
+  [10] synchro       0x25da fog@0x25f2   169.286.. 173.857s  (  229 ticks)
+  [11] new_camera   (reuse) cam1         173.857.. 178.429s  (  228 ticks)
+```
+
+Two things fall out that were previously only inferred. The four fog presets
+land on scenes `0x25da`, `0x25d6`, `0x25de` and `0x25ee`, in the table order
+`0x25f2`/`0x2606`/`0x261a`/`0x262e` — confirming the setter's four call sites
+against the data. And the three `new_camera` triples attach to exactly three of
+the six scenes that record nothing on their own, which is where the missing
+state for those is most likely to be.
 
 ### What the recording covers, and what it does not
 
@@ -725,9 +769,15 @@ python3 export.py flat/ out/
   out/scenes.json              29 scenes: ordered typed draw-node lists
   out/font.json                40 glyphs with the shipped quirks recorded
   out/render_state.json        Warp3D configuration, fog presets, port notes
-  out/draws.json               the recorded draw stream: 28 scenes x 3 frames
+  out/draws.json               the recorded draw stream, sampled per scene
+  out/showorder.json           the show schedule, both parts, in ticks and seconds
   out/manifest.json            counts and what failed
 ```
+
+The draw samples are spread across each scene's **own** span, taken from
+`showorder.json`, rather than a fixed early window — part one's shortest scene
+is 214 ticks and its longest 1,385, so a fixed window would have measured
+sixteen fade-ins and nothing else.
 
 `draws.json` is the one a port is checked against rather than built from: every
 primitive the original submits at a given frame, with its texture index and its
@@ -758,6 +808,9 @@ synchronous stall needing an occlusion query rather than a literal translation.
 | `texops2.py` | generator-then-opcode pairs, which separates modifiers from setters |
 | `runscene.py` | runs the scene interpreter; dumps the typed draw-node graph |
 | `drawlog.py` | runs `_show_scene` with recording vector stubs; dumps the draw stream |
+| `runsynth.py` | runs the softsynth; returns the generated DBM0 module |
+| `dbmpatt.py` | unpacks DBM0 song and pattern data; finds the scene-advance signals |
+| `showorder.py` | the show schedule: call order from the code, durations from the music |
 | `vecscan.py` | every library vector the code fetches, by tracking the base registers |
 | `ppdis.py` | ranged disassembly with symbol names; `-m` for the 68K bootstrap |
 | `lvo.py` | reads a Warp3D library's own vector table from its ROMTag |

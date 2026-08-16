@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export everything recovered from the binary as one consumable dataset.
 
-    python3 export.py flat/ out/
+    python3 export.py flat/ out/ [part1.dbm part3.dbm]
 
 Runs the three pure subsystems under the qemu harness and writes:
 
@@ -11,6 +11,7 @@ Runs the three pure subsystems under the qemu harness and writes:
     out/font.json                  40 glyphs, (code, x, y, w, h)
     out/render_state.json          the Warp3D configuration and fog presets
     out/draws.json                 the recorded Warp3D draw stream, per frame
+    out/showorder.json             the show schedule, from the music
     out/manifest.json              counts, provenance, what failed
 
 Nothing here is committed to the repository — it is all regenerable from the
@@ -20,6 +21,7 @@ intermediates. What is committed is the script.
 import json, os, struct, sys, zlib
 import drawlog
 import ppcrun as H
+import showorder
 import rendertex
 import rungeo
 import runscene
@@ -139,30 +141,51 @@ def export_scenes(flat, d0, r2, out):
     return len(res), fails
 
 
-P1_ORDER = [0x25aa, 0x25ba, 0x25ce, 0x25ae, 0x25b2, 0x25b6, 0x25ca, 0x25be,
-            0x25c2, 0x25c6, 0x25da, 0x25d6, 0x25de, 0x25e2, 0x25ea, 0x25e6, 0x25ee]
 P1_OVERLAY = 0x25d2                       # _init_synchro's, drawn over every scene
-SAMPLES = (0, 20, 40)
+NSAMPLES = 5                              # per scene, spread inside its own span
 
 
-def export_draws(d0, r2, out, samples=SAMPLES):
-    """Record what the renderer actually submits, by running it (see drawlog.py)."""
+def spans(sched):
+    """A scene graph stays on screen across the `new_camera` / `dalej` calls that
+    follow it, so its span runs to the next call that builds a new one."""
+    out = []
+    for i, c in enumerate(sched):
+        if not c['slot']:
+            continue
+        j = next((k for k in range(i + 1, len(sched)) if sched[k]['slot']), None)
+        end = sched[j]['startTick'] if j is not None else \
+            sched[-1]['startTick'] + sched[-1]['durTicks']
+        out.append((int(c['slot'], 16), c['startTick'], end - c['startTick']))
+    return out
+
+
+def export_draws(flat, d0, r2, out, mods=()):
+    """Record what the renderer actually submits, by running it (see drawlog.py).
+
+    Sampled across each scene's REAL span, which showorder.py recovers from the
+    music. Sampling a fixed early window would have measured the fade-in of
+    every scene and nothing else — part one's shortest is 214 ticks and its
+    longest 1,385.
+    """
+    sch = showorder.schedule(flat, mods)
+    json.dump(sch, open(f'{out}/showorder.json', 'w'), indent=2)
     res, fails = [], 0
-    jobs = [('p1', P1_ORDER, P1_OVERLAY, 0x2642, 0x2706),
-            ('p3', [0x277a + i * 4 for i in range(11)], None, 0x27a6, 0x27fe)]
-    for part, disps, over, txt, obj in jobs:
-        for order, disp in enumerate(disps):
-            strm = g(d0, r2, disp)
+    jobs = [('p1', P1_OVERLAY, 0x2642, 0x2706), ('p3', None, 0x27a6, 0x27fe)]
+    for part, over, txt, obj in jobs:
+        for order, (strm, start, dur) in enumerate(spans(sch[part]['schedule'])):
+            samples = tuple(round(dur * (k + 0.5) / NSAMPLES) for k in range(NSAMPLES))
+            disp = strm
             o, _ = drawlog.run(strm, frames=samples, txt_tab=txt, obj_tab=obj,
                                overlay=g(d0, r2, over) if over else None)
             frames = drawlog.parse(o)
             if not frames:
                 fails += 1
-                res.append({'part': part, 'order': order, 'slot': hex(disp),
-                            'frames': None,
+                res.append({'part': part, 'order': order, 'stream': hex(strm),
+                            'startTick': start, 'durTicks': dur, 'frames': None,
                             'note': 'text scene; harness hits the unbounded glyph scan'})
                 continue
-            res.append({'part': part, 'order': order, 'slot': hex(disp),
+            res.append({'part': part, 'order': order, 'stream': hex(strm),
+                        'startTick': start, 'durTicks': dur,
                         'overlay': hex(over) if over else None,
                         'frames': [{'t': f['time'], 'draws': [
                             {'prim': d['prim'], 'texture': d['texture'],
@@ -175,6 +198,7 @@ def export_draws(d0, r2, out, samples=SAMPLES):
                'vertex_fields': ['x', 'y', 'z', 'w', 'u', 'v', 'r', 'g', 'b', 'a'],
                'uv_space': 'texels (0..128), wrapped — not normalised',
                'z': '4/z as a W3D_Double; w = 1/z; both from a PPC fres estimate',
+               'tick': 'frame index at 50Hz, local to the scene',
                'scenes': res}, open(f'{out}/draws.json', 'w'))
     return len(res), fails
 
@@ -196,14 +220,14 @@ def main():
     sys.argv = ['x', flat, f'{out}/textures']; rendertex.main()
     print('meshes      ...', end=' ', flush=True); nm, mf = export_meshes(flat, d0, r2, out); print(f'{nm} programs, {mf} failed')
     print('scenes      ...', end=' ', flush=True); ns, sf = export_scenes(flat, d0, r2, out); print(f'{ns} scenes, {sf} failed')
-    print('draw stream ...', end=' ', flush=True); nd, df = export_draws(d0, r2, out); print(f'{nd} scenes x {len(SAMPLES)} frames, {df} failed')
+    print('draw stream ...', flush=True); nd, df = export_draws(flat, d0, r2, out, sys.argv[3:5]); print(f'  {nd} scenes x {NSAMPLES} frames, {df} failed')
 
     json.dump({'production': 'planet-potion',
                'source': 'planet-potion_dcr.exe, see prod.json for hashes',
                'font_glyphs': ng, 'fog_presets': nf,
                'mesh_programs': nm, 'mesh_failures': mf,
                'scenes': ns, 'scene_failures': sf,
-               'draw_scenes': nd, 'draw_failures': df, 'draw_samples': list(SAMPLES),
+               'draw_scenes': nd, 'draw_failures': df, 'draw_samples_per_scene': NSAMPLES,
                'regenerate': 'python3 export.py flat/ out/'},
               open(f'{out}/manifest.json', 'w'), indent=2)
     print(f'\nwrote {out}/  — regenerable, not committed')
