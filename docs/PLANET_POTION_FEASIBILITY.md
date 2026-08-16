@@ -211,8 +211,57 @@ So the whole data-driven system is **8 scene operations over 5 geometry
 operations — 13 in total**. The hoped-for outcome was "a 20-operation scene
 language and 10 generators". It is smaller than that.
 
-What remains on this axis is locating the opcode streams themselves in seg 3 /
-seg 4 and decoding the operand layout each handler reads.
+#### The streams are located, and they are the demo's running order
+
+Following the pointers rather than pattern-matching the data found them
+immediately. Two tables sit in the small-data area, and each belongs to one of
+the two parts `_main` runs:
+
+| table | at | entries | targets | consumed by |
+|---|---|---|---|---|
+| part 1 | `0x1000a5a8` (r2+0x25aa) | **18 contiguous** | seg 3 | `_play_part_1` |
+| part 3 | `0x1000a778` (r2+0x277a) | 32 contiguous | seg 4 | `_play_part_3` |
+
+`_play_part_1` loads **exactly 18 distinct slots** from its table — the whole
+run, nothing spare — and it loads them **out of order**: `0x25d2`, `0x25aa`,
+`0x25ba`, `0x25ce`, `0x25ae`, `0x25b2`, … That sequence *is* part one's running
+order, sitting in the code as a straight-line list of loads. Reading it off gives
+the demo's structure without running anything.
+
+So seg 3 (12.8 KB) is part one's scene data and seg 4 (52.5 KB) is part three's,
+which matches both their sizes and the fact that part three is skipped when
+`__exit` is set.
+
+The call graph closes too: `_generate_scene` has **five** call sites —
+`_play_scene`, `_play_scene_synchro`, `_init_synchro`, `_play_scene_p_start`,
+`_play_scene_p_end`, i.e. five scene-playing modes — while `_generate_obj` has
+exactly **one**, from `_calculate_obj`.
+
+#### Scene stream format, as far as it is decoded
+
+```
+  u16   total length in BYTES of what follows
+  ...   opcode stream; the first opcode is IMPLICIT and is 7
+  each opcode byte:  bit 7    = a flag, stored at node+0x0e
+                     bits 0-6 = the opcode (0..7)
+```
+
+Nodes are chained through `node[4]` (+0x10). The operand byte's sign bit becomes
+`1` or `2` at `node+0x0d`. Opcode 7 consumes no further byte — it is the root /
+terminator, which is why it is also the implicit first. Opcode 6 is special-cased,
+and opcode 5 indexes the *fourth* argument of `_generate_scene` where the others
+index the third — both of those arguments are lookup tables passed in from
+`_play_scene` (globals at `r2+0x288e` and `r2+0x2896`), with 8-byte and 4-byte
+entries respectively.
+
+This also explains a false start: the payloads all begin `5B FF 0F xx 80 00`,
+which looked like a magic number and is not — the first opcode being implicit
+means those bytes are the root node's operands, not a header.
+
+What remains is the per-opcode operand widths — how many bytes each of the 8
+scene handlers and 5 geometry handlers consumes — which is a matter of reading
+nine short functions that are already decompiled, and then the streams decode
+end to end.
 
 ### The 3D is a bounded, documented API
 
@@ -379,8 +428,8 @@ The natural first milestone is the one you named — a full-frame trace — but 
 static side can be pushed much further first, cheaply:
 
 1. commit the hunk loader + Ghidra import as `work/re/` tooling;
-2. ~~resolve the VM dispatch tables~~ — done; next is locating the opcode
-   streams in seg 3 / seg 4 and decoding each handler's operand layout;
+2. ~~resolve the VM dispatch tables~~, ~~locate the opcode streams~~ — done;
+   next is per-opcode operand widths, after which the streams decode fully;
 3. the 22 Warp3D vectors are now named against ReWarp3DPPC — write
    down the state flags actually used;
 4. only then stand up WinUAE for dynamic confirmation.
