@@ -542,9 +542,20 @@ it covers three separate needs at once:
   bootstrap from a blank flash (it needs an exec resource only existing firmware
   publishes), so it can only *upgrade* an image you already have.
 
-Two cautions: the file may ship as a zero-byte placeholder until the PPC
-configuration has been run once, and its `4471` name should not be trusted as a
-version — verify by hash and record what you got.
+Two cautions, the first of which **has now been hit in practice**: a copy of
+`ralphschmidt-cyberstorm-ppc-4471.rom` supplied to this session was **0 bytes**
+(`da39a3ee5e6b4b0d3255bfef95601890afd80709`, the SHA-1 of the empty string). The
+FS-UAE docs warn about exactly this "especially from Amiga Forever", and it is
+the placeholder state, not a usable image — the real file is 131,072 bytes and
+must be materialised by running the Amiga Forever *Amiga 4000 PPC* configuration
+once before it is copied out. Second: `4471` is a filename, not a verified
+version — hash whatever you end up with and record it.
+
+**Check the size before doing anything else with such a file.** A zero-byte ROM
+fails in the same way a blank flash does — the board contributes nothing at
+boot, no `CyberstormPPC.IDTag` resource is published, and the flash updater
+exits with `No CyberstormPPC installed`. The two failures are indistinguishable
+from the log, which is a good way to lose an afternoon.
 
 ### 2. Build — free, but real work
 
