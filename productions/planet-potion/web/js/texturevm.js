@@ -234,12 +234,70 @@ export function op12(s, [v]) {
   for (let i = 0; i < PIXELS; i++) contrastStep(s.current, i * 4, 128, k);
 }
 
+/**
+ * op9 — value noise by midpoint subdivision, the generator most textures start
+ * from. Operands 0..3 are the four channel amplitudes; operand 8 carries the two
+ * lattice-step nibbles; operands 9..11 seed the PRNG, which is why every program
+ * gets different noise from a deterministic generator.
+ *
+ * Coordinates are in BYTES: one pixel is 0x10, a row is 0x800, and refinement
+ * stops at 0x10 — exactly one-pixel resolution. A step nibble of 0 gives 8,
+ * finer than a pixel, which skips refinement entirely.
+ */
+export function op9(s, ops) {
+  const amp = [ops[0], ops[1], ops[2], ops[3]];
+  let xstep = 8 << (ops[8] & 0xf);
+  let ystep = 8 << (ops[8] >> 4);
+  const rng = new Rng(ops[9], ops[10], ops[11]);
+  const buf = new Float32Array(PIXELS * 4);
+  const at = (xb, yb) => (((yb << 7) + xb) >> 4) * 4;
+
+  for (let y = 0; y < 0x800; y += ystep) {
+    for (let x = 0; x < 0x800; x += xstep) {
+      const o = at(x, y);
+      for (let c = 0; c < 4; c++) buf[o + c] += rng.next() * amp[c];
+    }
+  }
+
+  // THE MIDPOINT IS NOT AN AVERAGE. 0x1000091c adds the two neighbours and
+  // scales by f27 = 128/255, not by 0.5 — each level lands 0.39% low, and the
+  // levels compound. Halving instead would drift brighter with every octave.
+  const K = 128 / 255;
+  const mid = (o, a, b) => {
+    for (let c = 0; c < 4; c++) buf[o + c] = (buf[a + c] + buf[b + c]) * K;
+  };
+
+  for (let st = xstep; st > 0x10; ) {
+    const h = st >> 1;
+    for (let y = 0; y < 0x800; y += ystep) {
+      for (let x = 0; x < 0x800; x += st) {
+        mid(at((x - h) & 0x7f0, y), at(x & 0x7f0, y), at((x + st) & 0x7f0, y));
+      }
+    }
+    st = h;
+  }
+  for (let st = ystep; st > 0x10; ) {
+    const h = st >> 1;
+    for (let x = 0; x < 0x800; x += 0x10) {
+      for (let y = 0; y < 0x800; y += st) {
+        mid(at(x, (y - h) & 0x7f0), at(x, y & 0x7f0), at(x, (y + st) & 0x7f0));
+      }
+    }
+    st = h;
+  }
+
+  // The result is BLENDED into the current surface through the core mix, not
+  // written over it — which is why a second op9 lifts the image rather than
+  // replacing it.
+  for (let i = 0; i < PIXELS; i++) blend(s.current, i * 4, buf, i * 4);
+}
+
 /** op18 — set the draw rectangle. op19 — reset it to the full surface. */
 export const op18 = (s, o) => { s.rect = [o[0], o[1], o[2], o[3]]; };
 export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 
 /** Opcodes whose bodies are specified but not yet written here. */
-export const UNIMPLEMENTED = new Set([0, 1, 2, 3, 4, 5, 6, 8, 9, 16, 17]);
+export const UNIMPLEMENTED = new Set([0, 1, 2, 3, 4, 5, 6, 8, 16, 17]);
 
 /** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
 export function toARGB(surf) {

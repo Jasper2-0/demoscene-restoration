@@ -370,11 +370,21 @@ textures start from. Three passes:
    axis. At each lattice point, four random draws are scaled by four
    coefficients from the parameter block and accumulated into the four channels.
 2. **Refine x, then y.** While the step exceeds `0x10`, halve it and fill each
-   new point from the midpoint of its neighbours, then repeat. Both loops mask
+   new point from the midpoint of its neighbours, then repeat. **The midpoint is
+   not an average**: `0x1000091c` adds the two neighbours and scales by
+   `f27 = 128/255`, not by `0.5`. Each level therefore lands 0.39% low and the
+   levels compound, so halving instead drifts brighter with every octave. Both loops mask
    the coordinate (`0x7f0` in x, an equivalent field extract in y), so the noise
    is **toroidal** — it wraps, which is what makes it safe under the `REPEAT`
    sampling of §5.
-3. **Blit** in `0x10` strides from `r28` to `r29`.
+3. **Blend, not blit.** The final pass runs the noise through the core mix
+   `0x100007c4` into the current surface rather than overwriting it — which is
+   why a second `op9` lifts the image instead of replacing it, the behaviour the
+   differential runs saw as "additive" without knowing the mechanism.
+
+Operands 0–3 are the four channel amplitudes, operand 8 carries the two step
+nibbles, and **operands 9–11 seed the PRNG** — which is how a deterministic
+generator gives every program different noise.
 
 The units explain themselves once you notice the surfaces are float RGBA:
 **`0x10` = 16 bytes = one pixel**, and the `0x800` loop bound is
