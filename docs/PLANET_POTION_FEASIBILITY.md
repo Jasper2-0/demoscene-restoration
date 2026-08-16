@@ -224,8 +224,51 @@ largest in the binary and the first symbol in it. It is read from
 `_generate+0x150` and from `_init_txtgen`. Three slots are shared: 0 and 17, 11
 and 12, 14 and 15.
 
-`_generate` is therefore the **procedural texture VM**, and it is a
-20-operation language.
+`_generate` is therefore the **procedural texture VM**. Its prologue and main
+loop read cleanly, and they settle the two things a port needs first:
+
+```asm
+  lfs   f29, __255(r2)       ; 255.0
+  lfs   f28, __128(r2)       ; 128.0
+  fdiv  f30, f29, f29        ; 1.0
+  fsub  f31, f29, f29        ; 0.0        <- normalised colour math
+  fdiv  f27, f28, f29        ; 128/255
+  ...
+  li    r12, 0 ; mtctr 0x38000 ; stwu r12,4(r14) ; bdnz     ; zero a ~900 KB buffer
+  li    r11, 0 ; li r10, 0x80
+  stb   r11, 0x25a6(r2) ; stb r11, 0x25a7(r2)                ; x=0, y=0
+  stb   r10, 0x25a8(r2) ; stb r10, 0x25a9(r2)                ; w=128, h=128
+  lhz   r21, 0(r31)          ; u16 length, bit 15 a flag
+  andi. r4,  r21, 0x8000
+  andi. r21, r21, 0x7fff
+  addi  r31, r31, 2
+  add   r26, r31, r21        ; end = pc + length
+  ...
+  cmpwi r14, 0x80 ; blt …    ; inner loop to 128
+  cmpwi r12, 0x80 ; blt …    ; outer loop to 128
+  lbz   r21, 0(r31) ; addi r31, r31, 1     ; fetch one opcode byte
+```
+
+**Textures are 128×128.** Both nested loops count to `0x80`, and the working
+rectangle is written as `(0, 0, 128, 128)`. The stream is the same shape as the
+other two languages — a `u16` length, here with **bit 15 carrying a flag**, then
+single opcode bytes.
+
+The dispatch has one structural surprise. Opcodes are compared against `0x50`
+and `0x78`, and **every opcode in `[0x50, 0x78]` — 41 values — is routed to a
+single handler** (`0x10000f58`, 340 bytes, 23 floating-point instructions, 7
+loops). That is one routine parameterised by its own opcode number: a family of
+related per-pixel operations, not 41 separate ones. Only the low opcodes index
+the 20-entry table.
+
+Alongside it, a **byte table at `r2+0x2502`** is indexed by the same opcode. Its
+first nineteen entries read
+
+```
+  3, 20, 13, 12, 1, 10, 12, 9, 18, 12, 1, 1, 1, 1, 1, 1, 127, 3, 4
+```
+
+with `127` special-cased to `1` in the dispatch — the per-opcode operand count.
 
 ### The complete engine, in five tables
 
