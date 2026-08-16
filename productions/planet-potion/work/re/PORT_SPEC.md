@@ -87,6 +87,22 @@ With `u = (t − t₀)/span`, each block `[c0, c1, c2, c3]` evaluates as
 Note `c2` on the cubed term and the squared term **subtracted**. Colour and alpha
 channels use a variant that then clamps to `[0, 1]`.
 
+**All three terms are FUSED.** The evaluator at `0x10005944` is
+`fmadd; fmadd; fnmsub`, and the flagged path is a single `fnmsub` — one rounding
+each, not two. That distinction is what made the texture VM byte-exact (§7), and
+the animation has less margin rather than more: a position a few ulps out feeds
+`fres` in the emitter, which amplifies it. `web/js/anim.js` implements the
+polynomial with an exact fma, and `speccheck.py` guards the five opcodes so a
+rewrite as an ordinary cubic fails there rather than as drifting motion.
+
+Position and scale take the UNCLAMPED path. Only colour and alpha clamp, so a
+port that clamps every channel quietly bounds the geometry.
+
+`_calc_matrix` also ends by computing the frame's **clear colour**: the first
+node's channels at `anim+0x40/0x44/0x48`, each scaled by 255 and packed into
+`r2+0x2846` (`0x10004f50`–`0x10004f90`). The shim clears to black today, so this
+is read but not yet wired.
+
 **3b. Compose down the hierarchy.** For a node whose parent is resolved,
 component-wise multiply four channels by the parent's, gated by flag bit `0x40`.
 Multiplication, not matrix concatenation.

@@ -148,6 +148,21 @@ def main():
     # 0x10000648 — and the alpha byte is 255 - mask, an fsub before that store.
     check('the alpha byte comes from an fsub (primary 63, XO 20)',
           form(0x10000648), (63, 20))
+    # 0x10005958/5c/60 — the keyframe polynomial is THREE FUSED ops, and the
+    # squared term is subtracted. A port that writes it as an ordinary cubic
+    # gets both the coefficient order and the rounding wrong.
+    check('keyframe c1 term is fmadd (primary 63, XO 29)',
+          aform(0x10005958), (63, 29))
+    check('keyframe c2 term is fmadd on the CUBE', aform(0x1000595c), (63, 29))
+    check('keyframe c3 term is fnmsub — subtracted (primary 63, XO 30)',
+          aform(0x10005960), (63, 30))
+    # And the flags != 0 path is a single fnmsub: c0 - c3*u.
+    check('the flagged keyframe path is one fnmsub',
+          aform(0x10005968), (63, 30))
+    # The clamped variant is the same three ops followed by two fsel.
+    check('the clamped channel clamps with fsel (primary 63, XO 23)',
+          aform(0x10005990), (63, 23))
+
     # No FPSCR write anywhere in the code, so the rounding mode is the default
     # throughout — which is what makes fctiw's ties-to-even reliable.
     fpscr = {711, 70, 38, 134}
