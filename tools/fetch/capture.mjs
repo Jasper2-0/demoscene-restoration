@@ -1,4 +1,4 @@
-// capture.mjs — materialize YouTube reference captures from prod.json.
+// capture.mjs — materialize reference captures from prod.json.
 //
 //   node tools/fetch/capture.mjs <slug>              # fetch/verify captures[]
 //   node tools/fetch/capture.mjs <slug> --record     # pin hash of an existing file
@@ -11,6 +11,12 @@
 // path. The sha256 pins OUR capture: yt-dlp output varies with format
 // availability, so a mismatch on refetch is a warning that the ground truth
 // changed, not routine noise — hence --allow-new instead of silent acceptance.
+//
+// TWO SOURCE KINDS. `captures[].youtube` goes through yt-dlp, which re-encodes
+// and is why the hash has to be pinned per-fetch. `captures[].url` is a direct
+// download of a file somebody already encoded — the bytes are stable, so its
+// hash is a real identity rather than a record of what yt-dlp happened to pick,
+// and it is the better ground truth when one exists.
 import path from 'node:path';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -26,8 +32,11 @@ if (!slug) { console.error('usage: node tools/fetch/capture.mjs <slug> [--record
 const prod = readProd(slug);
 if (!prod?.captures?.length) { console.log(`${slug}: no captures[] entries`); process.exit(0); }
 
-try { execFileSync('yt-dlp', ['--version'], { stdio: 'pipe' }); }
-catch { console.error('yt-dlp not found — brew install yt-dlp'); process.exit(1); }
+// Only require yt-dlp if something actually needs it.
+if (prod.captures.some((c) => c.youtube)) {
+  try { execFileSync('yt-dlp', ['--version'], { stdio: 'pipe' }); }
+  catch { console.error('yt-dlp not found — brew install yt-dlp'); process.exit(1); }
+}
 
 let dirty = false, failures = 0;
 for (const cap of prod.captures) {
@@ -49,12 +58,25 @@ for (const cap of prod.captures) {
     continue;
   }
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  console.log(`${slug}: fetching ${cap.youtube} → ${cap.path}`);
+  const source = cap.youtube ? cap.youtube : cap.url;
+  if (!source) {
+    failures++;
+    console.error(`${slug}: captures[] entry has neither .youtube nor .url`);
+    continue;
+  }
+  console.log(`${slug}: fetching ${source} → ${cap.path}`);
   try {
-    execFileSync('yt-dlp',
-      ['-f', cap.format || 'bestvideo+bestaudio', '--merge-output-format', 'mkv',
-       '-o', target, `https://www.youtube.com/watch?v=${cap.youtube}`],
-      { stdio: 'inherit' });
+    if (cap.youtube) {
+      execFileSync('yt-dlp',
+        ['-f', cap.format || 'bestvideo+bestaudio', '--merge-output-format', 'mkv',
+         '-o', target, `https://www.youtube.com/watch?v=${cap.youtube}`],
+        { stdio: 'inherit' });
+    } else {
+      // -L follows redirects, -f fails loudly on 4xx/5xx rather than writing an
+      // error page to disk and calling it a capture.
+      execFileSync('curl', ['-fL', '--retry', '3', '-o', target, cap.url],
+        { stdio: 'inherit' });
+    }
     const got = sha256File(target);
     if (cap.sha256 && got !== cap.sha256 && !allowNew) {
       failures++;
@@ -65,7 +87,7 @@ for (const cap of prod.captures) {
     }
   } catch (e) {
     failures++;
-    console.error(`${slug}: yt-dlp failed for ${cap.youtube}: ${e.message ?? e}`);
+    console.error(`${slug}: fetch failed for ${source}: ${e.message ?? e}`);
   }
 }
 if (dirty) writeProd(prod);
