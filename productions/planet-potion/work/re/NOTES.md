@@ -1528,6 +1528,30 @@ first two instructions.
 `DSPE` is DigiBooster Pro 2's DSP-effect chunk (28 and 26 bytes). Roughly 37 KB
 of seed data in seg 4 expands to about 3 MB of module per part.
 
+### Sizing the softsynth
+
+Both generators are **straight-line scripts**: a sequence of `bl`s to synth
+primitives, each preceded by `addi rNN, r2, disp` setting a parameter-block
+pointer into the `r2` data area. So the ~37 KB of "seed data" is those blocks,
+and the code is a fixed recipe rather than an interpreter.
+
+| | calls | routines |
+|---|---|---|
+| `_generate_samples_part1` | 57 | 18 |
+| `_generate_samples_part3` | 39 | 19 |
+| union | 96 | **32 distinct** |
+
+Only five routines are shared between the two parts. Part one leans on
+`0x10009510` (13 calls), `0x10006f38`, `0x10009020` and `0x10009258` (8 each);
+part three is dominated by `0x1000742c` (18 calls). The primitives span
+`0x10006ef0`–`0x10009a8c`, about **11 KB of PowerPC** — larger than the renderer
+and animation put together (6.9 KB) and the biggest single subsystem in the
+intro.
+
+`_generate_samples_part1` opens by loading `0x513e5a` = 5,324,890, the size of
+the module it is about to build, which is how that figure was confirmed twice
+over.
+
 **A port therefore needs a DBM0 replayer plus these two generators** — and the
 generators now run byte-exactly without an Amiga.
 
