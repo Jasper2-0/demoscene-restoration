@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What sample does each softsynth primitive emit, and how long is it?
 
-    python3 synthlen.py flat/ [part1.dbm]
+    python3 synthlen.py flat/ [part1.dbm] [part3.dbm]
 
 Every voice starts a sample by setting `r19` (frames) and usually `r18` (frames
 per step) and calling `0x1000a23c`. Both are immediates, so the length each
@@ -102,7 +102,8 @@ def lengths_from_module(path):
 
 def main():
     flat = sys.argv[1] if len(sys.argv) > 1 else 'flat'
-    mod = sys.argv[2] if len(sys.argv) > 2 else None
+    mods = {'p1': (sys.argv[2] if len(sys.argv) > 2 else None),
+            'p3': (sys.argv[3] if len(sys.argv) > 3 else None)}
     d0 = open(f'{flat}/seg0_CODE_10000000.bin', 'rb').read()
 
     calls = script_calls(d0)
@@ -151,56 +152,57 @@ def main():
         st = '' if not r18 else f'{r18:,}'
         print(f'{p:#010x}  {n1:>3} {n3:>3} {f:>9} {st:>7}  {note}')
 
-    if mod:
-        # POSITIONAL CHECK. Samples are appended to r31 in script order, so the
-        # Nth sample-producing call is the Nth sample. That attributes every
-        # sample to a routine by name, which counting lengths cannot do: it
-        # resolves 0x10009510's r8 branch and pins the routines whose length is
-        # not an immediate, both of which the histogram leaves open.
-        length_of = {}
-        for p_, n1, _, r19, _, _ in rows:
-            if r19 is not None:
-                length_of.setdefault(p_, r19)
-        actual = lengths_from_module(mod)
-        seq, ok, bad = [], 0, []
-        for part, tgt, r8 in calls:
-            if part != 'p1':
-                continue
-            if tgt in NO_SAMPLE:
-                continue
-            want = length_of.get(tgt)
-            if tgt == COND_R8:                     # 100,800 when r8 set, else 201,600
-                want = 100_800 if r8 else 201_600
-            seq.append((tgt, want))
-        print(f'\npositional check: {len(seq)} sample-producing calls vs '
-              f'{len(actual)} samples in the module')
-        for i, ((tgt, want), got) in enumerate(zip(seq, actual)):
-            if want is None or want == got:
-                ok += 1
-            else:
-                bad.append((i, tgt, want, got))
-        print(f'  {ok}/{min(len(seq), len(actual))} positions agree')
-        for i, tgt, want, got in bad[:12]:
-            print(f'    [{i:2}] {tgt:#010x} expected {want} got {got}')
-        for i, (tgt, want) in enumerate(seq):
-            if want is None and i < len(actual):
-                print(f'  [{i:2}] {tgt:#010x} length was not an immediate '
-                      f'-> the module says {actual[i]:,}')
+    for which, mod in mods.items():
+      if mod:
+          # POSITIONAL CHECK. Samples are appended to r31 in script order, so the
+          # Nth sample-producing call is the Nth sample. That attributes every
+          # sample to a routine by name, which counting lengths cannot do: it
+          # resolves 0x10009510's r8 branch and pins the routines whose length is
+          # not an immediate, both of which the histogram leaves open.
+          length_of = {}
+          for p_, n1, n3, r19, _, _ in rows:
+              if r19 is not None:
+                  length_of.setdefault(p_, r19)
+          actual = lengths_from_module(mod)
+          seq, ok, bad = [], 0, []
+          for part, tgt, r8 in calls:
+              if part != which:
+                  continue
+              if tgt in NO_SAMPLE:
+                  continue
+              want = length_of.get(tgt)
+              if tgt == COND_R8:                     # 100,800 when r8 set, else 201,600
+                  want = 100_800 if r8 else 201_600
+              seq.append((tgt, want))
+          print(f'\n{which} positional check: {len(seq)} sample-producing calls vs '
+                f'{len(actual)} samples in the module')
+          for i, ((tgt, want), got) in enumerate(zip(seq, actual)):
+              if want is None or want == got:
+                  ok += 1
+              else:
+                  bad.append((i, tgt, want, got))
+          print(f'  {ok}/{min(len(seq), len(actual))} positions agree')
+          for i, tgt, want, got in bad[:12]:
+              print(f'    [{i:2}] {tgt:#010x} expected {want} got {got}')
+          for i, (tgt, want) in enumerate(seq):
+              if want is None and i < len(actual):
+                  print(f'  [{i:2}] {tgt:#010x} length was not an immediate '
+                        f'-> the module says {actual[i]:,}')
 
-        hist = collections.Counter(lengths_from_module(mod))
-        print('\nagainst the module part one actually builds:')
-        emitted = collections.defaultdict(int)
-        for p, n1, _, r19, _, _ in rows:
-            if n1 and r19 is not None:
-                emitted[r19] += n1
-        # Lengths the SCRIPT supplies rather than the routine: 0x10008c9c takes
-        # r19 from its caller, so its two part-one calls are 120,000 and 150,000.
-        for v in CALLER_LENGTHS:
-            emitted[v] += 1
-        for ln in sorted(set(hist) | set(emitted)):
-            got, want = hist.get(ln, 0), emitted.get(ln, 0)
-            mark = 'exact' if got == want and want else ('unclaimed' if not want else '')
-            print(f'  {ln:>9,}  module {got:>3}   from scripts {want:>3}   {mark}')
+          hist = collections.Counter(lengths_from_module(mod))
+          print(f'\nagainst the {which} module the generator actually builds:')
+          emitted = collections.defaultdict(int)
+          for p, n1, n3, r19, _, _ in rows:
+              if (n1 if which == 'p1' else n3) and r19 is not None:
+                  emitted[r19] += (n1 if which == 'p1' else n3)
+          # Lengths the SCRIPT supplies rather than the routine: 0x10008c9c takes
+          # r19 from its caller, so its two part-one calls are 120,000 and 150,000.
+          for v in CALLER_LENGTHS:
+              emitted[v] += 1
+          for ln in sorted(set(hist) | set(emitted)):
+              got, want = hist.get(ln, 0), emitted.get(ln, 0)
+              mark = 'exact' if got == want and want else ('unclaimed' if not want else '')
+              print(f'  {ln:>9,}  module {got:>3}   from scripts {want:>3}   {mark}')
 
 
 if __name__ == '__main__':

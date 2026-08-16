@@ -382,8 +382,8 @@ appended to `r31` in script order, so the *N*th sample-producing call is the
 *N*th sample:
 
 ```
-positional check: 56 sample-producing calls vs 56 samples in the module
-  56/56 positions agree
+p1 positional check: 56 sample-producing calls vs 56 samples   56/56 agree
+p3 positional check: 38 sample-producing calls vs 38 samples   38/38 agree
 ```
 
 Every sample in part one is now attributed to a named routine, which the
@@ -391,6 +391,24 @@ histogram could not do: it resolves `0x10009510`'s `r8` branch by construction
 and pins the three calls whose length is not an immediate at all —
 `0x10008c9c` at positions 2 and 42 (120,000 and 150,000) and `0x10009a68` at
 position 25 (100,800).
+
+**Part three under the same check.** Its step is **2,584 frames**, and the same
+16/32 pattern lengths appear: `0x10009a8c` emits 41,344 three times (16 steps)
+and `0x100070b0`, `0x10007284`, `0x10007a84` and `0x10008ac4` emit 82,688 (32
+steps). So both parts are built on 16- and 32-step patterns; only the step
+length differs — 3,150 and 6,300 in part one, 2,584 in part three.
+
+`0x1000742c` is the exception, and it confirms the tape reading. Its 18 samples
+are all *different* lengths, from 47,404 to 167,404, because the length comes
+from the tape rather than an immediate. Every one satisfies
+
+```
+  frames = 200*k + 4          k = 237 … 837
+```
+
+so the tape carries a unit count and the routine emits 200 frames per unit plus
+a fixed four. That the residue is 4 for all eighteen is what makes it a rule
+rather than an observation about one sample.
 
 Two routines had looked orphaned because they have no sample start of their own.
 Both are **alternate entry points**: six instructions that set their own `r18`
