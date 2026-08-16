@@ -87,14 +87,22 @@ export const reciprocalSpan = (a, b) => 1 / (b - a);
  * textures are deterministic and reproduce byte-for-byte every run.
  */
 export class Rng {
-  constructor(a = 1, b = 2, c = 3) { this.a = a >>> 0; this.b = b >>> 0; this.c = c >>> 0; }
+  /** State is (r12, r11, r14) — op9 seeds them from operands 10, 11 and 9. */
+  constructor(r12, r11, r14) {
+    this.r12 = r12 >>> 0; this.r11 = r11 >>> 0; this.r14 = r14 >>> 0;
+  }
+
   next() {
-    let t = (this.a << 12) >>> 0;
-    t = (t ^ this.b) >>> 0;
-    this.c = (this.c ^ t) >>> 0;
-    this.a = (this.a | t) >>> 0;
-    this.c = (this.c + this.a) >>> 0;
-    return ((this.c >>> 24) & 0xff) / 255;
+    let t = (this.r12 << 12) >>> 0;
+    t = (t ^ this.r11) >>> 0;
+    this.r14 = (this.r14 ^ t) >>> 0;
+    this.r12 = (this.r12 | t) >>> 0;
+    this.r14 = (this.r14 + this.r12) >>> 0;
+    const u = (this.r11 << 2) >>> 0;
+    this.r11 = (this.r11 - this.r14) >>> 0;
+    this.r14 = (this.r14 - u) >>> 0;
+    // rlwinm r3, r14, 24, 24, 31 — byte 2, not the top byte.
+    return (((this.r14 >>> 8) & 0xff) | 0) / 255;
   }
 }
 
@@ -266,17 +274,21 @@ export function op12(s, [v]) {
  * finer than a pixel, which skips refinement entirely.
  */
 export function op9(s, ops) {
-  const amp = [ops[0], ops[1], ops[2], ops[3]];
+  // The handler loads r16 = r22+0 and r15 = r22+0x10, then `fmadd f26, f18,
+  // f22, f26` = rng*amp + base. So operands 0..3 are the BASE colour and 4..7
+  // the amplitudes — not the other way round.
+  const base = [ops[0], ops[1], ops[2], ops[3]];
+  const amp = [ops[4], ops[5], ops[6], ops[7]];
   let xstep = 8 << (ops[8] & 0xf);
   let ystep = 8 << (ops[8] >> 4);
-  const rng = new Rng(ops[9], ops[10], ops[11]);
+  const rng = new Rng(ops[10], ops[11], ops[9]);   // r12, r11, r14
   const buf = new Float32Array(PIXELS * 4);
   const at = (xb, yb) => (((yb << 7) + xb) >> 4) * 4;
 
   for (let y = 0; y < 0x800; y += ystep) {
     for (let x = 0; x < 0x800; x += xstep) {
       const o = at(x, y);
-      for (let c = 0; c < 4; c++) buf[o + c] += rng.next() * amp[c];
+      for (let c = 0; c < 4; c++) buf[o + c] = base[c] + rng.next() * amp[c];
     }
   }
 
