@@ -437,7 +437,7 @@ it was visible from the first recorded frame.
 | textures (`_generate`) | **no** — 12 programs hash identically | **correct as published** |
 | geometry (`_generate_obj`) | yes, `_sinus` at `0x10003a58` | all 10 sampled programs differ — **was wrong** |
 | renderer (`_calc_matrix`) | yes, `_sinus` at `0x10004f34` | **was wrong** |
-| softsynth (`_generate_samples_part3`) | yes — `_sinus`, `_power`, `_mexp` at `0x10006ef4`–`0x10006efc` | **suspect**; the modules and therefore the timeline are regenerated |
+| softsynth (`_generate_samples_part3`) | yes — `_sinus`, `_power`, `_mexp` at `0x10006ef4`–`0x10006efc` | sample waveforms only: regenerating the modules gives a **byte-identical schedule**, both parts, so the timeline never depended on it |
 | scene graphs (`_generate_scene`) | not directly | node type lists come from the stream and are unchanged |
 
 The texture result is the useful one to have checked: 69 PNGs are a shipped
@@ -826,10 +826,10 @@ state for those is most likely to be.
 
 ### What the recording covers, and what it does not
 
-All 28 scene spans record once the glyph-scan patch is on (26 without it). The
-primitive counts quoted here predate the seg-5 table fix above and are therefore
-low by a factor of two to eleven; the export's own manifest carries the current
-numbers. Part three is the heaviest — `r2+0x277e` holds 200 to 215
+All 28 scene spans record, and a full export is **45,332 primitives** at five
+samples each, zero failures. Against the same export run with seg 5 zeroed that
+is **4.9x** — every scene grew, four of them from nothing, and `r2+0x25d6` went
+from 0 to 4,321. Part three is the heaviest — `r2+0x277e` holds 200 to 215
 primitives throughout — and `r2+0x25c6` climbs from 3 primitives to 225 over its
 life, which is the reason for sampling across a scene's own span rather than a
 fixed early window.
