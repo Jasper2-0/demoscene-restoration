@@ -431,17 +431,50 @@ advances it once, unconditionally:
 
 `r23` normally comes from the byte table — but the special path for the shared
 `0x50..0x78` range sets `li r23, 0` before jumping there. **Those 41 opcodes take
-no operands at all**, whatever the table says. Applying that single rule takes
-the decode from 37/76 to 50/76, and the split is total:
+no operands at all**, whatever the table says.
 
-| flag (bit 15 of the length word) | programs | exact decode |
-|---|---|---|
-| **1** | 44 | **44 — 100%** |
-| 0 | 32 | 6 — 18% |
+That rule took the decode from 37/76 to 50/76, split so cleanly along bit 15 of
+the length word that an earlier draft here concluded "bit 15 selects the
+language". **That was wrong**, and following the pointers settled it properly.
 
-**So bit 15 selects the language, and the texture language is fully decoded**:
-44 programs, 331 operations, every one landing exactly on its program boundary.
-Programs run 1 to 13 operations — about 7.5 on average.
+#### Three tables, three languages
+
+All 76 program starts are pointed at from seg 0, and **76 of 76 land exactly on a
+program boundary** — a third independent confirmation of the container format,
+after the exact tiling and the clean decode. Those pointers form **two**
+contiguous tables, and `_play_part_1` reads them four instructions apart:
+
+```asm
+  addi r31, r2, 0x2642      ; 48-entry table
+  bl   _calculate_txt       ;   -> _generate      (textures)
+  bl   _alloc_txt           ;   -> W3D_AllocTexObj/UploadTexture/SetFilter
+  addi r31, r2, 0x2706      ; 28-entry table
+  bl   _calculate_obj       ;   -> _generate_obj  (geometry)
+```
+
+So the **table** selects the language, not the flag:
+
+| table | at | programs | consumer | language |
+|---|---|---|---|---|
+| textures | `0x1000a640` | 48 | `_calculate_txt` → `_generate` | 20-op texture VM |
+| geometry | `0x1000a704` | 28 | `_calculate_obj` → `_generate_obj` | 5-op geometry VM |
+| scenes | `0x1000a5a8` | 18 | `_play_scene*` → `_generate_scene` | 8-op scene VM |
+
+Re-run against the correct populations, **all 48 texture programs decode with an
+overrun of exactly 0** — including the four flag=0 ones that had been miscounted
+as a second language. Bit 15 is a per-program option bit (44 set, 4 clear), not a
+language selector.
+
+**The texture language is therefore fully decoded across its entire population**:
+48 programs, every one landing exactly on its boundary, 1 to 13 operations each.
+
+The 28 geometry programs are all flag=0, total 3,825 bytes, and **every one starts
+with opcode 0 or 4** — 14 each — which is exactly what the five-opcode VM
+requires. Decoding them still fails on width: the conditional rules read out of
+the five build handlers (`op0` 6-or-8 by two sign bits, `op1` `2+6·popcount`,
+`op2` fixed 3, `op3` `3+6·`nonzero 2-bit groups, `op4` `2+8n`) accept only 6%,
+so at least one of those five is still incompletely understood. That is now the
+single open item in seg 3.
 
 #### The texture language, disassembled
 
