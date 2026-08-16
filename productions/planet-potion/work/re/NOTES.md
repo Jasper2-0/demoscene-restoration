@@ -87,15 +87,28 @@ is why payloads begin `5B FF 0F xx 80 00` and that is *not* a magic number. The
 low bits of an operand byte index `param_3`/`param_4`, which are built at
 runtime in seg 6 — so scene streams cannot be decoded statically.
 
-**Geometry.** Opcode byte, then operands. Widths from the handlers:
-`op0` 6 or 8 (8 when both leading halfwords have bit 15 clear), `op1`
-`2+6·popcount(b1&7)`, `op2` fixed 3 (with an *unaligned* halfword at `r31+1`,
-which is why stream pointers are often odd), `op3` `3+6·`(nonzero 2-bit groups),
-`op4` `2+8n`. **`op0` and `op4` additionally call a shared prologue**
-`FUN_100030f8` which consumes 8 more bytes minimum — it has seven `addi r31,r31,n`
-sites (8, 4, 6, 6, 6, 2, 2) selected by its flags byte, so 8–34 total. Modelling
-that prologue's control flow is the one thing still standing between here and a
-full geometry decode.
+**Geometry.** Opcode byte, then operands — but **do not try to model the
+widths**. Three attempts failed and the reason is instructive:
+
+* the five build handlers' own reads give `op0` 6-or-8, `op1` `2+6·popcount`,
+  `op2` fixed 3 (with an *unaligned* halfword at `r31+1`, which is why stream
+  pointers are often odd), `op3` `3+6·`(nonzero 2-bit groups), `op4` `2+8n`;
+* `op0` and `op4` additionally call a shared prologue `FUN_100030f8` with seven
+  conditional `addi r31,r31,n` sites;
+* that prologue indexes a table in **BSS, built at runtime**, so its consumption
+  is not a function of the stream alone. Measured on synthetic input it consumes
+  26–32 bytes; on real streams, 12–18 — and the same flags byte gives different
+  answers in different programs.
+
+`rungeo.py` sidesteps all of it. Run `_generate_obj` itself under qemu with
+`_Warp3DBase` pointed at a table of no-op vectors, and read back the linked list
+it builds — opcode·4 at node+0x10, next at node+0x14. **38 of the 39 programs
+decode this way.** Measurement beats modelling here, and the harness makes it
+cheap.
+
+Result: opcode counts across the shipped data are **op0 ×62, op3 ×56, op4 ×24 —
+and opcodes 1 and 2 are never used at all.** 17 distinct shapes; the commonest
+are `[4]`, `[0]`, `[4,3,3]`, `[0,0]`. A port needs three of the five handlers.
 
 ## Warp3D surface — 22 functions, 29 sites
 
