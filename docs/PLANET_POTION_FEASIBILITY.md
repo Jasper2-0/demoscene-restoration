@@ -1,5 +1,22 @@
 # Planet Potion (Potion, 2002) — port feasibility
 
+> **SUPERSEDED IN PART — read this as history, not as status.** This was the
+> feasibility study. The plan of record is
+> [`../productions/planet-potion/work/re/PORT_SPEC.md`](../productions/planet-potion/work/re/PORT_SPEC.md),
+> and several conclusions below have since been settled by running the code
+> rather than reading it:
+>
+> * the texture VM is **byte-exact** — all 69 shipped programs and all 30
+>   opcodes reproduce the original's own output, so the "inner decode is only
+>   partial" section is a record of how it looked partway, not of the format;
+> * the operand-width table was not the whole story; the fetch loop was;
+> * the scene VM's stream format is still **not** decoded, and PORT_SPEC §4a
+>   lists what is measured about it — which is less than this document's
+>   confidence about the texture side might suggest by analogy.
+>
+> Where the two disagree, PORT_SPEC is the authority: it is checked by
+> `work/re/checkall.sh`, and this document is not checked by anything.
+
 An evidence study, not a plan of record. Everything below was measured from the
 release archive in a single session; nothing is inferred from what the intro
 looks like, because nobody in this session has seen it run.
