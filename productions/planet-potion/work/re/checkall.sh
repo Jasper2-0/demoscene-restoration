@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir]
 #
-# Ten checks accumulated over the work and there is no point in remembering
-# ten invocations. Each either passes or names what drifted; none of them
+# Eleven checks accumulated over the work and there is no point in remembering
+# eleven invocations. Each either passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -50,6 +50,8 @@ run "texbuildcheck — the layer the browser calls, reorder included" \
   node "$HERE/texbuildcheck.mjs" "$DATA"
 run "projcheck — the emitter, over every recorded vertex" \
   node "$HERE/projcheck.mjs" "$DATA/draws.json"
+run "rendercheck — the player in a real browser, pixels read back" \
+  node "$HERE/rendercheck.mjs" "$DATA"
 
 [ -n "$SUITE" ] && run "texopdiff — each opcode in isolation" \
   node "$HERE/texopdiff.mjs" "$SUITE" "$DATA/tex_kernels.json"

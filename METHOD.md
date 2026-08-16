@@ -402,6 +402,20 @@ never been tested at all: `texvmdiff` compares the VM's ARGB output, and the
 browser calls a wrapper that reorders it afterwards, so a channel swap would
 have put the entire intro in wrong colours with every suite green.
 
+**And the failure mode recurs while you are writing the check.** Three commits
+later, `rendercheck.mjs` picked its colour-bearing test frame by sorting every
+recorded frame on texture colour spread, then deduplicated that against the
+busiest frame. Sabotaging the textures to greyscale to see the colour assertion
+fail instead made the two frames *collapse onto each other*, the colour target
+was deduped away, and the run reported "all checks passed" against textures with
+no colour in them. The assertion did not fail — it stopped existing.
+
+The fix generalises: **assert the precondition your check depends on, before the
+check.** "The dataset contains a frame whose textures carry colour" is now its
+own line that fails on its own, so the property cannot quietly vanish along with
+the thing it was measuring. A check selected from data is only as trustworthy as
+the selection, and the selection is code too.
+
 ## Ask the instruction, not the arithmetic
 
 A reimplementation can have every structure right — the correct handler, the
