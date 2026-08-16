@@ -123,6 +123,31 @@ where index 4 is `W3D_CreateContext` at LVO −30, so `LVO = −6·(index+1)`.
 | texture | `AllocTexObj` `UploadTexture` `SetFilter` `FreeTexObj` |
 | draw | **`DrawTriFan`×4, `DrawLineStrip`×2 — nothing else** |
 
+### The render state, recovered
+
+Every argument to the state calls is an immediate, so the whole configuration is
+static:
+
+```
+  W3D_Hint            (ctx, 0x0a, 1)
+  W3D_SetZCompareMode (ctx, 3)
+  W3D_SetBlendMode    (ctx, srcfunc=7, dstfunc=8)
+  W3D_SetFogParams    (ctx, &_fog, mode=1)      _fog = {0.0, 0.0, 1.0, black}
+```
+
+`W3D_SetState(ctx, state, action)` is called 17 times over **eight** state bits —
+`4, 256, 512, 1024, 2048, 4096, 8192, 16384` — with action 1 and 2 (enable and
+disable). The context-init cluster enables 256, 512, 1024, 8192 and disables 4,
+2048, 4096, 16384. Three bits are then toggled during the show: `_show_scene`
+flips 2048 and 4096, and `_play_part_1` flips 16384 on and off around two of its
+scenes.
+
+What is *not* recoverable from the binary is what a 2002 Permedia 2 driver did
+with any of it — the filter kernel behind `SetFilter`, the fog curve behind mode
+1, which factors 7 and 8 name, the rasteriser's fill rules and subpixel
+precision, and how format 6 texels were converted. Those are pixel-level
+behaviours, and a reference capture answers them where documentation will not.
+
 No `SetTexEnv`, no `SetWrapMode`: both left at defaults. Every polygon is a
 triangle fan. `ReadZPixel` appears once, in render slot 4's handler, after a
 four-way float bounds test and before a `DrawTriFan` — an occlusion-tested
