@@ -559,9 +559,27 @@ type-7 root that `li r29, 7` synthesises. The fixed `0xff 0x0f` at offsets 3 and
 the production.
 
 That is a measured fact rather than a seventh reading, and it is the one the six
-readings before it were all trying to guess. What remains is to read the type-7
-path at `0x10002250`–`0x10002298` for the operand widths, now knowing what to
-look for.
+readings before it were all trying to guess.
+
+**And the block at `0x10002250` is what every grammar above was missing: a SECOND
+byte per node.** Types other than 7 fall through it before their handler runs:
+
+```
+  lbz  r29, 0(r31)      /* one more byte                              */
+  addi r31, r31, 1
+  srwi r24, r29, 7      /* bit 7 -> 2 - bit, stored at node+0x0d      */
+  andi. r24, r29, 0x7f  /* the low seven bits are a RESOURCE INDEX    */
+  ...                   /* index r5's table, stride 8 at +4;          */
+  ...                   /* type 5 indexes r6's instead, stride 4      */
+  stw  r24, 4(r27)      /* the resolved pointer -> node+0x04          */
+```
+
+So a node is `opcode byte, resource byte, then the handler's own operands`, and
+`node+0x04` — which §3a calls the animation object's parent — is a pointer looked
+up from a table by that byte. Type 6 skips the lookup but still consumes the
+byte; type 7 skips both.
+
+Every width table in this section counted one byte per node too few.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
