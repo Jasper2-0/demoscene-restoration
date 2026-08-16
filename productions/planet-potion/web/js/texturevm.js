@@ -102,10 +102,14 @@ export class Rng {
  * 0x10000a50 — central-difference gradient, two floats per pixel.
  * This is what makes op2 and op8 bump-lighting operations.
  */
-export function centralGradient(src, out) {
+export function centralGradient(src, out, mask = 7) {
+  // It samples a CHANNEL COMBINATION, not one channel: 0x10000a50 tails into
+  // 0x10000714 through 0x10000a38, with the mask taken from the mode byte as
+  // `rlwinm r14, r12, 28, 29, 31` = (mode >> 4) & 7.
+  const at = (xx, yy) =>
+    combineChannels(src, (((yy & 127) * SIZE) + (xx & 127)) * 4, mask);
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
-      const at = (xx, yy) => src[(((yy & 127) * SIZE) + (xx & 127)) * 4];
       const o = (y * SIZE + x) * 2;
       out[o] = at(x + 1, y) - at(x - 1, y);
       out[o + 1] = at(x, y + 1) - at(x, y - 1);
@@ -494,10 +498,17 @@ export function op2(s, ops) {
   // why its span is the plain difference.
   const start = ops[10], span = (ops[11] - 2 * ops[10]) || 1;
   const mode = ops[12];
+  // The distance is perturbed by the surface's own gradient — this is what makes
+  // op2 bump LIGHTING rather than a plain radial gradient. On a flat surface the
+  // term vanishes, which is why a single op2 on a blank canvas nearly matched
+  // without it and every composed program did not.
+  const g = centralGradient(s.current, new Float32Array(PIXELS * 2), (mode >> 4) & 7);
   const shaded = new Float32Array(4);
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
-      const t = falloff(distance(x - cx, y - cy, mode), start, span, mode);
+      const gi = (y * SIZE + x) * 2;
+      const t = falloff(distance(x - cx + g[gi], y - cy + g[gi + 1], mode),
+        start, span, mode);
       for (let c = 0; c < 4; c++) shaded[c] = A[c] + delta[c] * t;
       clamp4(shaded, 0);
       blend(s.current, (y * SIZE + x) * 4, shaded, 0);
@@ -527,10 +538,12 @@ export function op8(s, ops) {
   const [cx, cy] = [ops[12], ops[13]];
   const inner = ops[14], knee = ops[15], outer = ops[16];
   const mode = ops[17];
+  const g = centralGradient(s.current, new Float32Array(PIXELS * 2), (mode >> 4) & 7);
   const shaded = new Float32Array(4);
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
-      const d = distance(x - cx, y - cy, mode);
+      const gi = (y * SIZE + x) * 2;
+      const d = distance(x - cx + g[gi], y - cy + g[gi + 1], mode);
       const far = d > knee;
       const base = far ? B : A;
       const delta = far ? dBC : dAB;
