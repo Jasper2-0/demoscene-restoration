@@ -90,6 +90,46 @@ Every program in every language:
 parameterised by opcode, not 41 routines. Colour math is normalised: the
 prologue builds 1.0 as 255/255, 0.0 as 255−255, and 128/255.
 
+### That family is a 3×3 convolution engine
+
+The handler indexes a table at `r2+0x2462` by `opcode − 0x50`, stride **0x24**,
+so each opcode carries **nine floats** — a 3×3 kernel. The table lives in seg 6
+and is built at run time; dumping it from a live `_generate` gives 40 records,
+**37 of them distinct**.
+
+```
+  for the 9 taps:  if (w >= threshold) w -= 256.0     /* signed-byte encoding */
+                   sum += w ; store w back
+  if (sum == 0) sum = 1.0
+  inv = fres(sum)                                     /* normalise by the sum */
+
+  for y in 0..127, x in 0..127, for each non-zero tap:
+      sample at ((y + dy) & 0x7f, (x + dx) & 0x7f)    /* WRAPPED — a torus */
+```
+
+The `w -= 256.0` is what makes the dumped records readable: `255.0` is **−1** and
+`254.0` is **−2**. Decoded that way the kernels are textbook:
+
+| opcode | kernel | sum | what it is |
+|---|---|---|---|
+| `0x50` | `1 1 1 / 1 0 1 / 1 1 1` | 8 | blur, centre excluded |
+| `0x51` | `0 1 0 / 1 2 1 / 0 1 0` | 6 | cross blur |
+| `0x52` | `0 −1 0 / −1 4 −1 / 0 −1 0` | 0 → 1 | Laplacian edge |
+| `0x53` | `1 1 0 / 1 0 −1 / 0 −1 −1` | 0 → 1 | emboss |
+| `0x56` | `2 1 0 / 1 1 −1 / 0 −1 −2` | 1 | directional emboss |
+
+Zero taps are skipped rather than multiplied, so the sparse kernels are cheap.
+Wrapped addressing means every filter tiles seamlessly, which is why the
+textures can be scrolled without seams.
+
+**`0x55` is special-cased** out of the table and is not a convolution at all:
+`max(255 − x, 0)` over the surface — **invert**.
+
+So the texture language is 20 table-dispatched opcodes plus 40 named 3×3
+filters. For a port that ships the rendered PNGs none of this is needed; for one
+that reimplements the generator it is most of the work, and it is ordinary
+image processing rather than anything exotic.
+
 **Scenes.** u16 length, then single opcode bytes; bit 7 is a flag stored at
 node+0x0e, bits 0–6 the opcode. The first opcode is **implicit and is 7**, which
 is why payloads begin `5B FF 0F xx 80 00` and that is *not* a magic number. The
