@@ -50,7 +50,7 @@ LOGPW, LOG = 0x20420000, 0x20420010
 # slice that falls outside is a counted `dropped`, never a silent gap.
 MYVBUF, MYVBUFCAP = 0x21000000, 0x1000000
 SCRATCHSZ = 0x02000000
-LOGSZ = 0x40000
+LOGSZ, REC = 0x80000, 64        # log size, and one record
 T_FAN, T_LINE = 0x29fe, 0x2a0e          # the .v field of each template
 FAKEOBJ = 0x20560000
 
@@ -86,6 +86,7 @@ def mulli(d, a, v):  return (7 << 26) | (d << 21) | (a << 16) | (v & 0xFFFF)
 def mr(d, s):        return (31 << 26) | (s << 21) | (d << 16) | (s << 11) | (444 << 1)
 def subf(d, a, b):   return (31 << 26) | (d << 21) | (a << 16) | (b << 11) | (40 << 1)
 def lhz(d, a, o):    return (40 << 26) | (d << 21) | (a << 16) | (o & 0xFFFF)
+def lbz(d, a, o):    return (34 << 26) | (d << 21) | (a << 16) | (o & 0xFFFF)
 def blr():           return (19 << 26) | (20 << 21) | (16 << 1)
 def b(off):          return (18 << 26) | (off & 0x03FFFFFC)
 
@@ -97,18 +98,32 @@ def recorder():
     # Return the record's own address: every call gets a distinct non-null
     # handle, so W3D_AllocTexObj's return value identifies the texture and the
     # draw calls that bind it can be tied back to which one.
-    c += [mr(3, 11), addi(11, 11, 32), stw(11, 12, 0)]
+    c += [mr(3, 11), addi(11, 11, REC), stw(11, 12, 0)]
     return c + [blr()]
 
 
 def drawrec():
-    """Log the draw call, then advance the shared vertex cursor past its slice."""
+    """Log the draw call and the emitter's own inputs, then advance the cursor.
+
+    The emitter reaches the draw vector by `mtctr r15; bctr` — a TAIL branch, not
+    a call — so everything it was working with is still live here: r30 is the
+    scene node, r14 the primitive template, r19 the source-vertex cursor, r22 the
+    minimum vertex count (3 for fans, 2 for line strips). Recording the node's
+    cx/cy/scale alongside the projected vertices makes the projection invertible,
+    which is what a reimplementation of `_calc_matrix` has to be checked against:
+    x = (sx - cx) / (scale * w).
+    """
     c = H.load32(12, LOGPW) + [lwz(11, 12, 0)]
     c += [stw(0, 11, 0), stw(3, 11, 4), stw(4, 11, 8)]
     c += [lwz(9, 4, 0), lwz(10, 4, 4), lwz(8, 4, 8)]          # count, v, tex
     c += [stw(9, 11, 12), stw(10, 11, 16), stw(8, 11, 20)]
-    c += [lwz(8, 4, 12), stw(8, 11, 24), stw(0, 11, 28)]      # 4th word (line width)
-    c += [addi(11, 11, 32), stw(11, 12, 0)]
+    c += [lwz(8, 4, 12), stw(8, 11, 24)]                      # 4th word (line width)
+    c += [stw(30, 11, 28)]                                    # the scene node
+    for off, slot in ((0x14, 32), (0x18, 36), (0x1c, 40)):    # cx, cy, scale
+        c += [lwz(8, 30, off), stw(8, 11, slot)]
+    c += [lbz(8, 30, 0x0e), stw(8, 11, 44)]                   # clip enable
+    c += [stw(22, 11, 48), stw(19, 11, 52), stw(14, 11, 56)]
+    c += [addi(11, 11, REC), stw(11, 12, 0)]
     # Advance the shared cursor past the slice just drawn — in BOTH templates,
     # since fans and line strips interleave and write into the same array.
     c += [mulli(9, 9, 64), add(10, 10, 9), stw(10, 2, T_FAN), stw(10, 2, T_LINE)]
@@ -231,8 +246,8 @@ def parse(out):
     end = struct.unpack('>I', out[:4])[0]
     log, vbuf = out[4:4 + LOGSZ], out[4 + LOGSZ:]
     frames, cur, tex, dropped = [], [], {}, 0
-    for o in range(0, min(end - LOG, LOGSZ), 32):
-        r = struct.unpack_from('>8i', log, o)
+    for o in range(0, min(end - LOG, LOGSZ), REC):
+        r = struct.unpack_from('>16i', log, o)
         tag = r[0]
         if tag == -94:                                 # W3D_AllocTexObj, in table order
             tex[LOG + o] = len(tex)
@@ -256,8 +271,12 @@ def parse(out):
                 cr, cg, cb, ca = struct.unpack_from('>ffff', vbuf, q + 0x20)
                 vs.append({'x': x, 'y': y, 'z': z, 'w': w, 'u': u, 'v': tv,
                            'rgba': [cr, cg, cb, ca]})
+        cx, cy, sc = struct.unpack_from('>fff', log, o + 32)
         cur.append({'prim': 'trifan' if tag == -166 else 'linestrip',
                     'texture': tex.get(r[5] & 0xFFFFFFFF), 'count': count,
+                    # the emitter's own inputs — see drawrec()
+                    'node': r[7] & 0xFFFFFFFF, 'cx': cx, 'cy': cy, 'scale': sc,
+                    'clip': bool(r[11]), 'minVerts': r[12],
                     'vertices': vs})
     if cur:
         frames.append({'time': None, 'draws': cur})

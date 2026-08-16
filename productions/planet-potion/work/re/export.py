@@ -197,6 +197,10 @@ def export_draws(flat, d0, r2, out, mods=()):
                         'overlay': hex(over) if over else None,
                         'frames': [{'t': f['time'], 'draws': [
                             {'prim': d['prim'], 'texture': d['texture'],
+                             # the node's own screen placement and focal length,
+                             # which make the projection invertible
+                             'cx': round(d['cx'], 4), 'cy': round(d['cy'], 4),
+                             'scale': round(d['scale'], 4), 'clip': d['clip'],
                              # flat per-vertex records: x y z w u v r g b a
                              'v': [round(c, 5) for vx in d['vertices'] for c in
                                    (vx['x'], vx['y'], vx['z'], vx['w'], vx['u'],
@@ -204,6 +208,8 @@ def export_draws(flat, d0, r2, out, mods=()):
                             for d in f['draws']]} for f in frames]})
     json.dump({'screen': [640, 480], 'tick_hz': 50,
                'vertex_fields': ['x', 'y', 'z', 'w', 'u', 'v', 'r', 'g', 'b', 'a'],
+               'projection': 'sx = x*scale/z + cx, sy = y*scale/z + cy; '
+                             'invert with x = (sx-cx)/(scale*w), z = 1/w',
                'uv_space': 'texels (0..128), wrapped — not normalised',
                'z': '4/z as a W3D_Double; w = 1/z; both from a PPC fres estimate',
                'tick': 'frame index at 50Hz, local to the scene',

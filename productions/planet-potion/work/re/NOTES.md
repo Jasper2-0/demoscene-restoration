@@ -442,6 +442,38 @@ projection without any fitting against a capture:
 one part in 256. The original's perspective divide is therefore approximate, and
 that approximation is part of what the picture looks like.
 
+### The projection is per-node, and that is the camera model
+
+`cx`, `cy` and `scale` come from the **node**, not from any global camera, and
+recording them alongside each draw shows what they are for. Across a sample of
+six scenes:
+
+| `(cx, cy, scale)` | draws | what it is |
+|---|---|---|
+| `(320, 240, 320)` | 447 | screen centre, focal length 320 — the default |
+| `(200, 160, 234.4)` / `(200, 160, 159.03)` | 960 each | same centre, animated zoom |
+| `(160, 350, 100)` | 48 | a small inset element |
+| 30-odd one-offs, all `scale = 320` | 1–2 each | sprites and text placed by hand |
+
+So `(cx, cy)` is a **2D screen placement** and `scale` a focal length, both
+animated per node — `(0.77, 300)`, `(5.38, 302)`, `(-1.43, 294)` in consecutive
+frames of a moving element. A port does not need a camera matrix for this; it
+needs each node's own two numbers, which is a much smaller thing to get right.
+`scale = 320` at 640 wide is a 90° horizontal field of view.
+
+**And the transform inverts.** Recording `cx`/`cy`/`scale` with the projected
+vertices makes `x = (sx - cx) / (scale · w)` and `z = 1/w` recoverable, which is
+how a reimplementation of `_calc_matrix` gets checked: it must produce these
+source vertices. Two spot inversions give `(0, 300, 640)` and `(-400, 0, 601.6)`
+— authored round numbers, which is the sign the inversion is right.
+
+Clipping is on for almost all fans (2,326 of 2,503 sampled) and `r22` is 3 for
+fans and 2 for line strips throughout, as the emitter implies.
+
+This costs no extra machinery. The emitter reaches the draw vector by
+`mtctr r15; bctr` — a **tail** branch — so r30 (node), r14 (template), r19
+(source cursor) and r22 are all still live when the recording stub runs.
+
 The per-primitive alpha is taken from the first source vertex only, and
 `if (alpha <= 0) return;` skips the primitive entirely — which is how elements
 fade out of the scene. It is also why a scene's draw count falls over its life:
