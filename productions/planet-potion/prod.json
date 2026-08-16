@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "slug": "planet-potion",
+  "title": "Planet Potion",
+  "group": "Potion",
+  "kind": "evidence",
+  "platform": "Amiga PPC/RTG (WarpOS, Warp3D)",
+  "releaseDate": "2002-04-01",
+  "party": {
+    "name": "Mekka & Symposium 2002",
+    "compo": "Amiga 64k intro",
+    "ranking": null
+  },
+  "ids": {
+    "demozoo": null,
+    "pouet": 5633
+  },
+  "links": {
+    "pouet": "https://www.pouet.net/prod.php?which=5633",
+    "sceneorg": "https://files.scene.org/view/parties/2002/mekkasymposium02/amiga/in64/potion-planet_potion.lha"
+  },
+  "credits": [
+    { "name": "mavey",    "role": "Code" },
+    { "name": "nelson",   "role": "Graphics" },
+    { "name": "skipp604", "role": "Music" },
+    { "name": "rem",      "role": "3D" },
+    { "name": "diamond",  "role": "Code", "note": "additional" }
+  ],
+  "originals": [
+    {
+      "path": "originals/potion/potionplanet_potion.lha",
+      "urls": [
+        "https://files.scene.org/get/parties/2002/mekkasymposium02/amiga/in64/potion-planet_potion.lha"
+      ],
+      "sha256": "afe6b6eb985b69ee9b0b12d209f86e3247412411e5f7b9e053ddb1303c73b253",
+      "bytes": 125959,
+      "note": "release archive; contains planet-potion.exe (65,288, crunched), planet-potion_dcr.exe (138,280, decrunched) and planet-potion.txt",
+      "members": [
+        { "name": "planet-potion.exe",     "bytes": 65288,  "sha256": "6140e5d773be67cf720d4daa3ee3133230842bb7ce700dc9750426fa559da48b" },
+        { "name": "planet-potion.txt",     "bytes": 445,    "sha256": "31fb33197d5a6f3715edc0d6371654a8f5467541b8de63391923bcfd8fdb49a9" },
+        { "name": "planet-potion_dcr.exe", "bytes": 138280, "sha256": "51e62978e6d472a5c6c84f28ffd51239ed888bbd3e04ab40597a9bdc62ac1c99" }
+      ]
+    }
+  ],
+  "captures": [],
+  "status": {
+    "web": "none",
+    "pagesRepo": null,
+    "note": "evidence only — see docs/PLANET_POTION_FEASIBILITY.md. No reference capture yet, so nothing can be scored."
+  }
+}
