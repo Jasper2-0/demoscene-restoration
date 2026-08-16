@@ -324,6 +324,56 @@ halves are identical and fill every slot, so any aligned load returns it. And wh
 a run faults, `qemu -d in_asm -dfilter <lo>..<hi>` narrows it to a function in one
 pass; that is how the missing font-table initialiser was found.
 
+### And where it is *not* pure, record the calls instead of stubbing them
+
+The obvious limit of the above is that it only covers subsystems touching no
+library. Planet Potion's renderer was filed under "needs the original hardware"
+for exactly that reason: it ends in Warp3D calls, so it cannot be run as a pure
+function.
+
+That was the wrong conclusion from a true premise. **The library calls are the
+output.** Point every vector at a stub that writes its arguments down and
+returns, and running the renderer produces the program's own draw stream — every
+primitive, the texture bound, and the screen-space vertices as the original
+computed them, for any frame. No hardware, no driver, no capture.
+
+This is the more transferable half, because a graphics subsystem almost never
+qualifies as pure, and every production here reaches its API the same way: a base
+pointer or an import table, indirected. Three details make a recorder work where
+a no-op stub would not:
+
+- **Give each call a distinct return value.** Have the recorder return the
+  address of its own log record. Resource-creating calls then hand back unique
+  handles, and every later call that binds one can be tied to which — texture
+  identity falls out of allocation order without decoding a single tag list.
+- **Redirect shared output buffers, do not just observe them.** The intro built
+  every primitive into one reusable vertex array, so a passive log would have
+  captured only the last one. The stub repoints the array and advances it past
+  each slice. Watch what else lives next to that buffer: the original's sat
+  0x500 bytes below a pointer array it would have corrupted within twenty
+  vertices.
+- **Make time an input.** The frame clock reduced to one counter in memory.
+  Writing it directly turns the whole renderer into a deterministic function of
+  (scene, frame) — reproducible, samplable out of order, and diffable.
+
+What this yields is not a hint about the renderer, it is a **test oracle**: a
+reimplementation that emits the same primitives is right for reasons you can
+point at, and one that does not can be diffed primitive by primitive, offline,
+before a single pixel is rasterised. It also settles by reading what would
+otherwise be fitted — here the projection, the reciprocal *estimate* the original
+divides by, texture coordinates in texels rather than normalised, and the clip
+planes.
+
+### Prefer a decidable check to a statistical one
+
+A recurring shape: you have N things the code should produce and N things it did.
+Counting how many of each *kind* match is the weak test and leaves ambiguity
+wherever two producers share a value. Ordering is usually stronger and usually
+available — output appended to a cursor comes out in call order, so the Nth call
+is the Nth result. That turned "9 of 11 sample lengths agree, two are unclaimed"
+into "56 of 56 positions agree", and it resolved a conditional branch and three
+computed lengths that counting could not touch.
+
 The limit is honest and worth stating: this recovers *what the original computed*,
 not why. It is extraction, not understanding. The naming still has to be done by
 reading the code — but it can be done against known-correct output instead of
