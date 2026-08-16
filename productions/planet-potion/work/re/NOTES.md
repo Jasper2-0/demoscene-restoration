@@ -1,5 +1,11 @@
 # Planet Potion — recovered structure
 
+**Implementing rather than investigating? Read
+[`PORT_SPEC.md`](PORT_SPEC.md).** This file is the notebook — chronological, with
+its wrong turns and corrections left in, because they are the evidence for what
+is now believed. `PORT_SPEC.md` is the current answer in the order a port needs
+it.
+
 Addresses are as laid out by `hunkload.py` (seg *n* at `0x10000000 + n·0x10000`,
 rounded up). Narrative and reasoning live in
 [`docs/PLANET_POTION_FEASIBILITY.md`](../../../../docs/PLANET_POTION_FEASIBILITY.md);
@@ -1391,6 +1397,7 @@ synchronous stall needing an occlusion query rather than a literal translation.
 | `ppdis.py` | ranged disassembly with symbol names; `-m` for the 68K bootstrap |
 | `lvo.py` | reads a Warp3D library's own vector table from its ROMTag |
 | `export.py` | runs all of the above and writes the whole dataset |
+| `PORT_SPEC.md` | the current answer, organised for someone implementing it |
 | `PPLoad.java` | Ghidra: load segments, apply symbols, decompile the named functions |
 | `PPVm.java` | Ghidra: pin `r2`, name the VM handlers, decompile them |
 
