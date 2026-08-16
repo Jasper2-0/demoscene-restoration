@@ -537,11 +537,18 @@ opcode space, the bytes themselves, and an export that demonstrably produces
 `[7, 3, 3, …]` from exactly this input. They cannot all be true, and no amount of
 further reading has narrowed which one is not.
 
-What is left is the one thing never tried: **print `r29` and `r31` from inside
-the loop at `0x100021f4`**. Every claim above is about what the code should read;
-that would show what it does read, on the first iteration, in one run. It needs a
-probe in the harness rather than another disassembly, which is why it kept being
-deferred, and it is the only step with any prospect of settling this.
+What is left is a live measurement of what the loop reads, and two ways to get
+one:
+
+* **print `r29` and `r31` from inside the loop at `0x100021f4`.** Every claim
+  above is about what the code should read; this shows what it does read, on the
+  first iteration. `drawlog.run`'s `probe` argument dumps a memory range but not
+  registers, so this needs a small addition to the harness.
+* **patch the disputed byte and see whether the output changes.** Tried, and it
+  did not discriminate: walking the arena dump from its base gives a node type of
+  1062, because the base is not the list head — the same obstacle `animdump.py`
+  hit and solved by seeding the walk from the draw log's node addresses. The
+  experiment is sound and wants that seeding applied to `runscene` first.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
