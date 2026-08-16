@@ -482,11 +482,28 @@ fail are the same two text scenes as before, on the same unbounded glyph scan.
 Six part-one scenes (`0x25da`, `0x25d6`, `0x25de`, `0x25e2`, `0x25ea`, `0x25e6`)
 record the overlay and **nothing of their own**. They are the ones whose graphs
 are all type-5 nodes, and render handler 5 at `0x100061a0` bails immediately when
-`node+0x24` — its object pointer — is zero, which it is here. `_restore_time` is
-not the cause: it only writes the frame into `node+0x6c`, which a fresh arena
-already holds as 0. In the show these six are each followed by
-`_play_scene_new_camera` calls, so the missing state is most likely something
-that sequence establishes. Recorded as an open item rather than guessed at.
+`node+0x24` — its object pointer — is zero.
+
+That pointer is filled at `0x10002890`, and the branch three instructions
+earlier is the whole story:
+
+```
+  0x10002874  lwz    r26, 8(r10)      ; r10 = the object _calculate_obj built
+  0x10002878  cmpwi  r26, 0
+  0x1000287c  beq    0x1000298c       ; nothing to attach — leave node+0x24 = 0
+```
+
+Running all 28 of part one's geometry programs and reading `[head+8]` finds
+**exactly two** objects with no payload: index 12 (`0x10030d18`, builds but
+`[+8] = 0`) and index 26 (`0x100317bb`, the one program of 39 that does not
+decode at all). So the six silent scenes and the known geometry failure are very
+likely **the same defect**, reached through this branch — not six separate ones,
+and not missing camera state. `_restore_time` is ruled out: it only writes the
+frame into `node+0x6c`, which a fresh arena already holds as 0.
+
+What is not yet settled is which way round it goes — whether those two objects
+genuinely have no drawable payload, or whether the harness mis-builds them and
+the scenes are fine in the original. Left as an open item rather than guessed at.
 
 The running order recorded above also needs a correction. `_play_part_1` loads
 `r2+0x25d2` first, but hands it to **`_init_synchro`** — it is the overlay built
