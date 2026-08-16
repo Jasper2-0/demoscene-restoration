@@ -61,10 +61,25 @@ between recorded and computed per stage, and only the last one is computed today
 | draw emission | recorded |
 | **GL state / raster** | **computed — this file** |
 
-Audio is not playable yet. `js/dbm.js` reads a DigiBooster Pro 2 module and is
-checked against both of the intro's own modules by `work/re/dbmcheck.mjs` —
-every byte claimed by a chunk, chunk sizes agreeing with the independent Python
-walk, and the effect-7 scene signals coming out at 26 and 13, the counts
-`showorder.py` derived from the code rather than from the music. What is still
-missing is the replayer itself, the DSP echo, and the two softsynth generators
-that build the modules in the first place (`PORT_SPEC.md` §8b–8h).
+Audio plays, without its dynamics. Two files and two checks:
+
+* `js/dbm.js` reads a DigiBooster Pro 2 module. `work/re/dbmcheck.mjs` holds it
+  to every byte being claimed by a chunk, the chunk sizes agreeing with an
+  independent Python walk, and the effect-7 scene signals coming out at 26 and
+  13 — the counts `showorder.py` derived from the code rather than the music.
+* `js/dbmplayer.js` sequences and mixes it, with the DSP echo and its ping-pong
+  cross. `work/re/dbmtime.mjs` checks the half that can be checked exactly: the
+  sequencer reproduces `showorder.py`'s timeline tick for tick on both parts —
+  1,013 rows and 289.286 s with all 26 scene boundaries on the same tick for
+  part one, 1,088 rows and 150.000 s with all 13 for part three.
+
+**The effect set is deliberately unimplemented.** DigiBooster's numbering is not
+ProTracker's — effect 7 is the scene signal where ProTracker numbering would make
+it tremolo — so filling the rest in from ProTracker would be inventing behaviour.
+Only 7 and 15 are acted on, and `unhandledEffects()` reports what each module
+actually uses, so the gap is a number in the output rather than something noticed
+later by ear.
+
+Still missing: those eleven effects, and the two softsynth generators that build
+the modules in the first place (`PORT_SPEC.md` §8b–8h). The modules themselves
+are currently exported by the harness rather than generated in the browser.
