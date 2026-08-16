@@ -451,10 +451,24 @@ So a stream byte carries a flag in bit 7 — the one `drawlog` reads back as
 at `r2+0x28ca`** with room for far more than seven entries. The node type
 `_show_scene` dispatches on is the same opcode times four.
 
-That is why `scenegram.py` still fails: the seven handlers at `0x1000a8a8` are not
-the whole opcode set, and a decoder needs the size table, not a hand-written
-width list. **Read `r2+0x28ca` next** — it gives every opcode's node size directly,
-and its length gives the opcode count.
+**The size table settles the opcode count at EIGHT**, `0..7`:
+
+```
+  0: 44   1: 48   2: 52   3: 108   4: 212   5: 44   6: 56   7: 60
+```
+
+then two zeros and unrelated data, so the low seven bits have room for 128
+opcodes and only eight are real — the seven handlers at `0x1000a8a8` plus type 7,
+the synthesised root, which gets a 60-byte node of its own. Node sizes also
+corroborate the handlers independently: op 3 at 108 bytes is the one that
+allocates most, op 4 at 212 the text node with its glyph array.
+
+**So the opcode width was never the problem, and `scenegram.py`'s remaining
+failure is the stream BASE.** With eight valid opcodes, bytes like `0x5b` and
+`0x9b` cannot be opcodes at the address `scenes.json` calls `stream`, whether or
+not two bytes of length are skipped first. What `_generate_scene` receives in
+`r4` and what the exporter recorded are not the same pointer. That is the one
+thing left to find, and it is a question about `export.py`, not about the VM.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
