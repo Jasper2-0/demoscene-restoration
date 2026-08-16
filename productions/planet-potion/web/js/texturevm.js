@@ -198,12 +198,48 @@ export function op15(s, [v]) {
   for (let i = 0; i < PIXELS; i++) s.mask[i] = clamp255((s.mask[i] - 128) * k + 128);
 }
 
+/**
+ * 0x10000820 — the step op11 and op12 share: pull channels 1..3 AWAY from a
+ * reference by k (note the sign — `v + (v - ref)*k` expands contrast rather
+ * than blending toward the reference), then clamp and store.
+ */
+export function contrastStep(px, o, ref, k) {
+  for (let i = 1; i < 4; i++) px[o + i] += (px[o + i] - ref) * k;
+  clamp4(px, o);
+}
+
+/**
+ * op11 — expand each pixel about its own channel mean, by an frsqrte curve of
+ * the operand's distance from 128, signed by which side of 128 it falls.
+ *
+ * The mask is 0xff: all three channels selected, all inverted, and the mean
+ * inverted again — which cancels to the plain mean. Implemented through
+ * combineChannels anyway, so the general case stays correct if a program ever
+ * uses a different mask.
+ */
+export function op11(s, [v]) {
+  let k = Math.sqrt(1 / (128 - Math.abs(v - 128)));   // frsqrte on hardware
+  if (v < 128) k = -k;
+  for (let i = 0; i < PIXELS; i++) {
+    const o = i * 4;
+    contrastStep(s.current, o, combineChannels(s.current, o, 0xff), k);
+  }
+}
+
+/** op12 — the same step about a fixed 128, with k derived from the operand. */
+export function op12(s, [v]) {
+  let k = v - 128;
+  if (v > 128) k += k;
+  if (v !== 128) k /= 128;
+  for (let i = 0; i < PIXELS; i++) contrastStep(s.current, i * 4, 128, k);
+}
+
 /** op18 — set the draw rectangle. op19 — reset it to the full surface. */
 export const op18 = (s, o) => { s.rect = [o[0], o[1], o[2], o[3]]; };
 export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 
 /** Opcodes whose bodies are specified but not yet written here. */
-export const UNIMPLEMENTED = new Set([0, 1, 2, 3, 4, 5, 6, 8, 9, 11, 12, 16, 17]);
+export const UNIMPLEMENTED = new Set([0, 1, 2, 3, 4, 5, 6, 8, 9, 16, 17]);
 
 /** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
 export function toARGB(surf) {
