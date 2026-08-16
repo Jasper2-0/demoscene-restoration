@@ -474,11 +474,24 @@ and the bytes at that address are `0x02 0x9b 0x5b …`, which decode to nothing
 sensible under any combination of those three. One of them is wrong and the
 reading does not say which.
 
-Do not resolve this by picking whichever seems likeliest. The four commits before
-this one each picked one and two of them had to be reversed. The cheap decisive
-move is to make the harness print `r4` and the first sixteen bytes it sees at
-entry to `_generate_scene`, and compare that against what `scenes.json` holds —
-which settles in one run what argument has not.
+Measured rather than argued. Resolving the pointer exactly as `export_scenes`
+does and dumping what is there:
+
+```
+  p3_9   0x10043087   06 53 5b ff 0f 00 80 00 51 80 00 83
+  p3_10  0x100436dc   02 9b 5b ff 0f 01 80 00 ff ff ff 80
+```
+
+The pointers match `scenes.json` exactly, so that is settled. And the first two
+bytes DIFFER per scene while `5b ff 0f` follows in both — which is the signature
+of a **header longer than the u16 length**, not of an opcode stream. A varying
+u16 followed by a fixed three bytes is a length and then something constant, and
+`0x5b` is that constant rather than an opcode that happens to be invalid twice.
+
+So the prologue's `lhz`/`addi` is real and the walk starts further in than
+`+2`. What sits between is the thing to identify, and two scenes is already
+enough to see it is fixed-width; dumping the same offsets across all 29 would
+show how far it runs.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
