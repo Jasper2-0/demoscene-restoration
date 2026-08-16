@@ -270,6 +270,84 @@ of seed data in seg 4 expands to about 3 MB of module per part.
 **A port therefore needs a DBM0 replayer plus these two generators** — and the
 generators now run byte-exactly without an Amiga.
 
+### DBM0 details, measured against the official spec
+
+The format is documented — "DBM0 Format Specification 1.4", digibooster.de — and
+the generated modules answer several things the spec leaves to the file.
+
+**The four bytes before `DBM0` are the generator's own framing, not the format.**
+`DBM0` sits at offset 0 *of the module*, exactly as the spec says. What precedes
+it is a **u32 length prefix carrying the module size**: `0x513e5a` = 5,324,378
+for part 1, `0x2e02ec` = 3,015,404 for part 3 — and the part-1 value is precisely
+the immediate `_generate_samples_part1` loads in its first two instructions. So
+the buffer layout is `[u32 size][DBM0 module]`. Do not build a parser around
+`DBM0` at offset 4.
+
+**Header:** version/revision reads `0x0221` — BCD **2.21**, which is the version
+DigiBooster Pro 2 development stopped at. The reserved word is `0xfc18` rather
+than 0; the spec says DigiBooster 3 always writes 0 there, so this is either a
+DBPro-2-era artifact or the generator not clearing it. Harmless, but a parser
+should not assert on it.
+
+**Chunk order is `NAME, INFO, SONG, INST, VENV, DSPE, PATT, SMPL`** — not the
+traditional save order, but legal: the loader only requires `INFO` before
+`SONG`/`INST`/`PATT`/`SMPL`. Key off chunk IDs, never position.
+
+**No `PENV` in either module.** The generator emits no panning envelopes, so the
+DBPro2-vs-DBPro3 panning-range difference (0…64 vs −128…128) does not arise here.
+
+**Samples are 8-bit.** Walking part 3's `SMPL`: **36 of 38 samples are one byte
+per frame**, two are empty. DigiBooster 3 converts everything to 16-bit on load,
+so it would have been easy to assume 16 — these are genuine DBPro-2-era 8-bit
+samples. Length fields count **frames**, not bytes.
+
+### The DSPE chunk — layout confirmed, parameters read
+
+Predicted layout `2 + N + 8` bytes (channel count, per-channel enables, four
+global u16s) matches both modules exactly, and the contents confirm it:
+
+| | size | channels | per-channel enables | delay | feedback | wet/dry | cross |
+|---|---|---|---|---|---|---|---|
+| part 1 | 28 | 18 | `010100000000000000000101000000000101` | 215 | 120 | 128 | 255 |
+| part 3 | 26 | 16 | `00010101010000000000000000000101` | 235 | 96 | 105 | 255 |
+
+Two things fall out. The echo is **not global** — it is enabled on a handful of
+channels per module, in bursts. And **cross-echo is 255 in both**, which per the
+OpenMPT documentation is full left/right ping-pong. That is an audible, specific
+character, not a subtle tail, so **the DSP echo is mandatory for the port**, not
+deferrable.
+
+Reproduce the documented original bug with it: a delay parameter of 0 yields
+~334 ms rather than the minimum. Neither module uses 0 (215 and 235), so it does
+not bite here — but a port that reimplements the parameter mapping should still
+get the curve right.
+
+The reference implementation to port from is libopenmpt's `Load_dbm.cpp` plus its
+DigiBooster Pro Echo plugin (BSD). UADE running the real `dbplayer` is the
+byte-exact ground truth if an A/B is ever needed.
+
+### OPEN RISK — the LVO table is still single-sourced
+
+Round two could not obtain an independent numeric offset→name table, and
+correctly declined to reconstruct one from the alphabetical autodoc. So **every
+Warp3D function name in this document is provisional**, resting on
+ReWarp3DPPC's `VecTable68K[]` alone. The internal consistency (6-byte spacing,
+all offsets ≡ 0 mod 6 from −30) is not confirmation — a scrambled ordering would
+look identical.
+
+To settle it, read `workbench/libs/warp3d/warp3d.conf` from
+`github.com/aros-development-team/AROS` (the `##begin functionlist` block is in
+canonical vector order, first entry −30, −6 per entry), or an NDK
+`warp3d_lib.fd`. Check these seven; all must match:
+
+```
+  -30 CreateContext   -36 DestroyContext   -48 SetState      -60 LockHardware
+  -66 UnLockHardware  -168 DrawTriFan      -450 ClearDrawRegion
+```
+
+If **any** row disagrees, every call-site name here must be re-derived before the
+renderer analysis is trusted.
+
 ## Texture opcodes — first pass
 
 `texops.py` synthesises one-opcode programs (`[u16 len][op][operands]`, operand
