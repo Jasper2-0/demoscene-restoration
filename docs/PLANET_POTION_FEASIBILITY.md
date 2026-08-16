@@ -420,11 +420,66 @@ population — almost always overrun. Re-testing that population against the
 *geometry* VM's widths instead does no better (21%), so it is not simply the
 object streams misfiled.
 
-The explanation is almost certainly the one already seen on the geometry side:
-those widths are a **base** count, and individual handlers consume conditionally
-— `op0` there takes 6 *or* 8 bytes depending on a sign bit. Finishing the decode
-means reading the conditional advances out of the 17 texture handlers, the same
-exercise already done for the five geometry ones. Bounded work, not a wall.
+That guess was wrong, and the real answer was in the dispatch rather than in the
+handlers. The texture handlers never touch the stream pointer at all; the loop
+advances it once, unconditionally:
+
+```asm
+  add   r31, r31, r23        ; r31 = pc, r23 = operand count
+  b     loop
+```
+
+`r23` normally comes from the byte table — but the special path for the shared
+`0x50..0x78` range sets `li r23, 0` before jumping there. **Those 41 opcodes take
+no operands at all**, whatever the table says. Applying that single rule takes
+the decode from 37/76 to 50/76, and the split is total:
+
+| flag (bit 15 of the length word) | programs | exact decode |
+|---|---|---|
+| **1** | 44 | **44 — 100%** |
+| 0 | 32 | 6 — 18% |
+
+**So bit 15 selects the language, and the texture language is fully decoded**:
+44 programs, 331 operations, every one landing exactly on its program boundary.
+Programs run 1 to 13 operations — about 7.5 on average.
+
+#### The texture language, disassembled
+
+Program 16 in full, as the decoder emits it:
+
+```
+  op 18 [0, 0, 64, 64]                          set rect
+  op  8 [0,0,0, 0,0,0, 0,255,0, 0,0,34, 32,32,12, 22,30,1]
+  op 18 [0, 64, 128, 128]                       set rect
+  op  2 [0,0,0, 255,0,0, 0,0, 64,64, 10, 85, 4]
+  op 18 [64, 0, 70, 128]                        set rect
+  op  2 [0,0,0, 255,0,0, 0,0, 64,64, 10, 85, 8]
+  op 18 [70, 0, 128, 63]                        set rect
+  op  9 [0,0,0, 198, 0,0,0, 34, 0,111,255, 120]
+  op  2 [255,0,0, 0,0,0, 0,0, 98,32,15,49, 0]
+  op 19 []
+  op 13 [4]
+  op 17 [0, 0, 0]
+```
+
+**`op 18` takes four operands and they are a rectangle.** `(0,0,64,64)`,
+`(0,64,128,128)`, `(64,0,70,128)`, `(70,0,128,63)` — all inside the 128×128
+texture, and they alternate strictly with the operations that follow them. That
+is confirmed rather than inferred: the main loop reads its pixel bounds from the
+four bytes at `r2+0x25a6..0x25a9`, which the prologue initialises to
+`(0, 0, 128, 128)`, and `op 18` is the only thing that could be writing them.
+
+So the control structure is **set-rect, apply-operation, set-rect,
+apply-operation** — a 128×128 canvas with a scissor. The 3-, 12- and 18-operand
+opcodes carry RGB triples (`255,0,0`, `0,255,0`, `0,111,255`), so most of the
+vocabulary is coloured fills, gradients and blends over a sub-rectangle.
+
+The 32 flag=0 programs remain undecoded. Their opcodes are all in `0..4`, which
+is exactly the geometry VM's range, and their overruns are mostly small (1, 2, 6,
+7 bytes), so they are close to a variable-width geometry read — but the widths
+measured from those five handlers only get 21% of them, so something there is
+still incomplete. That is the next thread, and it is now the *only* undecoded
+container in seg 3.
 
 By contrast seg 4 is 63% covered by its 32 streams with no gap over 64 bytes, so
 its remainder is interstitial rather than a second block.
