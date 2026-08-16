@@ -632,9 +632,37 @@ record *is* the emitter's vertex-pointer array — count at `+0`, pointers from
 
 `+0x12` non-zero runs a cross product over the first three vertices and tests
 its sign, skipping the face when it points the wrong way — **backface culling**,
-with `1` and `2` selecting which side. `+0x10` then picks the shading: mode 2
-scales RGB by `|face[0x50]|` before emitting, mode 3 goes through a separate
-routine at `0x10006014`, and 0 and 4 share the default at `0x10005eec`.
+with `1` and `2` selecting which side.
+
+#### The shading, which is modulate-and-clamp and nothing more
+
+`+0x10` picks between two routines, and both write the source-vertex colour the
+emitter later copies. Per vertex, with the face's RGBA in `f24, f5, f4, f3`:
+
+```c
+  /* 0x10005eec — modes 0 and 4 */
+  v[0x0c] = min(faceA * v[0x40], 1.0);      /* alpha */
+  v[0x10] = min(faceR * v[0x44], 1.0);      /* r     */
+  v[0x14] = min(faceG * v[0x48], 1.0);
+  v[0x18] = min(faceB * v[0x4c], 1.0);
+
+  /* 0x10006014 — mode 3, the same with a per-VERTEX intensity */
+  k = fabs(v[0x64]);
+  v[0x10] = min(faceR * v[0x44] * k, 1.0);  /* alpha is NOT scaled */
+```
+
+and mode 2 is the default routine with the face's own RGB pre-scaled by
+`|face[0x50]|`. So the three shading modes are **none**, **flat** (per-face
+intensity) and **Gouraud** (per-vertex intensity), over a plain multiply of face
+colour by the vertex's own material at `+0x40…+0x4c`.
+
+There is no lighting equation at draw time — the intensities are computed
+earlier, from the normals that the evaluate pass renormalises. And the clamp is
+one-sided: `fsel` against 1.0 caps the top, nothing catches a negative.
+
+The destinations `+0x0c`, `+0x10`, `+0x14`, `+0x18` are exactly the alpha and RGB
+fields of the 36-byte source vertex measured from the emitter side, which is a
+free confirmation of that layout from the opposite direction.
 
 **Slot 6 is the camera, and it is gated.** It opens by comparing `node+0x34`
 against `r2+0x282e` — the global camera index that `_play_scene_new_camera` sets
@@ -712,13 +740,20 @@ t=52.
 
 **Two vertex layouts, both measured.**
 
-| source vertex — 36 bytes | | `W3D_Vertex` — 64 bytes | |
+| source vertex | | `W3D_Vertex` — 64 bytes | |
 |---|---|---|---|
 | `+0x00` | `x y z` | `+0x00` | `float x, y` |
 | `+0x0c` | `alpha` (primitive-wide) | `+0x08` | `double z` |
 | `+0x10` | `r g b` | `+0x10` | `float w` |
 | `+0x1c` | `u v` | `+0x14` | `float u, v` |
-| | | `+0x20` | `float r, g, b, a` |
+| `+0x24` | object-space position | `+0x20` | `float r, g, b, a` |
+| `+0x3a` | normal (unaligned) | | |
+| `+0x40` | the vertex's own RGBA material | | |
+| `+0x64` | per-vertex light intensity | | |
+
+The first 36 bytes are what the clipper copies and the emitter reads; the record
+itself is longer, and the fields above `+0x24` are what the geometry evaluate and
+shading passes work on.
 
 36 is confirmed independently: `_init_scene_show` builds two arrays of 100 clip
 vertices on **`0x24`-byte centres**.
