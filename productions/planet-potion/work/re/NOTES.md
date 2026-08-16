@@ -1828,6 +1828,7 @@ to `/dev/null` is what hid it.
 | `runscene.py` | runs the scene interpreter; dumps the typed draw-node graph |
 | `drawlog.py` | runs `_show_scene` with recording vector stubs; dumps the draw stream and, with `nodes=True`, the per-frame scene graph |
 | `runsynth.py` | runs the softsynth; returns the generated DBM0 module |
+| `speccheck.py` | re-derives PORT_SPEC's numbers from the binary and greps the doc for superseded ones; exits non-zero on drift |
 | `synthhash.py` | pins both modules' size, SHA-256 and per-chunk digests — the audio acceptance test. Slow: minutes per module, so it is not part of `export.py` |
 | `dbmpatt.py` | unpacks DBM0 song and pattern data; finds the scene-advance signals |
 | `showorder.py` | the show schedule: call order from the code, durations from the music |
