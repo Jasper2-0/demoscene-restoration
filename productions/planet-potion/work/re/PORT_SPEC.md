@@ -396,8 +396,14 @@ character outside the 40 — and `0x10002e78`, the word `ppcrun.fix_glyph_scan`
 patches so the harness can run the two text scenes at all, is inside it. Three
 separate parts of this document meet at that instruction.
 
-**Scene op 5 is a one-line handler** — `0x10002f14` is `bl 0x100027b8` and
-nothing else, so whatever it does lives entirely in that shared routine.
+**Scene op 5 consumes no operands either.** `0x10002f14` is `bl 0x100027b8` and
+nothing else, and that routine — all 668 bytes of it — contains **zero
+references to `r31`**, the stream cursor. Whatever it builds, it builds from
+`node+0x04` and the `0x6c`-byte records it allocates, not from the stream.
+
+So four of the seven ops (0, 1, 2, 5) are a bare opcode byte, and only 3, 4 and
+6 carry operands. **That is the whole stream grammar a decoder needs**, except
+for how op 4 reads its string.
 
 **Cameras (scene op 6) are numbered per scene, from zero**, and `0x10002f24`
 is that claim in four instructions: `lbz r3, 0x29af(r2)`, `stw r3, 0x34(r27)`,
