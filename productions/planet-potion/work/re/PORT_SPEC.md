@@ -265,6 +265,18 @@ It is the only handler that reaches `+0x54`, so its parameter block is at least
 contains an `fcmpo`, so it was unreadable before the resync fix; the comparison
 that selects the band is precisely the instruction capstone could not decode.
 
+**`op16` is a literal upload**, which is why its operand count is the sentinel
+127 rather than a number. It walks a byte pointer held in a global
+(`r2+0x24ce`), converts each byte with `int2float`, and stores it as a float into
+the surface until the destination reaches its end — `lbzu` in, `stfsu` out. The
+pixel data *is* the operand stream, so the count cannot be static.
+
+**`op4` reads its single operand byte as four 2-bit selectors.** Each loop
+iteration extracts two of them (`rlwinm …,3,27,28` then `…,1,27,28`, both scaled
+by 8, so they index 8-byte records), calls `0x10000880` once in the `r30 → r28`
+direction and once in `r28 → r30`, shifts the byte right by 4, and repeats while
+anything remains. A zero operand therefore does nothing at all.
+
 Read so far:
 `op10` permutes channels by two swaps, `op11` applies an `frsqrte` curve about
 128, `op12` is `out = in + (in − 128)·k` with `k = (operand − 128)/128` doubled
