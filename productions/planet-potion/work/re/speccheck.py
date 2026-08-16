@@ -171,6 +171,25 @@ def main():
                  and ((word(BASE + a) >> 1) & 0x3ff) in fpscr)
     check('nothing writes FPSCR, so the rounding mode is the default', writes, 0)
 
+    # --- the scene VM's tables, which section 4a now rests on
+    #
+    # The eight-entry handler table and the -1 at index 7 were measured by
+    # patching, and the boundary between the handler and size tables is
+    # arithmetic. Guard all three: a rebuild against a different dump, or a
+    # rewrite of section 4a that drops them, should fail here.
+    SCENE_HANDLERS, SCENE_SIZES = 0x28aa, 0x28ca
+    check('scene handler and size tables are 0x20 apart — eight entries',
+          SCENE_SIZES - SCENE_HANDLERS, 0x20)
+    handlers = [struct.unpack_from('>I', d0, R2 + SCENE_HANDLERS - BASE + 4 * i)[0]
+                for i in range(8)]
+    check('scene handler 7 is -1 — the synthesised root has no handler',
+          handlers[7], 0xFFFFFFFF)
+    check('scene handlers 0..6 all point into the code segment',
+          all(CODE[0] <= h - BASE < CODE[1] for h in handlers[:7]), True)
+    sizes = list(struct.unpack_from('>8H', d0, R2 + SCENE_SIZES - BASE))
+    check('scene node sizes, one per opcode', sizes,
+          [44, 48, 52, 108, 212, 44, 56, 60])
+
     # --- and now the document itself. Everything above passes by construction:
     # the checker and the spec were written together. What actually goes wrong is
     # the PROSE drifting from the binary, so read the spec back and require the
