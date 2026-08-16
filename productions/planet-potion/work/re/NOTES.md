@@ -559,6 +559,48 @@ Three things had to be arranged, and each is a fact about the program:
   scenes re-recorded across the change hash identically, so the fix is a guard,
   not a change of behaviour.
 
+### The render handlers
+
+The seven-slot table at `0x1000aa20` resolves to six bodies, and between the
+emitter and these the whole draw side is accounted for.
+
+| slot | at | what |
+|---|---|---|
+| 0 | `0x10005de8` | line strip — sets `r15` to the `DrawLineStrip` vector, `r22 = 2` |
+| 1, 2 | `0x10005e00` | triangle fan — `r15 = DrawTriFan`, `r22 = 3` (**one body, two slots**) |
+| 3 | `0x10005ddc` | picks fan or line strip on `node+0x68`, then falls into them |
+| 4 | `0x10005e18` | text: walks `node+0x30` and emits one fan per glyph |
+| 5 | `0x100061a0` | meshes — the workhorse |
+| 6 | `0x1000644c` | the camera |
+
+**Slot 5 is a two-level walk with per-face state.** Objects hang off `node+0x24`
+chained by `+0x60`; faces hang off each object chained by `+0x5c`. And the face
+record *is* the emitter's vertex-pointer array — count at `+0`, pointers from
+`+4` — which is why the handler can end with `r19 = r17` and call straight into
+`0x10006630`.
+
+```
+  face +0x00  vertex count          +0x2c  alpha
+       +0x04  vertex pointers       +0x30  r, g, b
+       +0x10  shading mode          +0x50  intensity scalar
+       +0x12  cull flag             +0x54  texture
+       +0x58  draw vector           +0x5c  next face
+```
+
+`+0x12` non-zero runs a cross product over the first three vertices and tests
+its sign, skipping the face when it points the wrong way — **backface culling**,
+with `1` and `2` selecting which side. `+0x10` then picks the shading: mode 2
+scales RGB by `|face[0x50]|` before emitting, mode 3 goes through a separate
+routine at `0x10006014`, and 0 and 4 share the default at `0x10005eec`.
+
+**Slot 6 is the camera, and it is gated.** It opens by comparing `node+0x34`
+against `r2+0x282e` — the global camera index that `_play_scene_new_camera` sets
+— and returns immediately when they differ. That is why type 6 appears exactly
+once in part one and never in part three: it is not a drawn object, it is the
+node that installs a viewpoint, and part one's camera sequence is the only place
+that switches. It optionally clears a region first (`node+0x30`), then loads a
+transform from the object at `node+0x2c`.
+
 ### The vertex pipeline, in closed form
 
 The emitter at `0x10006630` is the whole of it. Reading it settles the
