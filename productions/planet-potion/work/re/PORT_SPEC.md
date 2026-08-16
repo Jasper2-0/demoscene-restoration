@@ -277,6 +277,22 @@ by 8, so they index 8-byte records), calls `0x10000880` once in the `r30 → r28
 direction and once in `r28 → r30`, shifts the byte right by 4, and repeats while
 anything remains. A zero operand therefore does nothing at all.
 
+**`op0` and `op17` share `0x10000acc`** and differ in two places, both keyed on
+`cmpwi cr4, r21, 0x11`. `op0` makes an extra `bnel` call into `0x100007a4` with a
+global constant block at `r2+0x24d2` before the loop; `op17` skips it. Inside the
+per-pixel loop `op17` *resets* the four channel accumulators from `f22/f21/f20/f19`
+before storing, and `op0` does not. So `op17` writes a constant and `op0`
+accumulates — which is exactly what the differential runs saw from outside
+(`op17` fills solid, `op0` darkens hard) and is now the reason rather than the
+observation.
+
+**`op1` is a two-point gradient.** It first builds eight scaled differences
+between the float vectors at `r22+0x10` and `r22+0x30`, storing them at
+`r22+0x50` — `lfsu`/`stfsu` walking both in step. It then reads four operand
+bytes, of which **two are shifted left by 7** — multiplied by the 128-pixel row
+stride — so those two are row coordinates and the other two are columns. Two
+endpoints, eight interpolants, one fill.
+
 Read so far:
 `op10` permutes channels by two swaps, `op11` applies an `frsqrte` curve about
 128, `op12` is `out = in + (in − 128)·k` with `k = (operand − 128)/128` doubled
