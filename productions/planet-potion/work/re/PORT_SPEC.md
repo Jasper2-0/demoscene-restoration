@@ -357,6 +357,22 @@ Sub-objects chain on `+0x74`, which is the same chain `_restore_time` walks when
 it rebases a scene's clock — so the animation and the geometry hang off one
 structure.
 
+**The scene stream has exactly three operand widths**, and every handler reads
+through one of four four-instruction routines:
+
+| | | |
+|---|---|---|
+| `0x10002738` | `lbz` | **u8**, advance 1 |
+| `0x10002744` | `lha` | **s16**, advance 2 — signed |
+| `0x1000274c` | `lhz` | **u16**, advance 2 — unsigned |
+| `0x10002754` | — | convert what is already in `r26`, no read |
+
+All three fall into `0x10002754`, which is `int2float`: **every operand becomes a
+float**, whatever its width. That is why op 3's `p2` and `p3` carry no flags —
+they are read with `lbz`, so there are no spare high bits to carry any, while
+`p0`, `p1` and `p4` come through `lhz` and have room for the `0x4000`, `0x8000`
+and `0x8000` bits the handler extracts.
+
 **Scene op 4 is the text builder**, `0x10002e10`. It stores **1** at `node+0x20`
 where op 3 stores 0, so that field is a kind flag rather than a pointer; links
 the animation object through `+0x74` and `node+0x24`; and then, per character,
