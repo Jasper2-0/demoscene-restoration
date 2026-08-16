@@ -1643,7 +1643,19 @@ Warp3D-4.0.lha   a1da7fd863dd69c667f7d1f1bd07a4c80df985f600741acb505732cb30183df
 Warp3D-4.2a.lha  68a18bc7b20f0b47b1401855c0e0021604e0be18a4cbf9b86780fbf9d692ff77
 ```
 
-## Texture opcodes — first pass
+## Texture opcodes — first and second pass, **superseded**
+
+> These two tables are the differential passes, kept because they are how the
+> texture VM was first opened up and because the later readings are corrections
+> *of* them. **Eight of their twenty labels are wrong** — see "Reading the
+> handlers beats the behavioural pass" above, and `texprobe.py` for the measured
+> per-operand map. `op13` does not drive alpha, it fills the mask; `op10` is a
+> channel permutation, not a darken; `op14`/`op15` act on the mask, not alpha.
+>
+> One thing here was right and got rediscovered the hard way: the first-pass note
+> that **`op3` loops forever on all-zero operands**. `texprobe.py` found the same
+> hang months of work later, and narrowing it to exactly zero was the only new
+> part. Worth remembering that the crude pass had already recorded it.
 
 `texops.py` synthesises one-opcode programs (`[u16 len][op][operands]`, operand
 count from the table at `0x1000a500`) and renders each with operands all `0x00`
