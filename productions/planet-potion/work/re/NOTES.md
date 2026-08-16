@@ -320,29 +320,36 @@ labels are hypotheses, and eight of them are now replaced.
 `r11` and `r12`, then `rlwinm` to take a byte and `int2float` — a small
 pseudo-random generator, which is what `op9` draws on.
 
-#### `op9` is lattice noise, and it explains the whole language
+#### `op9` — a lattice reading that the test destroyed
 
-```
-  b   = byte[operands+8]
-  stepX = 8 << ((b & 0xf) + 1)          /* 16, 32, 64, … */
-  stepY = 8 << ((b >> 4)  + 1)
-  for y in 0, stepY, 2*stepY, …:
-      for x in 0, stepX, …:
-          for each of four channels:
-              channel += PRNG() * scale                /* fmadd */
-          store clamped at (y << 7) + x
-```
+The handler reads a byte at `operands+8`, splits it into nibbles, and builds two
+counters that start at 8 and double once per nibble unit. It then calls the PRNG
+**four times per iteration**, `fmadd`s each result into one channel, and stores
+through the clamp routine at `(r24 << 7) + r25 + r28`.
 
-So it does **not** fill the surface. It writes random values on a **sparse
-lattice** — every 16th, 32nd or 64th pixel on each axis independently, with a
-per-channel amplitude from the operands at `+9`, `+10`, `+11`.
+From that I concluded the counters were X and Y **strides** — that `op9` seeds a
+sparse lattice every 16th, 32nd or 64th pixel, and that the blur kernels exist to
+interpolate it. It was a tidy story: it explained why seventeen of the forty
+kernels are blurs and why the addressing wraps.
 
-That reframes the texture language. A program seeds a coarse random lattice,
-then runs blur convolutions to interpolate it into smooth fields, then adjusts
-contrast and permutes channels — the classic plasma/clouds recipe. It is why
-seventeen of the forty kernels are blurs, why the addressing wraps, and why
-`op9` opens every program in the probe: **the convolutions are the interpolator**,
-not a decorative filter stage.
+**It is wrong.** The reading makes a sharp prediction — operand `0x00` should
+light 64 pixels, `0x11` sixteen, `0x22` four — and running `op9` with
+`operands[8]` set to `0x00`, `0x11`, `0x22`, `0x33`, `0x40` and `0x44` gives
+**16,384 lit pixels with spacing 1 in every case**. The surface comes out fully
+populated whatever the nibbles say.
+
+So the nibbles do something else, and the addressing is not what I read either:
+`(r24 << 7)` is 128 per unit against a 16-byte pixel, which is 8 pixels, not a
+row. Both the stride story and the pixel-index story fail together.
+
+What stands is only what the instructions show: a byte at `+8` split into
+nibbles driving two doubling counters, four PRNG draws per iteration `fmadd`ed
+into four channels, and a clamped store. **What the nibbles control is open.**
+
+This is the second interpretation in this session that a test destroyed — the
+first being the six silent scenes — and in both cases the test was worth more
+than the interpretation. The pattern is the same: a reading that explains a lot
+at once, believed because it is satisfying rather than because it was checked.
 
 They are **generated at run time**, not static: `_generate`'s prologue calls
 `0x1000067c` with `r31 = r2+0x2516` before anything else, and the table lives in
