@@ -74,6 +74,11 @@ def decode(segs, addr, limit=4096):
         if op > 6:
             return ops, f'byte {op:#04x} at {p:#010x} is not an opcode'
         p += 1
+        # EVERY node but the root also carries a RESOURCE byte before its own
+        # operands — the block at 0x10002250 that types other than 7 fall
+        # through. Leaving it out is why every earlier version of this table
+        # counted one byte per node too few.
+        p += 1
         if op == 4:
             n = byte_at(segs, p)
             p += 1 + n                     # the length byte, then that many

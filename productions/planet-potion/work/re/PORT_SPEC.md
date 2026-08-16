@@ -579,7 +579,12 @@ So a node is `opcode byte, resource byte, then the handler's own operands`, and
 up from a table by that byte. Type 6 skips the lookup but still consumes the
 byte; type 7 skips both.
 
-Every width table in this section counted one byte per node too few.
+Every width table in this section counted one byte per node too few — and adding
+it **still does not make `scenegram.py` walk a stream**: 0/29, dying at the same
+byte. So the resource byte is real and is not the whole gap. The root evidently
+consumes something too, or the length is not at offset 0, or `_generate_scene` is
+entered somewhere other than its symbol. All three are measurable and none of
+them are worth another round of reading first.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
