@@ -425,12 +425,68 @@ export function op16(s, _ops, src = null) {
   for (let i = 0; i < PIXELS * 4; i++) s.current[i] = src ? src[i] : 0;
 }
 
+/**
+ * 0x10000990 — normalise a distance into a falloff and shape it. Four curves,
+ * selected by the low two bits of the mode byte:
+ *   0 linear, 1 ease-out, 2 ease-in, 3 smoothstep as two quadratic halves.
+ */
+export function falloff(dist, start, span, mode) {
+  let t = Math.max(dist - start, 0);
+  if (t > span) t = span;
+  t /= span;
+  switch (mode & 3) {
+    case 1: t = 1 - (1 - t) ** 2; break;
+    case 2: t = t * t; break;
+    case 3: t = t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) ** 2; break;
+    default: break;
+  }
+  return t;
+}
+
+/**
+ * 0x1000093c — the distance field. Note the square root is fres(frsqrte(x)) on
+ * hardware, two estimates deep; here it is exact, which is the largest single
+ * fidelity gap in the texture path (see section 6).
+ */
+export function distance(dx, dy, mode) {
+  if (mode & 4) dy = 0;
+  if (mode & 8) dx = 0;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/**
+ * op2 — a shaped gradient blended over the surface, and one half of the
+ * bump-lighting pair. 13 operands: colour A (0..3), colour B (4..7), the field
+ * centre (8, 9), the falloff start and end (10, 11), and a mode byte (12) that
+ * carries both the distance mode and the curve.
+ *
+ * The handler turns B into a DELTA before the loop — scaledDiff(A, B, 1.0)
+ * stored back over B — so the per-pixel step is A + (B-A)*t, and then the result
+ * is blended rather than written.
+ */
+export function op2(s, ops) {
+  const A = ops.slice(0, 4);
+  const delta = [0, 1, 2, 3].map((i) => ops[4 + i] - ops[i]);
+  const [cx, cy] = [ops[8], ops[9]];
+  const start = ops[10], span = (ops[11] - ops[10]) || 1;
+  const mode = ops[12];
+  const shaded = new Float32Array(4);
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const t = falloff(distance(x - cx, y - cy, mode), start, span, mode);
+      for (let c = 0; c < 4; c++) shaded[c] = A[c] + delta[c] * t;
+      clamp4(shaded, 0);
+      blend(s.current, (y * SIZE + x) * 4, shaded, 0);
+    }
+  }
+}
+
 /** op18 — set the draw rectangle. op19 — reset it to the full surface. */
 export const op18 = (s, o) => { s.rect = [o[0], o[1], o[2], o[3]]; };
 export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 
 /** Opcodes whose bodies are specified but not yet written here. */
-export const UNIMPLEMENTED = new Set([1, 2, 6, 8]);
+export const UNIMPLEMENTED = new Set([1, 6, 8]);
 
 /** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
 export function toARGB(surf) {
