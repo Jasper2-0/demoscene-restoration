@@ -428,7 +428,17 @@ the time origin. The defaults it writes into the channel block are
 `cx = cy = 320.0` at `+0x54`/`+0x5c` and `240.0` at `+0x58` — the screen centre
 for a 640x480 target — and `flags2 = 0x40`, which is **loop mode 2, clamp**.
 
-The handler runs on to `0x10002e10` and its tail is still unread.
+The handler's body is a run of these blocks to `0x10002e04`, the last pair using
+the two smallest insets in swapped roles — consistent with each corner getting a
+pair. It ends `stw r11, 0x20(r27)` and branches to the common tail at
+`0x10002f8c`.
+
+**`node+0x20` is the same field §3c's type-5 path reads** (`lwz r26, 0x20(r14)`)
+before transforming what it finds there. `r11` is initialised to 0 at
+`0x10002b80`; whether it accumulates the allocated sub-objects along the way is
+**not established** — the intervening blocks were not read instruction by
+instruction, and this is exactly the kind of gap where a plausible guess has
+already cost time once in this section.
 
 ### 4b. Geometry is built once — only one opcode evaluates per frame
 
