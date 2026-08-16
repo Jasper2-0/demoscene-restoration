@@ -1247,6 +1247,24 @@ their own — which is where the missing state for those is most likely to be.
 A capture is still what proves the port *looks* right. It is no longer what tells
 us what the show is.
 
+### And the sync model, which is one halfword
+
+`_calc_matrix` — the per-frame pass, the last unread subsystem — turns out to be
+a **cubic keyframe engine whose tracks are retriggered by the music**. Each node
+carries a trigger value at `+0x70`; every frame the evaluator compares it against
+`r2+0x23bc`, the value `dbplayer.library` reported through the 68K side, and on a
+match restarts that node's track.
+
+Driving that halfword directly and recording a frame confirms it: scene `0x25ba`
+renders identically for signals 0, 1 and 11 and differently for 2, 3, 4 and 10;
+scene `0x277a` responds to 2 and 3 in two different ways. Those are exactly the
+effect-7 parameter values measured in the generated modules — 1 advances the
+scene, the rest retrigger animation.
+
+So there is no beat detection to write and no separate event timeline to
+recover. The whole audio-visual sync is one halfword per frame against one byte
+per node, and both ends of it are now measured.
+
 ### The one true gate
 
 **A reference capture.** Nothing can be *scored* against the original without a

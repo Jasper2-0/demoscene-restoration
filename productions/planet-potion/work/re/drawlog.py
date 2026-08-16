@@ -33,6 +33,7 @@ CALC_MATRIX, SHOW_SCENE = 0x10004f0c, 0x10005d28
 
 G_W3DBASE, G_CONTEXT, G_HEAD, G_TIME = 0x1000a348, 0x1000a36c, 0x1000a898, 0x1000a860
 G_OVER = 0x1000a8a0                     # r2+0x28a2 — the synchro overlay's graph
+G_SIGNAL = 0x1000a3ba                   # r2+0x23bc — the music signal, per frame
 
 W3DBASE = 0x20500000
 BLRSTUB = 0x20402040          # halves identical — see runscene.py
@@ -87,6 +88,7 @@ def mr(d, s):        return (31 << 26) | (s << 21) | (d << 16) | (s << 11) | (44
 def subf(d, a, b):   return (31 << 26) | (d << 21) | (a << 16) | (b << 11) | (40 << 1)
 def lhz(d, a, o):    return (40 << 26) | (d << 21) | (a << 16) | (o & 0xFFFF)
 def lbz(d, a, o):    return (34 << 26) | (d << 21) | (a << 16) | (o & 0xFFFF)
+def sth(s_, a, o):   return (44 << 26) | (s_ << 21) | (a << 16) | (o & 0xFFFF)
 def blr():           return (19 << 26) | (20 << 21) | (16 << 1)
 def b(off):          return (18 << 26) | (off & 0x03FFFFFC)
 
@@ -130,7 +132,7 @@ def drawrec():
     return c + H.load32(3, FAKEOBJ) + [blr()]
 
 
-def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None):
+def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None, signal=None):
     c = []
     c += H.load32(1, H.STACK) + H.load32(2, R2) + H.load32(13, H.STACK - 0x1000)
 
@@ -187,6 +189,11 @@ def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None):
     c += [H.li(0, 0)] + H.load32(3, 0) + H.call32(12, RECORDER)
     for t in frames:
         c += H.load32(5, t) + H.load32(6, G_TIME) + [stw(5, 6, 0)]
+        if signal is not None:
+            # What the 68K frame routine leaves at r2+0x23bc: the value
+            # dbplayer.library reported this frame. The keyframe evaluator
+            # compares it against each node's trigger byte at node+0x70.
+            c += H.load32(5, signal) + H.load32(6, G_SIGNAL) + [sth(5, 6, 0)]
         for glob in ((G_OVER, G_HEAD) if overlay else (G_HEAD,)):
             c += H.load32(3, t) + H.load32(4, glob) + [lwz(4, 4, 0)]
             c += H.call32(12, CALC_MATRIX)
@@ -210,8 +217,8 @@ def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None):
 
 
 def run(stream, frames=(0,), txt_tab=0x2642, obj_tab=0x2706, timeout=240, stop=99,
-        overlay=None):
-    stub = build(stream, frames, txt_tab, obj_tab, stop, overlay)
+        overlay=None, signal=None):
+    stub = build(stream, frames, txt_tab, obj_tab, stop, overlay, signal)
     segs = H.read_layout(FLAT)
     pieces = [(va, (None if fn is None else H.load_seg(FLAT, fn, va)), sz)
               for va, sz, fn in segs]

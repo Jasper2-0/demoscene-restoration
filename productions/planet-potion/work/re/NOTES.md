@@ -518,6 +518,61 @@ resolution is in the data, not assumed. Output ping-pongs between the two
 primitive left with fewer than `r22` vertices (3 for fans, 2 for line strips) is
 dropped.
 
+### `_calc_matrix` is a keyframe engine, and the music drives it
+
+The per-frame pass was the last unread subsystem. Its first helper
+(`0x10004fdc`) is an **animation evaluator over keyframe tracks**, and the shape
+is legible even where the details are not yet settled.
+
+Per node:
+
+| field | meaning |
+|---|---|
+| `+0x08` | head of the keyframe track |
+| `+0x6c` | time origin — what `_restore_time` writes |
+| `+0x70` | **music trigger value** |
+| `+0x02`, `+0x03` | flag bytes; loop mode is bits `0xe0` of `+0x02` |
+
+Local time is `frame - node[0x6c]`, converted with `int2float`. The loop modes
+(`0x20`, `0x40`, `0x60`, `0x80`, `0xa0`, `0xe0`) are implemented by subtracting
+keyframe spans from that local time before the search — hold, restart, and
+multi-key wrap variants.
+
+Keyframes are `0x100` bytes: `u16` time at `+0`, flags at `+2`, a float at `+4`,
+a rate at `+8`, then **16-byte cubic coefficient blocks** from `+0x0c` onward
+(`+0x0c`, `+0x1c`, `+0x2c`, `+0x3c`, …). The evaluator at `0x10005944` is handed
+one block plus `u`, `u²` and `u³`, so the interpolation is **cubic**, not linear.
+Results land at `node+0x3c` and up. Two next-pointers appear, at `+0xfc` and
+`+0x100`; the search walks `+0xfc` and the loop modes walk `+0x100`, and which
+is which is not yet settled.
+
+**The music trigger is the interesting part.** The evaluator reads
+`lhz r3, 0x23bc(r2)` — the value the 68K frame routine stores from
+`dbplayer.library` every frame — and compares it against the node's `+0x70`. On
+a match it sets `node[0x6c]` to the current frame and restarts the track. So
+node animations are **retriggered by the music**, through the same halfword that
+carries the scene-advance signal.
+
+That is testable, and it tests true. Driving `r2+0x23bc` directly and recording
+one frame:
+
+```
+scene 0x25ba   signal 0, 1, 11 -> 86 draws, identical
+               signal 2, 3, 4, 10 -> 87 draws, identical to each other
+scene 0x277a   signal 2 -> a different frame;  signal 3 -> different again,
+               33 draws;  0, 1, 4, 10, 11 -> baseline
+```
+
+Which closes the loop with the module data. Effect 7's parameters measured in
+the patterns are **0, 1, 2, 3, 4, 10 and 11** — value 1 advances the scene, and
+the others are exactly this retrigger vocabulary. Both halves are now measured
+rather than assumed: which values the music emits, and what each does to the
+picture.
+
+For a port this is the sync model in full. There is no separate beat detection
+and no timeline of animation events — one halfword per frame, compared against a
+byte per node.
+
 ### Scene length comes from the music — and the schedule comes out whole
 
 Every scene driver — `_play_scene`, `_play_scene_synchro`, `_play_scene_dalej`,
