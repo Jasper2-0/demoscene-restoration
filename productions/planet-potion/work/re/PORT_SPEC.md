@@ -357,6 +357,19 @@ Sub-objects chain on `+0x74`, which is the same chain `_restore_time` walks when
 it rebases a scene's clock — so the animation and the geometry hang off one
 structure.
 
+**Scene op 4 is the text builder**, `0x10002e10`. It stores **1** at `node+0x20`
+where op 3 stores 0, so that field is a kind flag rather than a pointer; links
+the animation object through `+0x74` and `node+0x24`; and then, per character,
+does `cmpwi r26, 0x41` / `cmpwi cr1, r26, 0x5a` and `addi r26, r26, 0x20` —
+**folding `A`–`Z` to lower case before the glyph lookup**, keeping a flag in `r8`
+for whether it folded. So the 40-entry glyph table holds one case, and the two
+cases differ only by whatever that flag selects.
+
+The lookup that follows, at `r2+0x28e2`, is the scan §9 records as a hang for any
+character outside the 40 — and `0x10002e78`, the word `ppcrun.fix_glyph_scan`
+patches so the harness can run the two text scenes at all, is inside it. Three
+separate parts of this document meet at that instruction.
+
 **Scene op 5 is a one-line handler** — `0x10002f14` is `bl 0x100027b8` and
 nothing else, so whatever it does lives entirely in that shared routine.
 
