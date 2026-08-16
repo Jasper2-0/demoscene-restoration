@@ -292,12 +292,48 @@ export function op9(s, ops) {
   for (let i = 0; i < PIXELS; i++) blend(s.current, i * 4, buf, i * 4);
 }
 
+/**
+ * op0 and op17 share 0x10000acc and differ in two places, both keyed on
+ * comparing the opcode against 17.
+ *
+ *   op0   dst = clamp(dst + src)     — accumulate
+ *   op17  dst = clamp(src)           — solid fill
+ *
+ * op0 additionally runs one `bnel` pass before the loop that adds a global
+ * constant block at r2+0x24d2 into its own parameter block.
+ *
+ * NOTE, and it is the one uncertain part of this file: the source pixel is read
+ * from r22-4, one word BEFORE the three converted operands. So channels 1..3 are
+ * operands 0..2 and channel 0 comes from the preceding slot. That slot is
+ * deterministic (the block is reused, not stack garbage) but what writes it has
+ * not been traced, so `ch0` is passed in rather than invented here.
+ */
+export function op0(s, ops, ch0 = 0) {
+  const src = [ch0, ops[0], ops[1], ops[2]];
+  for (let i = 0; i < PIXELS; i++) {
+    const o = i * 4;
+    for (let c = 0; c < 4; c++) s.current[o + c] += src[c];
+    clamp4(s.current, o);
+  }
+}
+
+export function op17(s, ops, ch0 = 0) {
+  const src = [ch0, ops[0], ops[1], ops[2]];
+  for (let i = 0; i < PIXELS; i++) {
+    const o = i * 4;
+    // The add happens first and is then overwritten — visible in the original
+    // as a store that is immediately superseded, so only the fill survives.
+    for (let c = 0; c < 4; c++) s.current[o + c] = src[c];
+    clamp4(s.current, o);
+  }
+}
+
 /** op18 — set the draw rectangle. op19 — reset it to the full surface. */
 export const op18 = (s, o) => { s.rect = [o[0], o[1], o[2], o[3]]; };
 export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 
 /** Opcodes whose bodies are specified but not yet written here. */
-export const UNIMPLEMENTED = new Set([0, 1, 2, 3, 4, 5, 6, 8, 16, 17]);
+export const UNIMPLEMENTED = new Set([1, 2, 3, 4, 5, 6, 8, 16]);
 
 /** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
 export function toARGB(surf) {
