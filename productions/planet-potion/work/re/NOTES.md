@@ -158,8 +158,28 @@ two thin wrappers at slots 0–2 — the direct `DrawLineStrip` and `DrawTriFan`
 calls — are **never reached from part one's scene graph** at all. Whatever drives
 those is elsewhere, or belongs to part three.
 
-That is the timeline: for each scene, an ordered list of typed draw nodes, with
-the per-scene running order readable from `_play_part_1`.
+**Part three decodes 11 of 11**, and its scenes are far larger — 29, 25, 23 and
+33 nodes against part one's 2 to 11, matching its 13,268 bytes of scene data
+against part one's 6,134.
+
+```
+   0. r2+0x277a  29  [7, 3,3,4,4,4,3,3,3,3,3,3,3,3,5,5,3,3,3,3,3,3,3,3,5,5,5,3,3]
+   2. r2+0x2782  23  [7, 3,3,2,2,1,3,1,3,1,3,1,3,1,3,1,3,1,3,5,4,4,5]
+   3. r2+0x2786  33  [7, 3,3,2,2,2,2,2,2,3,5,5,5,4,4,3,3,3,3,3,4,4,3,4,1,1,1,1,1,3,3,5,5]
+   9. r2+0x279e  26  [7, 3,3,3,3,3,3,3,3,3,3,3,1,1,4,4,4,4,4,4,4,4,4,4,4,3]
+```
+
+Part three frequency: **3 ×109, 4 ×38, 5 ×18, 1 ×14, 2 ×13, 0 ×1**, plus 11 roots.
+
+**Between them the two parts use every slot in the render table.** Part one
+supplies the only use of type 6; part three supplies the only uses of types 0, 1
+and 2 — the thin `DrawLineStrip` and `DrawTriFan` wrappers that part one never
+reaches. Nothing in the seven-slot table is dead code, which is a good sign the
+table bound is right.
+
+That is the timeline for the whole demo: **27 of 29 scenes decoded** (16 of 18 in
+part one, 11 of 11 in part three), each an ordered list of typed draw nodes, with
+the running order readable from `_play_part_1` and `_play_part_3`.
 
 **Geometry.** Opcode byte, then operands — but **do not try to model the
 widths**. Three attempts failed and the reason is instructive:
