@@ -414,14 +414,28 @@ length — proven, not inferred from the shape.
 The loop also accumulates `f20` per character and stores it to `node+0x30` at the
 end, which is the string's total advance width.
 
-That is the whole stream grammar:
+That is the grammar as read from the handlers:
 
 ```
   op 0,1,2,5   opcode byte only
   op 3         u16 u16 u8 u8 u16 u16      (flags in the u16s)
-  op 4         u8, then one u8 per character
-  op 6         opcode byte, then one u8
+  op 4         u8 length, then one u8 per character
+  op 6         one u8
 ```
+
+**AND IT DOES NOT WALK THE SHIPPED STREAMS.** `work/re/scenegram.py` applies it
+to all 29 scene streams at the addresses `scenes.json` records and every one
+terminates within an opcode or two on a byte above 6. So at least one claim above
+is wrong, or the `stream` address is not where the opcode walk begins — a header,
+an indirection, or `r31` being set up somewhere this reading has not found.
+
+That is worth more than the grammar was. Each operand width here was read from a
+handler and is individually defensible; the composition is not, and only running
+it said so. **Do not port a decoder from this table until `scenegram.py` passes.**
+
+Two candidates to check first: what sets `r31` before the first handler runs, and
+whether `scenes.json`'s `stream` is that pointer or the address it was loaded
+from.
 
 **Cameras (scene op 6) are numbered per scene, from zero**, and `0x10002f24`
 is that claim in four instructions: `lbz r3, 0x29af(r2)`, `stw r3, 0x34(r27)`,
