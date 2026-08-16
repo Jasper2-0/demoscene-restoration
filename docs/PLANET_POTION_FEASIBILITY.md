@@ -1097,6 +1097,68 @@ tracing of the intro, still needs that plugin built or a WinUAE setup elsewhere.
 
 ---
 
+## What is actually needed to start porting
+
+The shopping list below was written before the subsystems were traced. Tracing
+them changes the answer, because **most of this intro does not need an Amiga at
+all.**
+
+Taking each subsystem's transitive call closure and asking whether it touches a
+library base or `_run68k`:
+
+| subsystem | functions | libraries | verdict |
+|---|---|---|---|
+| textures (`_generate`) | 23 | none | **pure computation** |
+| scenes (`_generate_scene`) | 13 | none | **pure computation** |
+| audio (`_generate_samples_*`) | 38 | none | **pure computation** |
+| geometry (`_generate_obj`) | 26 | `_Warp3DBase` ×16 | needs the 3D API |
+| renderer (`_show_scene`) | 14 | `_Warp3DBase` ×1 | needs the 3D API |
+
+**Three of the five are pure functions over memory.** They take a buffer and a
+program and produce output, with no OS calls, no library bases, no 68K
+round-trips. That means they can be executed under a bare PowerPC emulator —
+qemu-user, or a few hundred lines of interpreter — with **no Kickstart, no
+AmigaOS, no CyberStorm ROM, no Warp3D, and no emulator acquisition of any kind.**
+Set up memory, point `r2` at the small-data base, point `r3` at a program, run,
+read the buffer out.
+
+That is byte-exact ground truth for differential testing, available today, for:
+
+- **the texture VM** — whose language is already fully decoded (48 programs,
+  100%), so programs in and 128×128 images out;
+- **the softsynth** — the largest subsystem in the intro by both code and data,
+  and previously the biggest unknown;
+- **the scene interpreter** — which also sidesteps the BSS-table wall, because
+  running the code *is* how those tables get built.
+
+### So, three tiers
+
+**Tier 1 — start now, needs nothing.** Commit the hunk loader and Ghidra scripts
+as `work/re/`, write `prod.json`, extract the font (2,248 bytes, already
+recovered and shippable), and stand up a PPC harness for the three pure
+subsystems. The texture VM is the natural first target: decoded language, pure
+execution, and an image you can diff.
+
+**Tier 2 — static work, still no purchases.** Finish the geometry operand widths
+(one 536-byte function's control flow), and name the 20 texture opcodes by
+reading their 17 handlers — or, better, by differential experiment against the
+Tier 1 harness, which is cheaper than reading assembly.
+
+**Tier 3 — needs the outside world.** Only the renderer genuinely does: 22 Warp3D
+calls whose *semantics* need a reference. That is where the WinUAE-Warp3D
+question, the CSPPC seed ROM and the stub-library idea belong — and it is one
+subsystem out of five, not the gate on the project.
+
+### The one true gate
+
+**A reference capture.** Nothing can be *scored* against the original without a
+video and an audio-alignment offset, and that is the standard this repo holds
+its restorations to. It gates verification, not construction — and it needs a
+local machine, since scene.org, pouët, demozoo and YouTube are all blocked from a
+cloud session.
+
+Everything in Tier 1 and Tier 2 can proceed in parallel with obtaining it.
+
 ## Shopping list
 
 ### 0. The free check that decides everything else — do it first
