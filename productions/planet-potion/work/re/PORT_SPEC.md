@@ -182,13 +182,22 @@ byte is copied down and the node is left alone. The four operations are gated by
 bits of the node's own `+0x03`, and all offsets below are relative to the channel
 block at `anim+0x0c`:
 
-| bit | | |
-|---|---|---|
-| `0x40` | `+0x3c … +0x48` | **multiply** four floats by the parent's, component-wise |
-| `0x80` | `+0x4c`, `+0x50` | **add** two floats from the parent |
-| `0x20` and `0x10` | `+0x54 … +0x5c` | **copy** three floats from the parent, then `0x10005c10(node, parent)` |
-| `0x20` without `0x10` | `+0x30 … +0x38` | transform the triple through `0x10005b34(·, parent)` |
-| `0x10` without `0x20` | `+0x30 … +0x38` | **add** the parent's triple |
+Offsets are relative to the channel block, so they land on known channel indices:
+
+| bit | offset | channels | |
+|---|---|---|---|
+| `0x40` | `+0x3c … +0x48` | 15–18 | **multiply** four floats by the parent's, component-wise |
+| `0x80` | `+0x4c`, `+0x50` | 19, 20 | **add** two floats from the parent |
+| `0x20` and `0x10` | `+0x54 … +0x5c` | **21–23** | **copy** three floats from the parent, then `0x10005c10(node, parent)` |
+| `0x20` without `0x10` | `+0x30 … +0x38` | 9–11 | transform the triple through `0x10005b34(·, parent)` |
+| `0x10` without `0x20` | `+0x30 … +0x38` | 9–11 | **add** the parent's triple |
+
+**Channels 21–23 are `cx`, `cy` and `scale`, and they are COPIED.** So a child
+inherits its parent's projection outright rather than scaling it — which is why
+the sampled scene's parented node publishes exactly its parent's numbers while
+its own coefficient blocks are all zero. `animcheck.mjs` asserts it: with
+`flags3 = 0x70` the child's channels 21–23 equal the parent's to the bit, at
+every sampled time.
 
 Only the first of those is multiplication, and only the fourth is anything like
 matrix concatenation — so "multiplication, not matrix concatenation" was true of
@@ -198,10 +207,9 @@ The walk is two nested chains: sub-objects on `+0x74` inside, the node list on
 `+0x10` outside — the same `+0x74` chain `_restore_time` uses, which is why the
 animation and the geometry hang off one structure.
 
-This is read but not yet checked. `animdump.py` already exports the parent link
-and the channels, so the check is available: the sampled scene's second node is
-parented, its own blocks are zero, and its published `cx`/`cy`/`scale` equal its
-parent's — consistent with the copy path, which is what to confirm first.
+The copy path is checked. The other four gates have no example in the scene
+sampled so far and remain read-only — a scene using `0x80` or the `0x20`-without-
+`0x10` transform is what `animdump.py` should be pointed at next.
 
 **3c. Publish.** `anim+0x60/0x64/0x68` become the render node's `cx`, `cy`,
 `scale` — channels 21, 22 and 23 of the block at `+0x0c`. **Confirmed against

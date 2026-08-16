@@ -70,8 +70,29 @@ for (let n = 0; n < nodeCount; n++) {
     + `  ticks ${track.map((k) => k.tick).join(' ')}`
     + (parented ? `  PARENTED to ${node0.anim.parent.toString(16)}` : ''));
   if (parented) {
-    console.log('    skipped: its channels come from the parent, not its own '
-      + 'track — see the hierarchy note above');
+    // §3b, checked rather than skipped. The flag bits of `+0x03` select which
+    // groups compose, and the offsets are relative to the channel block at
+    // `+0x0c`, so they land on known channel indices:
+    //
+    //   0x40            +0x3c..+0x48  -> channels 15..18, multiplied
+    //   0x80            +0x4c, +0x50  -> channels 19, 20, added
+    //   0x20 and 0x10   +0x54..+0x5c  -> channels 21..23, COPIED
+    //
+    // That last group is cx, cy and scale — which is why a child inherits its
+    // parent's projection outright instead of scaling it.
+    const parent = doc.frames[0].nodes.find((x) => x.anim
+      && parseInt(x.anim.addr, 16) === node0.anim.parent);
+    if (!parent) { console.log('    parent not in this dump'); continue; }
+    const f3 = node0.anim.flags3;
+    if ((f3 & 0x30) === 0x30) {
+      let worst = 0;
+      for (const f of doc.frames) {
+        const c = f.nodes[n].anim.channels, p = f.nodes[0].anim.channels;
+        for (let k = 21; k <= 23; k++) worst = Math.max(worst, Math.abs(c[k] - p[k]));
+      }
+      say(worst === 0, 'flags3 0x20|0x10 copies channels 21..23 from the parent',
+        `worst |diff| ${worst}`);
+    }
     continue;
   }
 
