@@ -411,6 +411,16 @@ Three things had to be arranged, and each is a fact about the program:
   fresh scratch first: the intro's buffer sits `0x500` bytes below the clip-buffer
   pointer arrays, so accumulating in place corrupts them within twenty vertices.
 
+  **And that arena must not be able to fill quietly.** Overflowing it does not
+  fault — the vertices simply land past the dumped region and the parser drops
+  those slices, which looks exactly like a primitive with no geometry. The
+  opening titles came within 4% of the original 0xF0000 budget (14,731 vertices
+  over five frames), so it was a matter of sampling one more frame. The arena is
+  now 16 MB, the dump length is computed from the shared cursor rather than
+  fixed, and a slice landing outside is counted and reported on stderr. Two
+  scenes re-recorded across the change hash identically, so the fix is a guard,
+  not a change of behaviour.
+
 ### The vertex pipeline, in closed form
 
 The emitter at `0x10006630` is the whole of it. Reading it settles the

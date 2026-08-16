@@ -41,7 +41,15 @@ LOGPW, LOG = 0x20420000, 0x20420010
 # The intro's own output vertex array sits 0x500 bytes below the clip-buffer
 # pointer arrays, so accumulating into it would overwrite them within twenty
 # vertices. Point both primitive templates at our own scratch instead.
-MYVBUF, MYVBUFSZ = 0x20700000, 0xF0000
+#
+# Sized for the worst scene with room to spare: r2+0x25aa (the opening titles,
+# one quad per glyph) writes 14,731 vertices over five frames, which filled 96%
+# of the first 0xF0000 arena. An overflow does not fault — the vertices simply
+# land outside the dumped region and parse() drops those slices — so the arena
+# is now generous AND the dump length is computed from the real cursor, so a
+# slice that falls outside is a counted `dropped`, never a silent gap.
+MYVBUF, MYVBUFCAP = 0x21000000, 0x1000000
+SCRATCHSZ = 0x02000000
 LOGSZ = 0x40000
 T_FAN, T_LINE = 0x29fe, 0x2a0e          # the .v field of each template
 FAKEOBJ = 0x20560000
@@ -76,6 +84,7 @@ def addi(d, a, v):   return (14 << 26) | (d << 21) | (a << 16) | (v & 0xFFFF)
 def add(d, a, b):    return (31 << 26) | (d << 21) | (a << 16) | (b << 11) | (266 << 1)
 def mulli(d, a, v):  return (7 << 26) | (d << 21) | (a << 16) | (v & 0xFFFF)
 def mr(d, s):        return (31 << 26) | (s << 21) | (d << 16) | (s << 11) | (444 << 1)
+def subf(d, a, b):   return (31 << 26) | (d << 21) | (a << 16) | (b << 11) | (40 << 1)
 def lhz(d, a, o):    return (40 << 26) | (d << 21) | (a << 16) | (o & 0xFFFF)
 def blr():           return (19 << 26) | (20 << 21) | (16 << 1)
 def b(off):          return (18 << 26) | (off & 0x03FFFFFC)
@@ -175,8 +184,12 @@ def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None):
         c += [H.li(0, 1)] + H.load32(3, t) + [lhz(4, 2, 0x23ba)]
         c += H.call32(12, RECORDER)
 
-    for addr, n in ((LOGPW, 4), (LOG, LOGSZ), (MYVBUF, MYVBUFSZ)):
+    for addr, n in ((LOGPW, 4), (LOG, LOGSZ)):
         c += H.load32(4, addr) + H.load32(5, n) + [H.li(0, 4), H.li(3, 1), H.sc()]
+    # The vertex arena is dumped to its REAL extent: the fan template's .v field
+    # is the shared cursor, so cursor - MYVBUF is exactly what was written.
+    c += H.load32(4, MYVBUF) + [lwz(5, 2, T_FAN), subf(5, 4, 5)]
+    c += [H.li(0, 4), H.li(3, 1), H.sc()]
     c += [H.li(0, 1), H.li(3, 0), H.sc()]
     return b''.join(struct.pack('>I', w) for w in c)
 
@@ -187,7 +200,7 @@ def run(stream, frames=(0,), txt_tab=0x2642, obj_tab=0x2706, timeout=240, stop=9
     segs = H.read_layout(FLAT)
     pieces = [(va, (None if fn is None else H.load_seg(FLAT, fn, va)), sz)
               for va, sz, fn in segs]
-    pieces.append((H.SCRATCH, stub, 0x00800000))
+    pieces.append((H.SCRATCH, stub, SCRATCHSZ))
     EH, PH, AL = 52, 32, 0x1000
     blob, loads = b'', []
     cur = EH + PH * len(pieces)
@@ -213,11 +226,11 @@ def run(stream, frames=(0,), txt_tab=0x2642, obj_tab=0x2706, timeout=240, stop=9
 
 def parse(out):
     """-> list of frames, each a list of draw dicts."""
-    if not out or len(out) < 4 + LOGSZ + MYVBUFSZ:
+    if not out or len(out) < 4 + LOGSZ:
         return []
     end = struct.unpack('>I', out[:4])[0]
     log, vbuf = out[4:4 + LOGSZ], out[4 + LOGSZ:]
-    frames, cur, tex = [], [], {}
+    frames, cur, tex, dropped = [], [], {}, 0
     for o in range(0, min(end - LOG, LOGSZ), 32):
         r = struct.unpack_from('>8i', log, o)
         tag = r[0]
@@ -231,7 +244,10 @@ def parse(out):
             continue
         count, v = r[3], r[4] & 0xFFFFFFFF
         vs = []
-        if 0 < count <= 4096 and MYVBUF <= v < MYVBUF + MYVBUFSZ - count * 64:
+        if not (0 < count <= 4096 and MYVBUF <= v and
+                v - MYVBUF + count * 64 <= len(vbuf)):
+            dropped += 1
+        else:
             for i in range(count):
                 q = v - MYVBUF + i * 64
                 x, y = struct.unpack_from('>ff', vbuf, q)
@@ -245,6 +261,11 @@ def parse(out):
                     'vertices': vs})
     if cur:
         frames.append({'time': None, 'draws': cur})
+    if dropped:
+        # Loud on purpose: a dropped slice is missing ground truth, and the
+        # shape of the output does not otherwise show it.
+        print(f'drawlog: {dropped} draw(s) fell outside the {len(vbuf)}-byte '
+              f'vertex arena — raise MYVBUFCAP', file=sys.stderr)
     return frames
 
 
