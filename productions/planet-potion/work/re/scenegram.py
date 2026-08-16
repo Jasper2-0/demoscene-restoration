@@ -115,8 +115,26 @@ def main():
             print(f"     opcodes {got[:24]}")
             print(f"     types   {want[:24]}")
     print(f'\n{exact}/{len(scenes)} streams produce one opcode per recorded node')
-    print('NOTE: opcode != node type; every recorded list starts with type 7, '
-          'which is not a scene opcode. The mapping is unestablished.')
+    print('NOTE: this tool FAILS BY DESIGN. The grammar it encodes does not walk '
+          'the streams, and PORT_SPEC section 4a records what is measured about '
+          'why. What follows is the data that question needs.')
+
+    # `ff 0f` recurs within a stream rather than sitting once at the front, so
+    # the streams are records rather than a header plus an opcode run. Printing
+    # the raw bytes split on that marker is the cheapest way to look at a record
+    # boundary, and it is what the next attempt should start from — the previous
+    # dozen started from the code instead and each got a different wrong answer.
+    print('\nfirst 48 bytes of four streams, split on the recurring ff 0f:')
+    for s in scenes[:4]:
+        b = bytes(byte_at(segs, int(s['stream'], 16) + i) or 0 for i in range(48))
+        parts, i = [], 0
+        while i < len(b):
+            j = b.find(b'\xff\x0f', i + 1)
+            parts.append(b[i:j if j > 0 else len(b)].hex())
+            if j < 0:
+                break
+            i = j
+        print(f"  {s['part']}_{s['order']:<3} " + ' | '.join(parts))
     return 1 if bad else 0
 
 

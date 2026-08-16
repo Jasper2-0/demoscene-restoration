@@ -661,9 +661,23 @@ framing this section has used — "a header, then an opcode stream" — is the w
 shape. That also explains why `+4` is insensitive while `+3` beside it is not:
 they are two halves of a per-record field, only one of which is read.
 
-The first byte whose low seven bits are 3 sits at `+16` in `p3_10` and `+11` in
-`p3_9`, and both are followed by another `ff 0f` a few bytes later — consistent
-with records of a few bytes each rather than a long preamble.
+Splitting four streams on that marker shows the same shape in every one:
+
+```
+  p1_0   01df 5b | ff0f 008000ffffff 030512 | ff0f 9202 8000...
+  p1_1   0190 5b | ff0f 008000ffffff 8501a8 | ff0f 0300 0000...
+  p1_2   0193 5b | ff0f 008000ffffff 830a70 | ff0f 0200 0000...
+  p1_3   0185 5b | ff0f 008000ffffff 850868 | ff0f 0180 0000...
+```
+
+So the stream is a u16 length, then a **constant `0x5b`**, then records each
+introduced by `ff 0f`. The first record's body is `00 80 00 ff ff ff` — identical
+in every scene — followed by three bytes that vary. `0x5b` being constant across
+all 29 streams *and* load-bearing under a bit flip fits a type or version marker
+rather than an opcode, which is what the probes were already saying about it.
+
+`scenegram.py` prints this split at the end of its run, so the data is in front
+of whoever picks this up rather than needing to be re-derived.
 
 Every individual claim here is measured. They still do not compose into a working
 decoder, and the question is now the right one: **what is the record layout?**
