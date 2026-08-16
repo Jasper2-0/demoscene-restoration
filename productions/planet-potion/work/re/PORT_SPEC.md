@@ -787,6 +787,29 @@ DigiBooster effect set is `unread` and a replayer needs all of it.
 Port from libopenmpt's `Load_dbm.cpp` and its DigiBooster Pro Echo plugin (BSD).
 UADE running the real `dbplayer.library` is byte-exact ground truth for an A/B.
 
+**The sequencer is written and checked** — `web/js/dbmplayer.js`, and
+`work/re/dbmtime.mjs` holds it to the timeline rather than to the ear. Row
+duration is `2.5·speed/bpm` seconds, effect 15 sets speed below 32 and BPM at or
+above it, and walking both modules reproduces `showorder.py`'s figures exactly:
+1,013 rows and 289.286 s with all 26 scene boundaries on the same tick for part
+one, 1,088 rows and 150.000 s with all 13 for part three. That is the check that
+matters, because the show is timed by the music and nothing else sets the signal.
+
+**The effect set is still unread, and the player says so rather than guessing.**
+DigiBooster's numbering is not ProTracker's — effect 7 is the scene signal where
+ProTracker numbering would make it tremolo — so inferring the rest from
+ProTracker would be inventing behaviour. What the modules actually use:
+
+```
+  part one   3x270  7x248  8x152  9x23  10x193  12x64  14x1032  15x14  25x63
+  part three 1x14  2x44  3x26  7x312  8x58  9x46  10x111  12x64  14x224  15x11  25x56
+```
+
+Only 7 and 15 are acted on. Notes, the instrument's C-3 frequency, panning and
+the DSP echo come from the module's own data, and 1,723 of 1,733 note triggers in
+part one and 1,668 of 1,668 in part three resolve to real sample data — which is
+what would catch an off-by-one in the 1-based instrument -> sample mapping.
+
 **The container reader is written** — `web/js/dbm.js`, checked by
 `work/re/dbmcheck.mjs` against both modules. Two things it had to be told that
 the format description does not make obvious:
