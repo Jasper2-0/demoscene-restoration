@@ -207,9 +207,24 @@ The walk is two nested chains: sub-objects on `+0x74` inside, the node list on
 `+0x10` outside — the same `+0x74` chain `_restore_time` uses, which is why the
 animation and the geometry hang off one structure.
 
-The copy path is checked. The other four gates have no example in the scene
-sampled so far and remain read-only — a scene using `0x80` or the `0x20`-without-
-`0x10` transform is what `animdump.py` should be pointed at next.
+**Which gates the scenes actually use.** Sampling five part-one streams found
+parented nodes with `flags3 & 0xf0` of `0x10`, `0x70` and `0xf0` only — so of the
+five paths, three occur and the `0x20`-without-`0x10` transform through
+`0x10005b34` has no example yet.
+
+Checked so far:
+
+* `0x20|0x10` **copy** of channels 21–23 — confirmed, exactly, at every sampled
+  time on `0x100320b1`;
+* `0x80` **add** of channels 19–20 — confirmed on `0x100326c2`, where the child
+  contributes 0.0 and the parent 128.0 and the result is 128.0. One
+  non-degenerate value, which is one more than none;
+* `0x10` **add** of channels 9–11 — every example found so far has the child, the
+  parent AND the result all zero, so it is consistent with addition and equally
+  consistent with multiplication. **Not confirmed**, and a scene where those
+  channels are non-zero is what would settle it.
+
+`0x40` and the `0x10005b34` transform are unchecked.
 
 **3c. Publish.** `anim+0x60/0x64/0x68` become the render node's `cx`, `cy`,
 `scale` — channels 21, 22 and 23 of the block at `+0x0c`. **Confirmed against
