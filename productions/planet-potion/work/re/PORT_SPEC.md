@@ -521,11 +521,23 @@ which has a node size but no handler. The table boundary is arithmetic, not
 inference — index 8 reads the first two sizes as a pointer. So opcodes above 7
 are NOT legal-but-inert; they call garbage.
 
-**The opcode space is 0..7 and the contradiction stands.** A byte of `0x5b` at
-offset 2 cannot be an opcode, the pointer is measured correct, and the prologue
-measurably skips two bytes. The walk therefore does not begin at `+2`, and this
-section stops there — with the opcode space closed and the header unidentified,
-rather than with a fifth explanation.
+**The opcode space is 0..7, and that closes the last exit.** `runscene.run` does
+`H.load32(4, stream)` and `_generate_scene` does `mr r31, r4` — so the walk
+provably begins at `stream+2`, the pointer provably matches `scenes.json`, and
+the export provably produces sensible node lists from it. Three measurements
+that cannot all be true alongside a `0x5b` at that offset.
+
+Which makes the byte dump the remaining suspect, and it is the one thing in the
+chain that was NOT measured through the harness: it came from a segment loader
+written for this check, reading `layout.txt` and indexing the flat files
+directly. If those bytes are read back through `ppcrun` instead — the same path
+the original's own run uses, relocations and all — and they differ, the whole
+contradiction dissolves and nothing above needs a new explanation.
+
+**That is the next action, and it is the action that should have been first.**
+Everything in this section that was checked against the running program has held;
+everything derived from a private re-implementation of how to read the binary has
+not.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
