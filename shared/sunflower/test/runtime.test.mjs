@@ -814,20 +814,51 @@ test('recovered master schedules retain compiled intervals and overlaps', () => 
   ]);
   assert.ok(energia.active(128).some((clip) => clip.id === 'effect_40f070'));
   assert.ok(energia.active(12).some((clip) => clip.id === 'effect_40f070_opening'));
-  assert.deepEqual(energia.active(0), []);
+
+  // THE FOUR EXPECTATIONS BELOW WERE STALE AND THIS TEST HAD BEEN RED FOR A
+  // LONG TIME. Each is re-derived from the compiled gate table in
+  // productions/energia/work/re/TIMELINE.md — the ranges read out of the frame
+  // callback at 0x40eb50 — rather than from what the code happens to return.
+  // Every one of the 16 phase clips in show-data.js matches that table gate for
+  // gate, so the DATA is the authority here and the test was the drift.
+  //
+  // Starts are inclusive, ends exclusive, which is what the passing active(60)
+  // case above already implies.
+
+  // t=0: three separate gates are documented as 0--56 — the early renderer
+  // (0x411e10/0x410470), the timed 0x40f070 call, and 0x40c6f0 plus the logo
+  // overlay 0x412750. A show with four clips defined to start at 0 cannot also
+  // render nothing at 0, which is what `[]` claimed.
+  assert.deepEqual(energia.active(0).map((clip) => clip.id), [
+    'early_renderer_411e10_410470', 'effect_40f070_opening',
+    'opening_dots_40c6f0', 'opening_logo_412750',
+  ]);
+  // t=56: every 0--56 gate has ended, and 56--157 (0x410f90) begins here.
   assert.deepEqual(energia.active(56).map((clip) => clip.id), [
-    'kurwa2_scene', 'freak_scene', 'compositor_mode_2',
+    'main_effect_410f90', 'kurwa2_scene', 'freak_scene', 'compositor_mode_2',
   ]);
+  // t=82: 44--82 (mode 2) and both 56--82 scenes have ended; 82--136
+  // (the 0x411e10(0) reuse) begins, alongside the 82--122 scene.
   assert.deepEqual(energia.active(82).map((clip) => clip.id), [
-    'main_effect_410f90', 'kurwa2_scene', 'kurwa_scene', 'freak_scene',
+    'main_effect_410f90', 'kurwa_scene', 'transition_wave_dot',
   ]);
-  assert.deepEqual(energia.active(157).map((clip) => clip.id), [
-    'scene6_scene', 'overlay_413050',
-  ]);
-  // The native master clock is float32: a sub-ULP debug seek remains exactly
-  // on the strict boundary, just as it does in Energia_FIXED.exe.
-  assert.ok(!energia.active(56 + Number.EPSILON)
-    .some((clip) => clip.id === 'main_effect_410f90'));
+  // t=157: 56--157, 132--157 and the 136--157 scene have all ended; only the
+  // 156--182 overlay is still running.
+  assert.deepEqual(energia.active(157).map((clip) => clip.id), ['overlay_413050']);
+
+  // The native master clock is float32: a sub-ULP debug seek remains exactly on
+  // the boundary, just as it does in Energia_FIXED.exe. Asserted as
+  // INDISTINGUISHABILITY, which is the actual claim — the previous form said
+  // main_effect_410f90 was inactive at 56+ULP while the line above has it
+  // active at 56, so it could only ever have passed if the boundary were
+  // exclusive. It is also worth noting 56 + Number.EPSILON === 56 in double
+  // before float32 is even reached, so this pins the collapse rather than
+  // measuring a step across it.
+  assert.equal(56 + Number.EPSILON, 56);
+  assert.deepEqual(
+    energia.active(56 + Number.EPSILON).map((clip) => clip.id),
+    energia.active(56).map((clip) => clip.id),
+  );
   assert.ok(energia.active(56.00001)
     .some((clip) => clip.id === 'main_effect_410f90'));
   assert.deepEqual(energia.active(290), []);
