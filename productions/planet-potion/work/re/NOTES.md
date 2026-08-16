@@ -178,8 +178,14 @@ a missing dependency. What they emit is not raw sample data but a complete
 
 | | name | instruments | patterns | channels | INST | VENV | PATT | SMPL |
 |---|---|---|---|---|---|---|---|---|
-| part 1 | `"part1"` | 56 | 19 | 18 | 2,800 | 274 | 14,574 | — |
+| part 1 | `"part1"` | 56 | 19 | 18 | 2,800 | 274 | 14,574 | 5,306,496 |
 | part 3 | `"part3"` | 38 | 17 | 16 | 1,900 | 546 | 9,978 | 3,002,748 |
+
+Total module sizes: **part 1 ≈ 5,324,890 bytes, part 3 = 3,015,404**. The part-one
+figure is confirmed twice over — the chunk walk gives it, and
+`_generate_samples_part1` *opens* by loading the immediate `0x513e5a`, which is
+5,324,890: the function states the size of the module it is about to build in its
+first two instructions.
 
 `DSPE` is DigiBooster Pro 2's DSP-effect chunk (28 and 26 bytes). Roughly 37 KB
 of seed data in seg 4 expands to about 3 MB of module per part.
