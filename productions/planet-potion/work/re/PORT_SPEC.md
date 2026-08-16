@@ -281,6 +281,41 @@ two dominant ones are `0x10009510` (13 calls, fixed-size builder with two length
 presets, 201,600 and 100,800) and `0x1000742c` (18 calls, the stream reader,
 which lerps toward each target with `fmadd`).
 
+### 8f. The synth ABI — every primitive is "compute `f29`, emit"
+
+Three shared routines define the whole convention, and reading them makes the
+other 29 tractable:
+
+| routine | |
+|---|---|
+| `0x10006ef0(size, blob, dest)` | writes the u32 size prefix, then copies a literal header blob — the static `DBM0`/`NAME`/`INFO`/`SONG` bytes. Sets `r31`, the **module write cursor held across the entire script** |
+| `0x1000a23c(r19 = frames)` | starts a sample: writes `flags = 1` and the frame count, advances 8, zeroes the frame counter and four oscillator accumulators |
+| `0x1000a114()` | emits one frame: `float2int(f29)`, **clamp to [−128, 127]**, store one byte, advance, bump the frame and period counters |
+
+| register | role |
+|---|---|
+| `r31` | module output cursor |
+| `f29` | the sample value about to be emitted |
+| `r19` / `r18` | sample length in frames / period length |
+| `r20` / `r16` / `r17` | frame index / periods done / phase within period |
+| `r30`, `r29`, `r28` | the three lookup tables, loaded once at `0x10006ef0` |
+| `f30`, `f31` | 1.0 and 0.0 |
+| `r21`, `r22`, `r25` | parameter-block pointers from the script |
+
+So every voice routine is a loop that computes `f29` and calls `0x1000a114`.
+That is why the sample data is 8-bit signed: the emitter clamps to `[−128, 127]`
+and stores a byte, which matches the `flags = 1` it writes and the 36-of-38
+one-byte samples the chunk walk found.
+
+**`0x10006f38` writes an empty sample** — two zero words, which is `flags = 0,
+length = 0`. It is called twice in part three, and part three's `SMPL` contains
+exactly two zero-length samples with `flags = 0`. Two independent counts of the
+same thing.
+
+The script's literal `r19` values are sample lengths in frames, and they show up
+in the output directly: `0x1d4c0` = 120,000 appears three times in part three's
+length list.
+
 ### 8c. The container
 
 Chunk order is `NAME, INFO, SONG, INST, VENV, DSPE, PATT, SMPL` — legal but not
