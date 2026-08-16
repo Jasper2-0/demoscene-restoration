@@ -232,6 +232,26 @@ in, not just the operands. Note this is **not** the same as ops 2, 3 and 5, whic
 have three genuinely distinct handler addresses and different operand counts
 (13, 12, 10) despite producing identical output on the differential test.
 
+**`op9` is value noise by midpoint subdivision**, and it is the generator most
+textures start from. Three passes:
+
+1. **Seed a lattice.** The single byte at operand 0 carries *two* nibbles:
+   `xstep = 8 << (op0 & 0xF)` and `ystep = 8 << (op0 >> 4)`, independent per
+   axis. At each lattice point, four random draws are scaled by four
+   coefficients from the parameter block and accumulated into the four channels.
+2. **Refine x, then y.** While the step exceeds `0x10`, halve it and fill each
+   new point from the midpoint of its neighbours, then repeat. Both loops mask
+   the coordinate (`0x7f0` in x, an equivalent field extract in y), so the noise
+   is **toroidal** — it wraps, which is what makes it safe under the `REPEAT`
+   sampling of §5.
+3. **Blit** in `0x10` strides from `r28` to `r29`.
+
+The units explain themselves once you notice the surfaces are float RGBA:
+**`0x10` = 16 bytes = one pixel**, and the `0x800` loop bound is
+`128 pixels × 16 bytes`. So refinement stops exactly at one-pixel resolution, and
+an initial nibble of 0 gives a step of 8 — finer than a pixel — which skips
+refinement entirely.
+
 Read so far:
 `op10` permutes channels by two swaps, `op11` applies an `frsqrte` curve about
 128, `op12` is `out = in + (in − 128)·k` with `k = (operand − 128)/128` doubled
