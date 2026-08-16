@@ -26,7 +26,7 @@ The pipeline, the tooling lessons, and the reverse-engineering findings are in
 | [energia](productions/energia/) | Sunflower | 2001 | OpenGL FF | engineering |
 | [lapsus](productions/lapsus/) | Maturefurk | 2000 | OpenGL 1.x FF | engineering |
 | [tesla](productions/tesla/) | Sunflower | 2000 | — | evidence (source-lineage study) |
-| [planet potion](productions/planet-potion/) | Potion | 2002 | Warp3D (Amiga PPC/RTG) | evidence (decoded; no capture yet) |
+| [planet potion](productions/planet-potion/) | Potion | 2002 | Warp3D (Amiga PPC/RTG) | engineering (textures + audio computed; engine recorded) |
 
 Each production directory holds `prod.json` (provenance: demozoo/pouet ids,
 original archive URLs + SHA-256, reference-capture manifest), `work/`
