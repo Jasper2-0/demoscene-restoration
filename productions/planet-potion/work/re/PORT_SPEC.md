@@ -135,7 +135,32 @@ It also **rules out** one explanation for the six part-one scenes that record
 nothing (§8 of `NOTES.md`): the counter resetting per scene means a late scene's
 cameras still start at 0, so a drifting index is not the cause.
 
-### 4b. Meshes (type 5)
+### 4b. Geometry is built once — only one opcode evaluates per frame
+
+The geometry eval table at `0x1000a9c4` has five slots, and the slots for
+**op0 and op4 both point at a bare `blr`**. Ops 1 and 2 are never used by the
+shipped data. So of the 142 geometry nodes in the intro, only **op3's 56** do any
+per-frame work; the other 86 are built at load and never touched again.
+
+`op3`'s eval reads the byte at `node+0x1b` as **up to four 2-bit transform
+selectors**, consuming one 12-byte float triple per non-zero group:
+
+| selector | routine | |
+|---|---|---|
+| 1 | `0x100041b0` | **translate** — adds the triple to the vertex |
+| 2 | `0x100042cc` | **rotate** — sine table, quarter-turn cosine offset |
+| 3 (or 0b11) | `0x100041ec` | **scale** — divides the triple by 255, then multiplies |
+
+That confirms the operand-width rule `3 + 6·(nonzero 2-bit groups)` from the
+other side: 6 bytes in the stream expand to a 12-byte float triple in the node.
+
+**Rotation angles are in degrees.** The routine multiplies the operand by
+`0x5b` = 91 and masks with `0x7ffc`, and `32768 / 360 = 91.02` — the table spans
+8,192 entries of 4 bytes, so 91 units per degree covers exactly one turn. It uses
+the same `+0x2000` quarter-turn offset for cosine as the softsynth's accessor in
+§8f, so one table serves both subsystems.
+
+### 4c. Meshes (type 5)
 
 Objects hang off `node+0x24` chained by `+0x60`; faces hang off each object
 chained by `+0x5c`. **The face record is also the vertex-pointer array.**
@@ -159,7 +184,7 @@ with `k = 1` for modes 0 and 4, `k = |face[0x50]|` for mode 2 (flat), and
 `k = |v[0x64]|` for mode 3 (Gouraud). The clamp is **one-sided** — nothing
 catches a negative.
 
-### 4c. Clipping
+### 4d. Clipping
 
 Sutherland–Hodgman in view space against four planes, two per pass:
 
@@ -171,7 +196,7 @@ Sutherland–Hodgman in view space against four planes, two per pass:
 All nine source fields interpolate. A primitive left with fewer than 3 (fan) or
 2 (strip) vertices is dropped.
 
-### 4d. The emitter
+### 4e. The emitter
 
 Per-primitive alpha comes from the **first** source vertex's `+0x0c`, and
 `alpha <= 0` skips the primitive entirely — this is how elements fade out.
