@@ -642,7 +642,16 @@ export function toARGB(surf) {
  */
 export function run(ops, kernels, opts = {}) {
   const s = new Surfaces();
+  const saved = new Float32Array(PIXELS * 4);
   for (const { op, operands } of ops) {
+    // THE DRAW RECTANGLE CLIPS EVERY OPERATION. _generate reads r2+0x25a6..9
+    // after each handler returns and uses it to bound the copy, so an opcode's
+    // writes outside the rectangle never reach the surface. op18 sets it, op19
+    // resets it to the full 0,0,128,128 — and p1_10 is op18(1,1,127,127) then a
+    // solid fill, whose reference has an untouched one-pixel border.
+    const clip = s.rect[0] !== 0 || s.rect[1] !== 0
+      || s.rect[2] !== 128 || s.rect[3] !== 128;
+    if (clip) saved.set(s.current);
     if (op >= 0x50 && op <= 0x78) {
       const k = kernels[op];
       if (!k) throw new Error(`no kernel for ${op.toString(16)}`);
@@ -671,6 +680,16 @@ export function run(ops, kernels, opts = {}) {
       case 18: op18(s, operands); break;
       case 19: op19(s); break;
       default: throw new Error(`unhandled opcode ${op}`);
+    }
+    if (clip && op !== 18 && op !== 19) {
+      const [x0, y0, x1, y1] = s.rect;
+      for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+          if (x >= x0 && x < x1 && y >= y0 && y < y1) continue;
+          const o = (y * SIZE + x) * 4;
+          for (let c = 0; c < 4; c++) s.current[o + c] = saved[o + c];
+        }
+      }
     }
   }
   return s;

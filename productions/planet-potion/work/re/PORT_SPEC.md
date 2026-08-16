@@ -308,6 +308,14 @@ is not reproducing this; the out-of-range values propagate.
 The clamp is branchless `fsel`, which also means it does not behave like a
 comparison on NaN. Alpha is not touched by the convolution.
 
+**The draw rectangle clips every operation.** `_generate` reads `r2+0x25a6..9`
+*after* each handler returns and uses it to bound the copy back, so writes
+outside the rectangle never reach the surface — the handlers themselves know
+nothing about it. `op18` sets it, `op19` resets it to `(0, 0, 128, 128)`, and the
+bounds are `[x0, x1)` half-open, which is why the reset value is 128 rather than
+127. `p1_10` is `op18(1,1,127,127)` then a solid fill, and its reference has an
+untouched one-pixel border on all four sides.
+
 **Every operation ends with a symmetry blit** — `0x10000880`, copying the work
 surface to the current one through one of four transforms. It indexes
 `r2+0x24e2` by a selector and reads four **halfwords** — `(x0, y0, xstep,
