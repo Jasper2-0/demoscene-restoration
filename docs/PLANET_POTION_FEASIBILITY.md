@@ -508,3 +508,93 @@ It will **not** run Planet Potion. The PPC CPU in FS-UAE is supplied by the
 `qemu-uae` plugin (`PPC CPU was started but qemu-uae plugin was not found`),
 which Ubuntu does not package — so PPC execution, and therefore any dynamic
 tracing of the intro, still needs that plugin built or a WinUAE setup elsewhere.
+
+---
+
+## Shopping list
+
+### 0. The free check that decides everything else — do it first
+
+The core tested here (WinUAE 3300b2, via FS-UAE 3.1.66) emulates **Zorro 2D RTG
+boards only** — Picasso II/IV, Piccolo, Spectrum. There is **no CyberVision PPC
+or BlizzardVision PPC, and no Warp3D emulation of any kind**: a grep for
+`warp3d`, `w3d_`, `permedia` or `voodoo` in the binary returns nothing.
+
+Planet Potion opens `Warp3DPPC.library` and makes 18 W3D calls. So on this core
+it cannot run *even with* a CyberStorm ROM and the PPC plugin — the ROM was
+never the real blocker, the 3D card is.
+
+**So: install current WinUAE (free) and find out whether a modern build emulates
+a Permedia 2 board with working Warp3D.** That question gates every purchase
+below. I could not settle it from here — the packaged core is from 2016 and
+fetching current WinUAE sources is outside this session's repo scope.
+
+### 1. Buy — one item, ~$40
+
+**Amiga Forever Plus.** It is the only thing on this list that costs money, and
+it covers three separate needs at once:
+
+- **Kickstart ROMs** — not needed for the flash roundtrip (AROS sufficed) but
+  needed for a real AmigaOS 3.x with Picasso96/CGX and Warp3D.
+- **AmigaOS 3.X install** — the environment the intro actually expects.
+- **`ralphschmidt-cyberstorm-ppc-4471.rom`** — the seed CSPPC image. This is the
+  thing that breaks the chicken-and-egg: the flash updater provably cannot
+  bootstrap from a blank flash (it needs an exec resource only existing firmware
+  publishes), so it can only *upgrade* an image you already have.
+
+Two cautions: the file may ship as a zero-byte placeholder until the PPC
+configuration has been run once, and its `4471` name should not be trusted as a
+version — verify by hash and record what you got.
+
+### 2. Build — free, but real work
+
+- **`qemu-uae` plugin**, only if staying on FS-UAE/Linux. It supplies the PPC
+  CPU (`PPC CPU was started but qemu-uae plugin was not found`) and Ubuntu does
+  not package it. Running WinUAE on Windows avoids this entirely.
+- **A stub `Warp3DPPC.library`** — *the interesting option, and possibly the
+  whole answer.* If no emulator gives real Warp3D, note that we do not actually
+  want 3D acceleration: we want **the call log**. A WarpOS PPC library exporting
+  the 18 vectors, logging arguments and returning success would let the intro run
+  to completion and hand over exactly the trace the port needs — camera
+  matrices, vertex buffers, texture handles, state flags, per frame. It sidesteps
+  the graphics-card problem completely, and 18 entry points is a small surface.
+  This is the highest-leverage build on the list.
+
+### 3. Acquire — free, but not from a cloud session
+
+- **A reference capture** of the intro running, plus its audio-alignment offset.
+  Nothing can be *scored* until this exists. scene.org, pouët, demozoo and
+  YouTube are all blocked by network policy here, so this step belongs on a local
+  machine (see `CLOUD_ENVIRONMENT.md`).
+
+### 4. Only if emulation genuinely cannot run it
+
+**Real hardware**: an A4000 or A1200 with a CyberStorm PPC (or Blizzard PPC) and
+a CyberVision/BlizzardVision PPC. Prices for phase5 accelerators have gone the
+way of all vintage Amiga hardware, and you would still need a capture path off
+the machine. Treat this as the fallback it is, not the plan.
+
+### 5. Buy nothing at all for the port itself
+
+Everything on the reconstruction side is free and already verified working in a
+container: `lhasa`, `amitools`, `capstone`, Ghidra 11.3.2 with PowerPC, the hunk
+loader, and this repo's own `tools/inspect` verification harness. The shipped
+restoration is plain JS + WebGL2 from static files with no runtime dependencies,
+as with every other production here.
+
+### The order that wastes least money
+
+```
+current WinUAE, does Warp3D work?  ── no ──> write the stub W3D library
+            │                                        │
+           yes                                       │
+            ▼                                        ▼
+   buy Amiga Forever Plus  ─────────────> CSPPC seed ROM + AmigaOS
+            │                                        │
+            └────────────────┬───────────────────────┘
+                             ▼
+                    run the intro, capture the trace
+```
+
+Static work — the hunk loader, the VM dispatch tables, naming the 18 Warp3D
+vectors — needs none of it and can start today.
