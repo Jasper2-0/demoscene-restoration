@@ -468,13 +468,67 @@ language selector.
 **The texture language is therefore fully decoded across its entire population**:
 48 programs, every one landing exactly on its boundary, 1 to 13 operations each.
 
-The 28 geometry programs are all flag=0, total 3,825 bytes, and **every one starts
-with opcode 0 or 4** — 14 each — which is exactly what the five-opcode VM
-requires. Decoding them still fails on width: the conditional rules read out of
-the five build handlers (`op0` 6-or-8 by two sign bits, `op1` `2+6·popcount`,
-`op2` fixed 3, `op3` `3+6·`nonzero 2-bit groups, `op4` `2+8n`) accept only 6%,
-so at least one of those five is still incompletely understood. That is now the
-single open item in seg 3.
+The 28 geometry programs are all flag=0 and **every one starts with opcode 0 or
+4** — 14 each — which is exactly what the five-opcode VM requires.
+
+Their widths took one more step. The five build handlers give
+`op0` 6-or-8 by two sign bits, `op1` `2+6·popcount(b1&7)`, `op2` fixed 3,
+`op3` `3+6·`(nonzero 2-bit groups), `op4` `2+8n` — all confirmed against the
+disassembly — and they still accepted only 6%. The missing piece is that **`op0`
+and `op4` both call a shared prologue first**, `FUN_100030f8`, and that prologue
+consumes stream:
+
+```asm
+  lbz  r23, 0(r31)      ; flags: bits 0-2 and 4-6 both tested
+  lbz  r3,  1(r31)      ; indexes the BSS table passed in r28
+  lbz  r3,  2(r31) ; lbz r3, 3(r31)
+  lhz  r25, 4(r31) ; lhz r24, 6(r31)
+  addi r31, r31, 8
+```
+
+Adding those 8 bytes to `op0` and `op4` brings two programs to an exact landing
+and two more to within 6. But the prologue has **seven** `addi r31,r31,n` sites
+(8, 4, 6, 6, 6, 2, 2) selected by that flags byte, so it consumes anywhere from 8
+to 34 bytes. Finishing the geometry decode means walking the control flow of one
+536-byte function — well-defined, bounded, and the last thing standing between
+the static analysis and fully readable object data.
+
+### The complete data map
+
+Both parts have the same three-table shape, and `_play_part_3` mirrors
+`_play_part_1` instruction for instruction:
+
+| part | kind | table | n | bytes | consumer |
+|---|---|---|---|---|---|
+| 1 | scenes | `r2+0x25aa` | 18 | 6,134 | `_generate_scene` (8 ops) |
+| 1 | textures | `r2+0x2642` | 48 | 2,780 | `_generate` (20 ops) |
+| 1 | geometry | `r2+0x2706` | 28 | 3,881 | `_generate_obj` (5 ops) |
+| 3 | scenes | `r2+0x277a` | 11 | 13,268 | `_generate_scene` |
+| 3 | textures | `r2+0x27a6` | 21 | 765 | `_generate` |
+| 3 | geometry | `r2+0x27fe` | 11 | 680 | `_generate_obj` |
+
+Every table is `0xFFFFFFFF`-terminated. **seg 3 is 99% accounted for** —
+12,795 of 12,796 bytes, one byte of padding.
+
+**seg 4 is only 28% accounted for by the visual data**, and the remainder is the
+softsynth's: three further tables (`r2+0x2f02`, `r2+0x2f0e`, `r2+0x372a`) point
+into it and are read by `_generate_samples_part1` and `_generate_samples_part3`.
+So roughly **37 KB of seg 4 — the single largest block of data in the intro — is
+audio**, which is consistent with the softsynth also being the largest block of
+code. Part three is the longer part with far less geometry and texture data
+(765 + 680 bytes against part one's 6,661), so most of its 13 KB of scene data is
+sequencing rather than content.
+
+That gives a complete picture of what the intro *is*, by weight:
+
+```
+  audio        ~14 KB code  + ~37 KB data
+  scenes                      19,402 bytes over 29 streams
+  geometry     1.6 KB code  +  4,561 bytes over 39 programs
+  textures       4 KB code  +  3,545 bytes over 69 programs
+  renderer     ~3 KB code   +  22 Warp3D calls
+  font                         2,248 bytes, fully recovered
+```
 
 #### The texture language, disassembled
 
