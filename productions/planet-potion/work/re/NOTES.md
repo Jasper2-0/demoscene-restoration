@@ -117,11 +117,49 @@ It never bites in the demo because the text only uses characters that exist. Two
 consequences: a port must not reproduce it as a hang, and it is independent
 evidence that the shipped strings are confined to that 40-glyph set.
 
-What still fails: the character source at `0x10002738` yields values absent from
-the font table, so the run dies in that unterminated scan. The remaining setup
-gap is between `_play_part_1`'s real prologue and what `runscene.py` reproduces —
-`_next_effect`, the per-scene frame setup at `0x10001d9c`, and the fact that part
-one's first scene is `r2+0x25d2`, not `r2+0x25aa`.
+**And that last point was the whole problem.** `r2+0x25aa` is the first *table
+slot* but not the first *scene played* — part one opens with `r2+0x25d2`. Every
+earlier attempt had been feeding the interpreter the one stream that happens to
+fail. Running the real order works: **16 of 18 part-one scenes decode**, only
+`0x25aa` and `0x25ee` still faulting.
+
+### The scene graph, extracted
+
+`_show_scene` dispatches on a halfword at node+8 holding *index × 4*. Reading it
+back gives the graph directly. Node sizes are useless for this — the handlers
+allocate sub-objects between list nodes, so consecutive nodes are not adjacent.
+
+```
+  r2+0x25d2  11 nodes   [7, 3,3,3,3,3,3,3,3,3,3]
+  r2+0x25ba   8         [7, 3,3,3,5,3,3,5]
+  r2+0x25ce  10         [7, 5,3,3,4,3,3,3,3,3]
+  r2+0x25ae   9         [7, 3,3,3,3,3,3,3,5]
+  r2+0x25b2   7         [7, 3,3,5,3,3,3]
+  r2+0x25b6   8         [7, 3,3,3,3,3,3,5]
+  r2+0x25ca   2         [7, 5]
+  r2+0x25be   3         [7, 5,5]
+  r2+0x25c2   3         [7, 5,5]
+  r2+0x25c6   8         [7, 3,3,5,5,3,4,4]
+  r2+0x25da   5         [7, 5,5,5,5]
+  r2+0x25d6   2         [7, 5]
+  r2+0x25de   2         [7, 5]
+  r2+0x25e2   7         [7, 5,5,5,5,5,6]
+  r2+0x25ea   3         [7, 5,5]
+  r2+0x25e6   4         [7, 5,5,5]
+```
+
+**Every scene opens with node type 7** — the root, exactly matching the implicit
+opcode 7 in the stream format. It is never dispatched; the render table has only
+seven slots (0–6), so a stored 7 is the sentinel, not an index.
+
+Frequency across part one: **type 3 ×43, type 5 ×29, type 4 ×3, type 6 ×1**, plus
+the 16 roots. So part one uses only **four of the six render handlers**, and the
+two thin wrappers at slots 0–2 — the direct `DrawLineStrip` and `DrawTriFan`
+calls — are **never reached from part one's scene graph** at all. Whatever drives
+those is elsewhere, or belongs to part three.
+
+That is the timeline: for each scene, an ordered list of typed draw nodes, with
+the per-scene running order readable from `_play_part_1`.
 
 **Geometry.** Opcode byte, then operands — but **do not try to model the
 widths**. Three attempts failed and the reason is instructive:
