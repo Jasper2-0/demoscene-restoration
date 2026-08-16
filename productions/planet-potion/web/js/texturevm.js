@@ -50,13 +50,27 @@ export function addStore(dst, d, src, s) {
 }
 
 /**
- * 0x100007c4 — the VM's core mix, used by five handlers.
- * `dst + (src - dst) * t` on channels 1..3, with `t = src[0]/255`, then clamp.
- * Channel 0 is the weight, not a colour.
+ * 0x100007c4 — the VM's core mix, used by five handlers and by op2, op3, op5,
+ * op8 and op9.
+ *
+ * THE DIRECTION IS THE OPPOSITE OF THE OBVIOUS ONE. The instruction is
+ * `fnmsub f25, f25, f22, f21` = `f21 - f25*f22`, where f21 is the SOURCE
+ * channel and f25 is `(src - dst)`. So:
+ *
+ *     out = src - (src - dst) * t          t = src[0]/255
+ *
+ * which gives the SOURCE at t = 0 and the DESTINATION at t = 1 — the weight runs
+ * backwards from every convention. The guard is `fcmpo f22, f31`: when src[0] is
+ * zero the differences are never computed, so the result is the source exactly.
+ *
+ * Writing this the intuitive way round produced black where the original writes
+ * white, and cost exactly half the pixels of every checkerboard.
+ *
+ * Channel 0 of the destination is preserved: the three fnmsubs cover 1..3 only.
  */
 export function blend(dst, d, src, s) {
   const t = src[s] / 255;
-  for (let i = 1; i < 4; i++) dst[d + i] += (src[s + i] - dst[d + i]) * t;
+  for (let i = 1; i < 4; i++) dst[d + i] = src[s + i] - (src[s + i] - dst[d + i]) * t;
   clamp4(dst, d);
 }
 
@@ -577,8 +591,18 @@ export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 /** Opcodes whose bodies are specified but not yet written here. */
 export const UNIMPLEMENTED = new Set([]);
 
-/** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
+/**
+ * Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them.
+ *
+ * Takes the Float32Array, NOT the Surfaces object. Passing the object indexes
+ * undefined, which becomes NaN, which `| 0` turns into 0 — so every texture
+ * comes out black and a diff against the 25 uniform-black references reports
+ * matches. Guard rather than trust the caller.
+ */
 export function toARGB(surf) {
+  if (!(surf instanceof Float32Array)) {
+    throw new TypeError('toARGB expects a Float32Array — pass surfaces.current');
+  }
   const out = new Uint8Array(PIXELS * 4);
   for (let i = 0; i < PIXELS; i++) {
     for (let c = 0; c < 4; c++) {

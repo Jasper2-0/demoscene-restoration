@@ -48,7 +48,7 @@ for (const p of progs) {
   let got;
   try {
     const { ops } = decode(Uint8Array.from(Buffer.from(p.hex, 'hex')), WIDTHS);
-    got = toARGB(run(ops, kernels));
+    got = toARGB(run(ops, kernels).current);   // .current — run() returns Surfaces
     ran++;
   } catch (e) { failed++; continue; }
   const want = readPNG(png);
