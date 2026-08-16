@@ -583,10 +583,21 @@ Every width table in this section counted one byte per node too few — and addi
 it **still does not make `scenegram.py` walk a stream**: 0/29, dying at the same
 byte.
 
-**Bit-flip probes say the bytes after the length are consumed, not skipped.**
-Flipping one bit of `stream+2` (`0x5b`) crashes the run; flipping one bit of
-`stream+3` — the `0xff` that is identical in all 29 streams — crashes it too.
-Unpatched, the same scene builds `[3, 3, 3, 4, 4]`.
+**Bit-flip probes map which header bytes matter.** Flipping one bit of each and
+rebuilding the scene, against an unpatched `[3, 3, 3, 4, 4]`:
+
+```
+  +2  0x5b -> 0x5a   CRASH        consumed
+  +3  0xff -> 0xfe   CRASH        consumed
+  +4  0x0f -> 0x0e   unchanged    NOT consumed
+  +5  0x01 -> 0x00   CRASH        consumed
+```
+
+`+4` is the discriminating one. It is identical in all 29 streams *and* inert,
+while `+3` is identical in all 29 *and* load-bearing — so "constant across the
+production" and "part of a header" are different properties, and reading a fixed
+byte as structure was never safe. Whatever `+4` is, nothing in the scene build
+reads it.
 
 So the region after the u16 length is parsed and load-bearing, and two of its
 bytes are constant across the whole production. "Skip a fixed header" is
