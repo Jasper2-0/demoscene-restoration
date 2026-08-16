@@ -500,14 +500,21 @@ that approximation is part of what the picture looks like.
 
 `cx`, `cy` and `scale` come from the **node**, not from any global camera, and
 recording them alongside each draw shows what they are for. Across a sample of
-six scenes:
+six scenes — 3,877 draws, 54 distinct triples:
 
-| `(cx, cy, scale)` | draws | what it is |
-|---|---|---|
-| `(320, 240, 320)` | 447 | screen centre, focal length 320 — the default |
-| `(200, 160, 234.4)` / `(200, 160, 159.03)` | 960 each | same centre, animated zoom |
-| `(160, 350, 100)` | 48 | a small inset element |
-| 30-odd one-offs, all `scale = 320` | 1–2 each | sprites and text placed by hand |
+| `(cx, cy, scale)` | draws |
+|---|---|
+| `(200, 160, 159.0)` | 1,302 |
+| `(200, 160, 234.4)` | 1,148 |
+| `(640, 180, 120.0)` | 568 |
+| `(320, 240, 320.0)` | 538 |
+| `(140, 180, 190.0)` | 105 |
+| `(160, 350, 100.0)` | 48 |
+
+with `scale` taking 40, 60, 80, 100, 120, 159, 190, 234.4 and 320 across the
+sample — a real spread of focal lengths, not one default with exceptions. (An
+earlier version of this table was measured before the seg-5 fix and showed
+`scale = 320` almost everywhere; that was the collapse, not the design.)
 
 So `(cx, cy)` is a **2D screen placement** and `scale` a focal length, both
 animated per node — `(0.77, 300)`, `(5.38, 302)`, `(-1.43, 294)` in consecutive
@@ -647,11 +654,17 @@ That is testable, and it tests true. Driving `r2+0x23bc` directly and recording
 one frame:
 
 ```
-scene 0x25ba   signal 0, 1, 11 -> 86 draws, identical
-               signal 2, 3, 4, 10 -> 87 draws, identical to each other
+scene 0x25ba   signal 0, 1, 11 -> 327 draws, identical
+               signal 2, 3, 4, 10 -> 328 draws, identical to each other
 scene 0x277a   signal 2 -> a different frame;  signal 3 -> different again,
-               33 draws;  0, 1, 4, 10, 11 -> baseline
+               55 draws;  0, 1, 4, 10, 11 -> baseline
 ```
+
+This one **survived the seg-5 correction unchanged**. Re-run with the lookup
+tables present, the absolute counts move but the partition is identical — the
+same signals are inert and the same signals are not, in both scenes. Worth
+recording, because it is the difference between a result that depended on the
+broken state and one that did not.
 
 Which closes the loop with the module data. Effect 7's parameters measured in
 the patterns are **0, 1, 2, 3, 4, 10 and 11** — value 1 advances the scene, and
