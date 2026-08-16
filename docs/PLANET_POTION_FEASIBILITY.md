@@ -145,14 +145,74 @@ int _generate_obj(ushort *prog) {
 }
 ```
 
-Two dispatch tables, `0x14` bytes apart in the small-data area — **five entries
-each**. A length-prefixed byte stream, a per-opcode size table, a build pass and
-an evaluate pass over a linked list of nodes.
+Two dispatch tables, `0x14` bytes apart in the small-data area. **The tables have
+now been read, and the language is bounded at exactly five opcodes** — not
+inferred from the gap but from the data either side of it: `build[5]` is
+byte-identical to `eval[0]` because the tables abut, and `eval[5]` reads as
+`0x1c40204c`, which is the first four bytes of the size table (28, 64, 32, 76)
+misread as a pointer.
 
-This is the "compact data-driven system" worth hunting for, and it is at the
-small end of the plausible range. Recovering five build ops and five eval ops,
-plus the opcode streams baked into seg 3 / seg 4, plausibly recovers all the
-geometry in the intro.
+```
+build table @ 0x1000a9b0   eval table @ 0x1000a9c4   size table @ 0x1000a9d8
+  op  node size   build handler        eval handler
+   0     28       0x100048b8  676 B    0x10004d8c    4 B   (return;)
+   1     64       0x10004b5c  200 B    0x10004d90   80 B
+   2     32       0x10004c24   64 B    0x10004de0  132 B
+   3     76       0x10004c64  136 B    0x10004e64  168 B
+   4     32       0x10004cec  160 B    0x10004d8c    4 B   (return;)
+```
+
+**The entire geometry language is 1,620 bytes of PPC code.** Two of the five
+opcodes have no evaluate phase at all — their eval slot points at a bare `blr`.
+One opcode, `op0`, is two fifths of the whole thing.
+
+None of these nine functions is in the symbol table; they are file-local statics
+between `_generate_obj` and `_calc_matrix` that the linker did not export.
+
+#### A trick that pays for itself
+
+Ghidra shows the tables as `PTR_vm_build_op0_1000a9b0` and resolves
+`alloc_mem((&DAT_1000a9d8)[op])` **only if `r2` is pinned**. Setting the register
+context to `0x10007FFE` across the code range before analysis turns every
+`unaff_r2 + disp` into a real address, and the dispatch reads decompile as array
+indexing instead of arithmetic on an unknown. It is one `setValue` call and it
+changes how much of the output is legible.
+
+#### What op0 actually generates
+
+The largest handler is a **parametric grid/shell generator**, and its parameter
+encoding is pure size-coding:
+
+```c
+iVar4 = (w & 0x1f) + 1;          // 1..32   subdivisions, axis 1
+iVar3 = (w >> 5 & 0x1f) + 1;     // 1..32   subdivisions, axis 2
+iVar2 = (w >> 10) + 1;           // 1..64   subdivisions, axis 3
+```
+
+— three counts packed **5:5:6 into one 16-bit word**. Two further words carry
+dimensions, and their *sign bits* select one of four modes (`cVar8` 0..3), each
+mode routing to a different setup routine. The emit loop is triply nested over
+the three counts, and its inner test skips any point that is interior on both
+axes at once, so it walks the **boundary** of the volume rather than filling it.
+
+That is a box/grid *shell*, which is exactly the kind of primitive a 64K intro
+builds everything from — and it is consistent with the renderer only ever
+drawing triangle fans.
+
+#### And there is a second level above it
+
+`_generate_scene` is a separate interpreter with its **own** node-size table at
+`0x1000a8c8`, 16-bit entries, running `[44, 48, 52, 108, 212, 44, 56, 60]` and
+then zero — **8 scene-level opcodes**. Unlike the object level it uses no
+function-pointer table; there is no `bctr` anywhere in its 520 bytes, so its
+dispatch is inline.
+
+So the whole data-driven system is **8 scene operations over 5 geometry
+operations — 13 in total**. The hoped-for outcome was "a 20-operation scene
+language and 10 generators". It is smaller than that.
+
+What remains on this axis is locating the opcode streams themselves in seg 3 /
+seg 4 and decoding the operand layout each handler reads.
 
 ### The 3D is a bounded, documented API
 
@@ -319,8 +379,8 @@ The natural first milestone is the one you named — a full-frame trace — but 
 static side can be pushed much further first, cheaply:
 
 1. commit the hunk loader + Ghidra import as `work/re/` tooling;
-2. resolve the two five-entry VM dispatch tables to five build and five eval
-   functions, and locate the opcode streams in seg 3 / seg 4;
+2. ~~resolve the VM dispatch tables~~ — done; next is locating the opcode
+   streams in seg 3 / seg 4 and decoding each handler's operand layout;
 3. the 22 Warp3D vectors are now named against ReWarp3DPPC — write
    down the state flags actually used;
 4. only then stand up WinUAE for dynamic confirmation.
