@@ -344,7 +344,28 @@ row. Both the stride story and the pixel-index story fail together.
 
 What stands is only what the instructions show: a byte at `+8` split into
 nibbles driving two doubling counters, four PRNG draws per iteration `fmadd`ed
-into four channels, and a clamped store. **What the nibbles control is open.**
+into four channels, and a clamped store.
+
+**So measure the operands instead of reading them.** Varying each of the twelve
+in turn between `0x00` and `0x80` against a `0x40` baseline, and watching the
+per-channel means and the spread:
+
+| operand | effect |
+|---|---|
+| `[0]` | **global level** — mean 84.3 at `0x00`, 59.9 at `0x40`, 35.4 at `0x80` |
+| `[1] [2] [3]` | **per-channel level**, one each: 19.8 → 59.9 → 99.9, linear in the operand |
+| `[4]` | **global amplitude** — mean falls and spread rises together |
+| `[5] [6] [7]` | **per-channel amplitude**, one each: `[5]` takes channel 1's spread from 16.4 to 104.7 |
+| `[8] … [11]` | small but real: spread moves by 3–5, means barely at all |
+
+Twelve operands resolve into four groups, and the structure is legible without
+knowing what any instruction does: a level and an amplitude, each once globally
+and once per channel, then four parameters that change the *character* of the
+noise rather than its level. Alpha stays 0.0 throughout — `op9` does not write it.
+
+That last group is where the nibble byte lives, and its small effect is itself
+evidence: a stride would have changed how many pixels were lit, and nothing did.
+**What `[8]`–`[11]` control is still open**, but it is not sparsity.
 
 This is the second interpretation in this session that a test destroyed — the
 first being the six silent scenes — and in both cases the test was worth more
