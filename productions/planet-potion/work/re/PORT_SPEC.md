@@ -433,12 +433,16 @@ the two smallest insets in swapped roles — consistent with each corner getting
 pair. It ends `stw r11, 0x20(r27)` and branches to the common tail at
 `0x10002f8c`.
 
-**`node+0x20` is the same field §3c's type-5 path reads** (`lwz r26, 0x20(r14)`)
-before transforming what it finds there. `r11` is initialised to 0 at
-`0x10002b80`; whether it accumulates the allocated sub-objects along the way is
-**not established** — the intervening blocks were not read instruction by
-instruction, and this is exactly the kind of gap where a plausible guess has
-already cost time once in this section.
+**It stores zero.** Scanning every instruction of the handler for a write to
+`r11` finds exactly two — `li r11, 0` at `0x10002b80` and the `stw` at the end —
+so `node+0x20` is cleared unconditionally and does not accumulate anything. The
+plausible reading, that it counts or chains the allocated sub-objects, is wrong;
+a two-line scan settles it where reading the blocks one by one would not have.
+
+`node+0x20` is the same field §3c's type-5 path reads (`lwz r26, 0x20(r14)`) and
+guards with `cmpwi r26, 0; beq`, so a type-3 node clearing it is consistent: the
+field means different things per type, and zero is the "nothing here" the mesh
+path already tests for.
 
 ### 4b. Geometry is built once — only one opcode evaluates per frame
 
