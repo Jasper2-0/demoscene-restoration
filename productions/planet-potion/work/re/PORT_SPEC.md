@@ -177,7 +177,7 @@ blending. Z-buffer and its update are toggled per frame; fog per scene.
 | | |
 |---|---|
 | **16-bit dither** | the original composites into a 16-bit target; an RGBA8 port will not band the same way |
-| **`fres` / `frsqrte`** | low-precision estimates on hardware, exact under qemu, so the recorded stream cannot show them. Bounded from the stream: median 0.39 px, p95 1.25 px, max 2.50 px displacement; 39.6% of vertices over half a pixel. An architectural ceiling, and a systematic warp about the projection centre rather than jitter |
+| **`fres` / `frsqrte`** | low-precision estimates on hardware, exact under qemu, so neither the recorded stream nor the exported textures can show them — `op6` and `op11` both use `frsqrte`, so the 69 PNGs are byte-exact *reproductions of the code*, not necessarily of what a Permedia-era Amiga drew. Bounded from the stream: median 0.39 px, p95 1.25 px, max 2.50 px displacement; 39.6% of vertices over half a pixel. An architectural ceiling, and a systematic warp about the projection centre rather than jitter |
 | **fill rule** | triangle fill and the top-left tie-break are `unknown` |
 | **blend overflow** | clamp or wrap is `unknown` |
 | **raw Z encoding** | before the driver normalises, `unknown` |
@@ -292,6 +292,31 @@ between the float vectors at `r22+0x10` and `r22+0x30`, storing them at
 bytes, of which **two are shifted left by 7** — multiplied by the 128-pixel row
 stride — so those two are row coordinates and the other two are columns. Two
 endpoints, eight interpolants, one fill.
+
+**`op2`, `op3` and `op5` are three different generators, not one.** This
+contradicts an earlier differential finding and the correction matters, because
+the old advice was "implement it once":
+
+| | |
+|---|---|
+| `op2` | `op8`'s skeleton with **no threshold branch** — one band. Per-pixel field from `+0x20`/`+0x24`, endpoints `+0x28`/`+0x2c`, whole surface, both axes descending |
+| `op3` | a **checkerboard**. Two independent run-length toggles, x period at operand 10 and y period at operand 11, combined through the sign of a running flag |
+| `op5` | **1D stripes**. Alternates between the blocks at `r22+0x00` and `r22+0x10` with run lengths from operands 8 and 9, walking the surface linearly |
+
+They produced byte-identical output in the differential probe because that probe
+fed operands on which all three degenerate to a uniform write. Three genuinely
+distinct patterns coinciding on one input is not evidence of one operation, and a
+port needs all three.
+
+`op3` also pins the hang recorded in §9 exactly. Its reduction loops are
+`subf r14, r25, r14` and `subf r12, r24, r12` against operands 10 and 11 — with
+either at zero, the value never reaches the bound and the loop never exits. That
+is the same pair the black-box probe found, now located to the instruction.
+
+**`op6` is a two-point distance op.** It reads two points from `+0x20…+0x2c`,
+forms `dx² + dy²`, and takes `frsqrte` of it — a reciprocal length, so the
+following pass is directional. Note this is the texture VM's own use of a
+**low-precision estimate instruction**, the same class as the renderer's `fres`.
 
 Read so far:
 `op10` permutes channels by two swaps, `op11` applies an `frsqrte` curve about
