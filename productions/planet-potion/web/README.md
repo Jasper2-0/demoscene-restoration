@@ -61,5 +61,10 @@ between recorded and computed per stage, and only the last one is computed today
 | draw emission | recorded |
 | **GL state / raster** | **computed — this file** |
 
-Audio is absent: it needs the two softsynth generators and a DigiBooster replayer
-with its DSP echo, all specified in `PORT_SPEC.md` §8 and none written.
+Audio is not playable yet. `js/dbm.js` reads a DigiBooster Pro 2 module and is
+checked against both of the intro's own modules by `work/re/dbmcheck.mjs` —
+every byte claimed by a chunk, chunk sizes agreeing with the independent Python
+walk, and the effect-7 scene signals coming out at 26 and 13, the counts
+`showorder.py` derived from the code rather than from the music. What is still
+missing is the replayer itself, the DSP echo, and the two softsynth generators
+that build the modules in the first place (`PORT_SPEC.md` §8b–8h).

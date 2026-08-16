@@ -787,6 +787,20 @@ DigiBooster effect set is `unread` and a replayer needs all of it.
 Port from libopenmpt's `Load_dbm.cpp` and its DigiBooster Pro Echo plugin (BSD).
 UADE running the real `dbplayer.library` is byte-exact ground truth for an A/B.
 
+**The container reader is written** — `web/js/dbm.js`, checked by
+`work/re/dbmcheck.mjs` against both modules. Two things it had to be told that
+the format description does not make obvious:
+
+* the generator's output carries a **u32 size prefix** before `DBM0`, written by
+  `0x10006ef0` before the header blob, and the prefix is the authority on where
+  the module ends — part one's dump carries four zero bytes past it;
+* the pattern cell mask has **six** bits, not four: note, instrument, effect1,
+  param1, effect2, param2 are flagged separately. Pairing effect with parameter
+  desynchronises the stream from the first cell that carries one without the
+  other, and a coverage check cannot see it because each pattern resynchronises
+  at its declared end. What sees it is the effect-7 count — 26 and 13 with the
+  right mask, 6 and 5 with the wrong one.
+
 ## 9. Two bugs to reproduce, and two loops to bound
 
 **Reproduce** — both ship and both are part of the work:
