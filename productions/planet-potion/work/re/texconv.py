@@ -36,8 +36,13 @@ def stw(s, a, d):
     return (36 << 26) | (s << 21) | (a << 16) | (d & 0xFFFF)
 
 
-def run(flat, payload, dumps):
-    """Render `payload` and dump each (addr, len) in order."""
+def run(flat, payload, dumps, timeout=90):
+    """Render `payload` and dump each (addr, len) in order.
+
+    Returns None if the run does not finish: some operand values send a texture
+    opcode into a loop that does not terminate, and a caller probing the operand
+    space needs that as an answer rather than an exception.
+    """
     body = struct.pack('>H', len(payload)) + payload
     c = H.load32(1, H.STACK) + H.load32(2, R2) + H.load32(13, H.STACK - 0x1000)
     for i in range(0, len(body), 4):
@@ -67,8 +72,11 @@ def run(flat, payload, dumps):
                    for va, f, m, off, fl in loads)
     open('/tmp/pp-texconv.elf', 'wb').write(eh + phs + blob)
     os.chmod('/tmp/pp-texconv.elf', 0o755)
-    out = subprocess.run([H.QEMU, '/tmp/pp-texconv.elf'],
-                         capture_output=True, timeout=90).stdout
+    try:
+        out = subprocess.run([H.QEMU, '/tmp/pp-texconv.elf'],
+                             capture_output=True, timeout=timeout).stdout
+    except subprocess.TimeoutExpired:
+        return None
     res, o = [], 0
     for _, n in dumps:
         res.append(out[o:o + n]); o += n

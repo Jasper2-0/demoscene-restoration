@@ -367,6 +367,43 @@ That last group is where the nibble byte lives, and its small effect is itself
 evidence: a stride would have changed how many pixels were lit, and nothing did.
 **What `[8]`–`[11]` control is still open**, but it is not sparsity.
 
+### The whole operand map — `texprobe.py`
+
+The same scan over all twenty opcodes. `.` is no measurable effect, `cN` one
+channel, `all` every channel, `~` spread only:
+
+```
+  op  0 (  3)  c1 c2 c3
+  op  1 ( 20)  .  .  .  .  .  ~  .  .  .  .  .  .  .  .  .  .  .  .  .  .
+  op  2 ( 13)  .  .  .  .  all c1 c2 c3 .  .  .  all .
+  op  3 ( 12)  all c1 c2 c3 c3 c1 c2 c3 .  .  HANG HANG
+  op  5 ( 10)  all c1 c2 c3 all c1 c2 c3 .  .
+  op  7 (  9)  ~  ~  ~  ~  ~  ~  ~  ~  ~
+  op  8 ( 18)  .  x13 .  .  .  all all all .
+  op  9 ( 12)  all c1 c2 c3 all c1 c2 c3 all ~  ~  c3
+  op 10 (  1)  all      op 11 (  1)  all      op 12 (  1)  all
+  op 13..16, 18, 19      no effect on the colour surface
+  op 17 (  3)  c1 c2 c3
+```
+
+Three things fall out that no single-label pass could give.
+
+**There is a shared colour-parameter block.** The quadruple `all c1 c2 c3` — one
+global followed by three per-channel — appears in ops 2, 3, 5 and 9, twice over
+in 5 and 9. So several opcodes take the same parameter shape, and a port
+implements that block once.
+
+**Ops 13, 14, 15, 16, 18 and 19 move nothing on the colour surface**, which
+matches the handlers read above: two are region state, three are the mask
+pipeline. The probe and the reading agree, which is the first time in this
+section they have.
+
+**`op3` hangs on two of its operands.** Operands 10 and 11 at `0x00` or `0x80`
+send it into a loop that does not terminate in 25 seconds. That is a second
+runaway in the original after the glyph scan, and a port must bound it — which
+is only visible because the probe treats a timeout as an answer rather than an
+exception.
+
 This is the second interpretation in this session that a test destroyed — the
 first being the six silent scenes — and in both cases the test was worth more
 than the interpretation. The pattern is the same: a reading that explains a lot
@@ -1694,6 +1731,7 @@ synchronous stall needing an occlusion query rather than a literal translation.
 | `texops.py` | one-opcode texture programs, for naming the texture ops |
 | `texops2.py` | generator-then-opcode pairs, which separates modifiers from setters |
 | `texconv.py` | dumps, decodes and **verifies** the 40 convolution kernels; writes them as JSON |
+| `texprobe.py` | per-operand sensitivity for all 20 opcodes, including which operands hang |
 | `runscene.py` | runs the scene interpreter; dumps the typed draw-node graph |
 | `drawlog.py` | runs `_show_scene` with recording vector stubs; dumps the draw stream and, with `nodes=True`, the per-frame scene graph |
 | `runsynth.py` | runs the softsynth; returns the generated DBM0 module |
