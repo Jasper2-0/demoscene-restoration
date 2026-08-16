@@ -357,7 +357,33 @@ second oscillator's wrap point again, so the flag is octave as well as length.
 Envelopes decay as `x *= (1 - k)` via `fnmsubs`, and a filter pair `f10, f9`
 smooths toward `f8, f7`.
 
-### 8h. The three table accessors
+### 8h. Every routine's sample length, checked against the module
+
+`synthlen.py` reads `r19` (frames) and `r18` (frames per step) out of all 32
+primitives mechanically — both are immediates — and checks the total each length
+should appear against the module the generator actually builds. Nine of the
+eleven distinct lengths in part one match **exactly**:
+
+```
+        0  module  8   scripts  8      50,400  module  8   scripts  8
+   20,000  module  3   scripts  3     120,000  module  1   scripts  1
+   32,768  module  3   scripts  3     128,000  module  2   scripts  2
+  201,600  module 11   scripts 11     150,000  module  1   scripts  1
+                                      262,144  module  1   scripts  1
+```
+
+201,600 needs the one conditional split by hand: `0x10009510` loads 201,600 then
+overwrites it with 100,800 when `r8` is non-zero, which a linear scan cannot
+model, so the tool reports both values rather than picking one. Nine of its
+thirteen calls run with `r8 = 0`; 1 + 1 + 9 is exactly the 11 the module holds.
+
+**The residual is two samples, and there are exactly two unattributed routines.**
+100,800 comes out 16 against the module's 17, and one 25,200 sample is claimed by
+nobody. Part one calls two routines whose length comes from neither an immediate
+nor the script — `0x10008adc` and `0x10009a68`, one call each. Two orphan
+samples, two orphan routines. That is where to look, and it is not yet proven.
+
+### 8i. The three table accessors
 
 Every voice reaches the lookup tables through exactly three routines, and each is
 four instructions:
@@ -377,7 +403,7 @@ are addressable through this path.
 A port that calls `Math.cos` instead of rebuilding the table is choosing a
 different quantisation, not a different spelling — see §0.
 
-### 8i. `0x10009020` and `0x10009258` — the percussion pair
+### 8j. `0x10009020` and `0x10009258` — the percussion pair
 
 Both hardcode their tables rather than taking them from the script, and both
 share one body: `f10` advances linearly while `f9` (rate) and `f5` (amplitude)
@@ -396,7 +422,7 @@ exactly 8 samples of 50,400 frames. `0x10009020`'s 100,800 is shared with
 Both carry the same per-step portamento as §8g — a flag byte per step choosing
 glide or jump — on their own coefficients (`r2+0x2ac2` and `r2+0x2abe`).
 
-### 8j. `0x1000742c` — part three's voice, read
+### 8k. `0x1000742c` — part three's voice, read
 
 18 of part three's 39 calls, sixteen of them consecutive with no setup. Per call
 it reads **ten consecutive `u16`** from the tape at `r25+0x00…0x12` and runs each
