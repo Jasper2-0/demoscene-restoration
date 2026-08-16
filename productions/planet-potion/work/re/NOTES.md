@@ -217,14 +217,51 @@ The remaining twenty-three carry dense weights in the 37–88 range with sums in
 the hundreds and a single zero rotating through the nine positions — softening
 filters with a directional bias.
 
-**The buffers rotate between opcodes, though.** Within one convolution the pair
-is fixed and known, which is what makes the 40/40 verification possible. Trying
-the same method on the table-dispatched opcodes does not work: running `op9` then
-each of ops 12, 10 and 17 with three different operands leaves the surface at
-`r2+0x2466` **identical in all nine cases**, so that is not where they write.
-Extending exact reproduction to the main opcode table needs the inter-opcode
-rotation, which is the code at `0x10000880` and is unread. Recorded as the next
-thing to pull rather than guessed at.
+#### Three surfaces, and a symmetry blit between them
+
+The convolution's pair is not the whole story. Every operation ends by branching
+to `0x10000880`, which is **not** a buffer swap but a **blit through a symmetry**:
+
+```
+  r8 = r2 + 0x24e2 + r12          ; four halfwords: x0, y0, xstep, ystep
+  for 128 rows, for 128 columns:
+      read a pixel sequentially from r20      (the work surface)
+      write it to r19 + ((x + y) << 4)        (the current surface)
+      x += xstep ;  y += ystep per row
+```
+
+The table at `r2+0x24e2` holds **four** records, and they decode exactly:
+
+| | x0 | y0 | xstep | ystep | |
+|---|---|---|---|---|---|
+| 0 | 0 | 0 | 1 | 128 | identity |
+| 1 | 127 | 0 | −1 | 128 | mirror x |
+| 2 | 0 | 16256 | 1 | −128 | mirror y |
+| 3 | 0 | 127 | 128 | −1 | transpose with a flip |
+
+`16256` is `127 × 128`, so record 2 starts at the last row and walks back. The
+convolution path sets `r12 = 0` and gets identity; other handlers take the index
+from their operand stream. **So the generator can mirror or transpose the result
+of any operation**, which is the standard way a 128×128 tile gets symmetric
+structure.
+
+That also corrects a wrong turn. An earlier probe read `r2+0x2466` after ops 12,
+10 and 17 and found it identical in all nine cases, and concluded the buffers
+"rotate". They do not — `0x2466` is the convolution's *work* surface, and the
+blit writes to **`r2+0x2472` = `0x100e29f0`, the current surface**. Reading that
+one instead, the operands visibly matter: `op12` with operand `0x20` lifts
+63.75 → 111.94 and 48.12 → 108.03, with `0x60` a mild lift and with `0xa0` a
+strong fall to 31.62 and 8.18. Three surfaces, each with a role, and no rotation
+at all.
+
+(The exact curve `op12` applies is not established — the outputs converge toward
+a level, which suggests a contrast or gamma form, and the intro does carry a
+`2^x` table. Reading the handler, not fitting the numbers, is the way to settle
+it.)
+
+**And `0x100008e4` is the noise source.** Shifts, `xor`s and adds over `r14`,
+`r11` and `r12`, then `rlwinm` to take a byte and `int2float` — a small
+pseudo-random generator, which is what `op9` draws on.
 
 They are **generated at run time**, not static: `_generate`'s prologue calls
 `0x1000067c` with `r31 = r2+0x2516` before anything else, and the table lives in
