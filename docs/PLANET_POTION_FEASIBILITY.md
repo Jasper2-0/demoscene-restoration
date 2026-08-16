@@ -175,12 +175,42 @@ own names for the three thunks, *setstate / lock / unlock*, line up with
 `W3D_SetState`, `W3D_LockHardware`, `W3D_UnLockHardware`. Two independent
 sources agreeing is as good as this gets without running the thing.
 
-Sweeping every `lwz rX, -N(r31)` gives the **complete 3D surface: 18 distinct
-Warp3D entry points across 23 call sites**, every displacement an exact multiple
-of 6 from -30. `_W3D_ContextTag` is a plain TagItem list against
-`W3D_TAG_BASE = 0x80200000` (tags 0, 1, 2, 6, 7).
+Sweeping the vector fetches gives the surface. `r31` carries the base in most
+functions, but **not all — `r30` does in the texture code**, and an early sweep
+that only looked at `r31` reported 18 entry points and, conspicuously, no
+texture calls at all despite `_init_txtgen` and `_alloc_txt` existing. Scanning
+every base register fixes it.
 
-**Porting the renderer therefore means implementing 18 Warp3D calls on WebGL2**,
+Naming them needs the library's vector order, which **ReWarp3DPPC**'s
+`VecTable68K[]` supplies (LGPL-3.0, github.com/Sakura-IT). Index 4 is
+`W3D_CreateContext` at LVO -30, so `LVO = -6 × (index + 1)`. Against that table
+every single one of the 18 `r31` displacements lands on a real function — a hit
+rate that is not chance — and the author's own thunk names (*setstate*, *lock*,
+*unlock*) fall on `W3D_SetState`, `W3D_LockHardware`, `W3D_UnLockHardware`
+exactly.
+
+**The complete surface is 22 of the library's 85 functions, over 29 call sites:**
+
+| group | functions |
+|---|---|
+| context | `CreateContext` `DestroyContext` `SetDrawRegion`×2 `ClearDrawRegion` `LockHardware` `UnLockHardware` `WaitIdle` `Hint` |
+| state | `SetState` `SetBlendMode` `SetFogParams`×2 `SetZCompareMode` |
+| z-buffer | `AllocZBuffer` `FreeZBuffer` `ClearZBuffer`×2 `ReadZPixel` |
+| texture | `AllocTexObj` `UploadTexture` `SetFilter` `FreeTexObj` |
+| draw | **`DrawTriFan`×4, `DrawLineStrip`×2 — and nothing else** |
+
+`_W3D_ContextTag` is a plain TagItem list against `W3D_TAG_BASE = 0x80200000`
+(tags 0, 1, 2, 6, 7).
+
+Two things fall out of that table. The texture lifecycle is
+alloc → upload → filter → free with **no `SetTexEnv` and no `SetWrapMode`**, so
+texture environment and wrap mode are left at their defaults — one less unknown
+to reverse. And more sharply: **every polygon in the intro is a triangle fan.**
+No `DrawTriangle`, no `DrawTriStrip`, no `DrawArray`, no `DrawElements`. That is
+a hard constraint on what `_generate_obj`'s VM can be emitting, and it collapses
+the primitive-assembly question in the WebGL2 port to a single path.
+
+**Porting the renderer therefore means implementing 22 Warp3D calls on WebGL2**,
 not reverse-engineering a triangle loop. Warp3D of this era is essentially
 fixed-function — state flags, a texture unit, gouraud, fog, z-buffer — which maps
 onto a small GLSL program set. The resolution constants sitting in the pool
@@ -242,7 +272,8 @@ pouët commentary suggested software rendering; the binary says hardware Warp3D
 with an 18-call surface. What *is* software is the **generation** side — textures
 (`_init_txtgen`, `_calculate_txt`, `_alloc_txt`) and geometry (the `_generate_obj`
 VM). So the split you should plan around is: procedural generators on the CPU
-(JS or WASM) feeding 18 Warp3D operations re-expressed as WebGL2.
+(JS or WASM) feeding 22 Warp3D operations re-expressed as WebGL2, all geometry
+ arriving as triangle fans.
 
 **3. Your WASM differential-testing loop is right, and now it has natural
 units.** You framed it as `generate_blob_mesh(seed,time,vertices)`. The real
@@ -271,7 +302,7 @@ would break the property that the deployed code is the code under review.
 
 ## Risks worth naming
 
-- **Warp3D semantics are a fidelity trap.** Knowing which 18 functions are called
+- **Warp3D semantics are a fidelity trap.** Knowing which 22 functions are called
   is not knowing what a 2002 Permedia/Voodoo driver did with them. Blending, fog
   curves and texture filtering are exactly the class of thing METHOD.md §8 warns
   about: a backend disagreement is a hypothesis, not a verdict.
@@ -290,7 +321,7 @@ static side can be pushed much further first, cheaply:
 1. commit the hunk loader + Ghidra import as `work/re/` tooling;
 2. resolve the two five-entry VM dispatch tables to five build and five eval
    functions, and locate the opcode streams in seg 3 / seg 4;
-3. name the 18 Warp3D vectors against the `warp3d.library` FD file and write
+3. the 22 Warp3D vectors are now named against ReWarp3DPPC — write
    down the state flags actually used;
 4. only then stand up WinUAE for dynamic confirmation.
 
@@ -520,7 +551,7 @@ boards only** — Picasso II/IV, Piccolo, Spectrum. There is **no CyberVision PP
 or BlizzardVision PPC, and no Warp3D emulation of any kind**: a grep for
 `warp3d`, `w3d_`, `permedia` or `voodoo` in the binary returns nothing.
 
-Planet Potion opens `Warp3DPPC.library` and makes 18 W3D calls. So on this core
+Planet Potion opens `Warp3DPPC.library` and makes 22 distinct W3D calls. So on this core
 it cannot run *even with* a CyberStorm ROM and the PPC plugin — the ROM was
 never the real blocker, the 3D card is.
 
@@ -565,10 +596,11 @@ from the log, which is a good way to lose an afternoon.
 - **A stub `Warp3DPPC.library`** — *the interesting option, and possibly the
   whole answer.* If no emulator gives real Warp3D, note that we do not actually
   want 3D acceleration: we want **the call log**. A WarpOS PPC library exporting
-  the 18 vectors, logging arguments and returning success would let the intro run
+  the 22 vectors, logging arguments and returning success would let the intro run
   to completion and hand over exactly the trace the port needs — camera
   matrices, vertex buffers, texture handles, state flags, per frame. It sidesteps
-  the graphics-card problem completely, and 18 entry points is a small surface.
+  the graphics-card problem completely, and 22 entry points is a small surface —
+  and ReWarp3DPPC already provides the exact signatures and vector order.
   This is the highest-leverage build on the list.
 
 ### 3. Acquire — free, but not from a cloud session
@@ -607,5 +639,5 @@ current WinUAE, does Warp3D work?  ── no ──> write the stub W3D library
                     run the intro, capture the trace
 ```
 
-Static work — the hunk loader, the VM dispatch tables, naming the 18 Warp3D
+Static work — the hunk loader, the VM dispatch tables, the now-named Warp3D
 vectors — needs none of it and can start today.
