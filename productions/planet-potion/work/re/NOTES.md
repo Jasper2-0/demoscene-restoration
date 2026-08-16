@@ -1830,6 +1830,9 @@ to `/dev/null` is what hid it.
 | `drawlog.py` | runs `_show_scene` with recording vector stubs; dumps the draw stream and, with `nodes=True`, the per-frame scene graph |
 | `runsynth.py` | runs the softsynth; returns the generated DBM0 module |
 | — | `export.py` also writes `tex_programs.json`: the 69 texture programs as bytecode, 3,407 payload bytes. Adding the 69 two-byte length prefixes gives 3,545, which is exactly the 2,780 + 765 in the program table above — the table counts the prefix, this export does not |
+| `docpatch.py` | replace text in a doc and **fail** if the anchor is missing or ambiguous — five PORT_SPEC edits silently did nothing before this existed |
+| `texvmdiff.mjs` | runs the JS texture VM against the 69 byte-exact PNGs; the test that can actually fail |
+| `texvmcheck.mjs` | decode and instruction-coverage report for the texture VM |
 | `speccheck.py` | re-derives PORT_SPEC's numbers from the binary and greps the doc for superseded ones; exits non-zero on drift |
 | `synthhash.py` | pins both modules' size, SHA-256 and per-chunk digests — the audio acceptance test. Slow: minutes per module, so it is not part of `export.py` |
 | `dbmpatt.py` | unpacks DBM0 song and pattern data; finds the scene-advance signals |
