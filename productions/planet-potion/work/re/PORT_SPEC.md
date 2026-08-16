@@ -357,7 +357,46 @@ second oscillator's wrap point again, so the flag is octave as well as length.
 Envelopes decay as `x *= (1 - k)` via `fnmsubs`, and a filter pair `f10, f9`
 smooths toward `f8, f7`.
 
-### 8h. `0x1000742c` — part three's voice, read
+### 8h. The three table accessors
+
+Every voice reaches the lookup tables through exactly three routines, and each is
+four instructions:
+
+| | | |
+|---|---|---|
+| `0x1000a18c` | **cosine** | `idx = (int(x·k)·4 + 0x2000) & 0x7ffc`, into `r30` |
+| `0x1000a1b4` | **2^x**, note → frequency | `idx = int(x·k + k)·4`, into `r29` |
+| `0x1000a1d4` | **e^x** | `idx = int(x·k)·4`, into `r28` |
+
+The mask `0x7ffc` gives **8,192 entries**, and the `0x2000`-byte bias is **2,048
+entries — exactly a quarter turn**. So cosine is the sine table read a quarter
+ahead, which is what the bootstrap's construction implied and this confirms from
+the consumer side. The table is 40,960 bytes on disk; only the first 8,192 floats
+are addressable through this path.
+
+A port that calls `Math.cos` instead of rebuilding the table is choosing a
+different quantisation, not a different spelling — see §0.
+
+### 8i. `0x10009020` and `0x10009258` — the percussion pair
+
+Both hardcode their tables rather than taking them from the script, and both
+share one body: `f10` advances linearly while `f9` (rate) and `f5` (amplitude)
+are multiplied by constants **every frame**, so the cosine argument sweeps
+downward under an exponential decay. That is a drum.
+
+| | frames | per step | steps | calls | samples of that length |
+|---|---|---|---|---|---|
+| `0x10009020` | 100,800 | 6,300 | 16 | 8 | — (shared with others) |
+| `0x10009258` | 50,400 | 3,150 | 16 | 8 | **8** |
+
+`0x10009258` is a clean one-to-one: 8 calls, and part one's `SMPL` contains
+exactly 8 samples of 50,400 frames. `0x10009020`'s 100,800 is shared with
+`0x10009510`'s 16-step preset so it cannot be counted the same way.
+
+Both carry the same per-step portamento as §8g — a flag byte per step choosing
+glide or jump — on their own coefficients (`r2+0x2ac2` and `r2+0x2abe`).
+
+### 8j. `0x1000742c` — part three's voice, read
 
 18 of part three's 39 calls, sixteen of them consecutive with no setup. Per call
 it reads **ten consecutive `u16`** from the tape at `r25+0x00…0x12` and runs each
