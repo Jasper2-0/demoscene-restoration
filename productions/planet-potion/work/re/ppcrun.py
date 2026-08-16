@@ -45,6 +45,43 @@ def load32(r, v):   return [lis(r, v >> 16), ori(r, r, v & 0xFFFF)]
 def call32(r, t):   return load32(r, t) + [mtctr(r), bctrl()]
 
 
+# --- running a PATCHED copy, which is a different claim than running the program
+#
+# Nothing here rewrites the original file. PATCHES is applied to the in-memory
+# segment image the harness maps, so a run either uses it or does not, and which
+# one produced a result is a property of the run rather than of the archive.
+# Anything recorded from a patched run has to say so.
+PATCHES = {}                       # virtual address -> replacement instruction
+
+GLYPH_SCAN = 0x10002e78            # cmpwi rA, 0xff — see NOTES.md
+
+
+def fix_glyph_scan(d0, base=0x10000000):
+    """The one bug in the original that stops the harness cold.
+
+    Scene handler [4]'s glyph lookup reads a table entry into r10, compares it
+    against the sought character in r26 — and then tests **r26** against the
+    table's 0xFF sentinel for its loop exit. So a character outside the shipped
+    40 scans forever. Swapping the compare's rA field from r26 to r10 is a
+    one-word change and makes the loop terminate as it was meant to.
+
+    It never bites in the demo, whose text stays inside the 40 glyphs. It bites
+    the harness because the harness runs scenes out of their normal order.
+    """
+    w = struct.unpack_from('>I', d0, GLYPH_SCAN - base)[0]
+    PATCHES[GLYPH_SCAN] = (w & ~(31 << 16)) | (10 << 16)
+    return PATCHES[GLYPH_SCAN]
+
+
+def load_seg(flat, fn, va):
+    """Read a segment image, applying any PATCHES that land inside it."""
+    d = bytearray(open(os.path.join(flat, fn), 'rb').read())
+    for a, w in PATCHES.items():
+        if va <= a < va + len(d) - 3:
+            struct.pack_into('>I', d, a - va, w)
+    return bytes(d)
+
+
 def read_layout(flat):
     segs = []
     for line in open(os.path.join(flat, 'layout.txt')):
@@ -72,7 +109,7 @@ def build(flat, target, regs, out_addr, out_len, path):
     code += [li(0, 1), li(3, 0), sc()]        # exit(0)
     stub = b''.join(struct.pack('>I', w) for w in code)
 
-    pieces = [(va, (None if fn is None else open(os.path.join(flat, fn), 'rb').read()), sz)
+    pieces = [(va, (None if fn is None else load_seg(flat, fn, va)), sz)
               for va, sz, fn in segs]
     pieces.append((SCRATCH, stub, SCRATCH_SZ))
 

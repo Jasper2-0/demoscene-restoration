@@ -185,7 +185,7 @@ def run(stream, frames=(0,), txt_tab=0x2642, obj_tab=0x2706, timeout=240, stop=9
         overlay=None):
     stub = build(stream, frames, txt_tab, obj_tab, stop, overlay)
     segs = H.read_layout(FLAT)
-    pieces = [(va, (None if fn is None else open(os.path.join(FLAT, fn), 'rb').read()), sz)
+    pieces = [(va, (None if fn is None else H.load_seg(FLAT, fn, va)), sz)
               for va, sz, fn in segs]
     pieces.append((H.SCRATCH, stub, 0x00800000))
     EH, PH, AL = 52, 32, 0x1000

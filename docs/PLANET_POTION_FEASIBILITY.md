@@ -1185,8 +1185,21 @@ returns, and running `_show_scene` produces the intro's own draw stream —
 
 What that yields is not a hint about the renderer, it is the renderer's result:
 for any `(scene, frame)`, the ordered list of primitives, which texture each
-binds, and the 64-byte screen-space vertices as the original computed them. 27 of
-the 29 scenes record; part three's busiest submits 200 primitives in a frame.
+binds, and the 64-byte screen-space vertices as the original computed them.
+
+**All 29 scenes record.** Two of them only after a one-word patch to the mapped
+image — the glyph-scan compare at `0x10002e78` tests the search key against the
+table sentinel instead of the entry, so a lookup that misses spins forever. It
+never bites the demo, whose text stays inside its 40 glyphs; it bites a harness
+that runs scenes out of order. Swapping the compare's `rA` field from r26 to r10
+turns both hangs into scenes, and `0x25aa` turns out to be the *largest* scene in
+the intro — 963 to 988 primitives, the opening titles, one quad per glyph.
+
+The control matters more than the result: every scene that already decoded is
+**byte-identical** with the patch applied, digest for digest. So the fix only
+touches the path where the original would have hung. Nothing rewrites the
+archive — patches live in the mapped image, and anything recorded from a patched
+run says so in its `patches` field.
 
 It also settles by reading, not by fitting, three things that would otherwise
 have been guessed:

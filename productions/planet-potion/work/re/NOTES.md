@@ -63,7 +63,10 @@ reached from `r2+0x2f02`, `r2+0x2f0e` and `r2+0x372a`.
 
 `_play_part_1` loads its 18 scene slots **out of order** — `0x25d2`, `0x25aa`,
 `0x25ba`, `0x25ce`, `0x25ae`, `0x25b2`, … — and that sequence is part one's
-running order, readable straight from the code.
+running order, readable straight from the code. With one correction made later:
+the first of them, `0x25d2`, goes to `_init_synchro` and is the **overlay** drawn
+on top of every scene, not the first scene. The first scene played is `0x25aa`.
+`showorder.py` prints the whole sequence with durations.
 
 ## Container format
 
@@ -87,9 +90,9 @@ is why payloads begin `5B FF 0F xx 80 00` and that is *not* a magic number. The
 low bits of an operand byte index `param_3`/`param_4`, which are built at
 runtime in seg 6 — so scene streams cannot be decoded statically.
 
-`runscene.py` is the attempt to run the interpreter for real, the way `rungeo.py`
-did for geometry. **It does not work yet**, but it has narrowed the problem to a
-named spot and produced three findings on the way.
+`runscene.py` runs the interpreter for real, the way `rungeo.py` did for
+geometry. It took three findings to get there, recorded here in the order they
+were needed.
 
 *The Warp3D vector stubs have to blanket the region, not sit on 6-byte
 centres.* The globals hold **base + 2**, so real fetches land on odd-looking
@@ -117,11 +120,33 @@ It never bites in the demo because the text only uses characters that exist. Two
 consequences: a port must not reproduce it as a hang, and it is independent
 evidence that the shipped strings are confined to that 40-glyph set.
 
+**And it is one word, so the harness fixes it.** `ppcrun.fix_glyph_scan` swaps
+the compare's `rA` field from r26 to r10 — `0x2c1a00ff` to `0x2c0a00ff` — in the
+*mapped image*, never in the archive. `ppcrun.PATCHES` is applied by `load_seg`
+at map time, so whether a result came from a patched run is a property of the
+run, and anything recorded from one says so (`patches` in `scenes.json` and
+`draws.json`).
+
+Two results follow, and the second is what makes the first usable:
+
+* **The two text scenes decode.** `r2+0x25aa` turns out to be the biggest scene
+  in the intro — 963 to 988 primitives per frame, the opening titles, one quad
+  per glyph. `r2+0x25ee` yields 3 and fades. So the harness now covers
+  **28 of 28**.
+* **Every scene that already decoded is byte-identical with the patch applied.**
+  Hashing the recorded streams of `0x25ba`, `0x25ce`, `0x25ca` and `0x25c6` at
+  three frames each gives the same digest either way. That is the control the
+  first result needs: the fix only changes the path where the original would
+  have hung, so enabling it globally costs nothing.
+
+It also confirms the diagnosis outright. A one-word change to the operand named
+as wrong is what turns a hang into a scene.
+
 **And that last point was the whole problem.** `r2+0x25aa` is the first *table
-slot* but not the first *scene played* — part one opens with `r2+0x25d2`. Every
-earlier attempt had been feeding the interpreter the one stream that happens to
-fail. Running the real order works: **16 of 18 part-one scenes decode**, only
-`0x25aa` and `0x25ee` still faulting.
+slot* but not the first *scene played*. Every earlier attempt had been feeding
+the interpreter the one stream that happens to fail. Running the real order gave
+**16 of 18 part-one scenes**, with `0x25aa` and `0x25ee` still faulting — and
+those two came in later with the one-word patch above, for **18 of 18**.
 
 ### The scene graph, extracted
 
@@ -177,21 +202,21 @@ and 2 — the thin `DrawLineStrip` and `DrawTriFan` wrappers that part one never
 reaches. Nothing in the seven-slot table is dead code, which is a good sign the
 table bound is right.
 
-That is the timeline for the whole demo: **27 of 29 scenes decoded** (16 of 18 in
-part one, 11 of 11 in part three), each an ordered list of typed draw nodes, with
-the running order readable from `_play_part_1` and `_play_part_3`.
+That is the timeline for the whole demo: **29 of 29 scenes decoded** — 18 of 18
+in part one, 11 of 11 in part three — each an ordered list of typed draw nodes,
+with the running order readable from `_play_part_1` and `_play_part_3`.
 
-**The two that fail are both text scenes**, and both die in the same place: the
-loop at `0x10002e44` in scene handler [4], inside the unterminated glyph scan
-described above. Cross-scene state was ruled out — `runscene.py` takes a `pre=`
-list to run earlier scenes first in the same process, and `0x25aa` still fails
-after `0x25d2`, `0x25ee` after `0x25e6`. So the residue is one identified code
-path with a known latent bug, not two unexplained failures.
+Two of them took longer than the rest, and both were text scenes dying in the
+same place: the loop at `0x10002e44` in scene handler [4], the unterminated glyph
+scan described above. Cross-scene state was ruled out first — `runscene.py` takes
+a `pre=` list to run earlier scenes in the same process, and `0x25aa` still
+failed after `0x25d2`, `0x25ee` after `0x25e6` — which left one identified code
+path with a known latent bug rather than two unexplained failures. The one-word
+harness patch then closed both.
 
-For a port this matters little: the glyph scan is the *renderer's* character
-lookup, and the text content itself is ordinary scene data. It does mean the
-harness cannot currently dump those two graphs, and it is a reminder that a port
-must bound that scan rather than translate it literally.
+For a port the lesson is unchanged: the glyph scan is the *renderer's* character
+lookup, the text content itself is ordinary scene data, and a port must bound
+that scan rather than translate it literally.
 
 **Geometry.** Opcode byte, then operands — but **do not try to model the
 widths**. Three attempts failed and the reason is instructive:
@@ -527,12 +552,10 @@ state for those is most likely to be.
 
 ### What the recording covers, and what it does not
 
-26 of 28 scene spans record, **4,358 primitives** across the whole show at five
-samples each. Part three is the heaviest — `r2+0x277e` holds 200 to 215
+All 28 scene spans record once the glyph-scan patch is on (26 without it). Part three is the heaviest — `r2+0x277e` holds 200 to 215
 primitives throughout — and `r2+0x25c6` climbs from 3 primitives to 225 over its
 life, which is the reason for sampling across a scene's own span rather than a
-fixed early window. The two that fail are the same two text scenes as before, on
-the same unbounded glyph scan.
+fixed early window.
 
 Six part-one scenes (`0x25da`, `0x25d6`, `0x25de`, `0x25e2`, `0x25ea`, `0x25e6`)
 record the overlay and **nothing of their own** — confirmed across their full

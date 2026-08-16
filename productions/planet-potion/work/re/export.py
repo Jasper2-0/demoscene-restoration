@@ -27,6 +27,9 @@ import rungeo
 import runscene
 
 BASE = 0x10000000
+PATCH_NOTE = ['glyph scan at 0x10002e78: compare rA r26 -> r10, so the lookup '
+              'terminates on the table sentinel rather than the search key. '
+              'Scenes that decode without it are byte-identical with it.']
 
 
 def g(d0, r2, disp):
@@ -128,7 +131,7 @@ def export_scenes(flat, d0, r2, out):
                 fails += 1
                 res.append({'part': part, 'order': order, 'slot': hex(disp),
                             'stream': hex(strm), 'nodes': None,
-                            'note': 'text scene; harness hits the unbounded glyph scan'})
+                            'note': 'did not decode'})
                 continue
             head = struct.unpack('>I', dat[:4])[0]; arena = dat[4:]
             nodes, node, guard = [], head, 0
@@ -137,7 +140,8 @@ def export_scenes(flat, d0, r2, out):
                 node = struct.unpack_from('>I', arena, node - A + 0x10)[0]; guard += 1
             res.append({'part': part, 'order': order, 'slot': hex(disp),
                         'stream': hex(strm), 'nodes': nodes})
-    json.dump(res, open(f'{out}/scenes.json', 'w'), indent=2)
+    json.dump({'patches': PATCH_NOTE, 'scenes': res},
+              open(f'{out}/scenes.json', 'w'), indent=2)
     return len(res), fails
 
 
@@ -186,7 +190,7 @@ def export_draws(flat, d0, r2, out, mods=()):
                 fails += 1
                 res.append({'part': part, 'order': order, 'stream': hex(strm),
                             'slot': hex(disp), 'startTick': start, 'durTicks': dur, 'frames': None,
-                            'note': 'text scene; harness hits the unbounded glyph scan'})
+                            'note': 'did not decode'})
                 continue
             res.append({'part': part, 'order': order, 'stream': hex(strm),
                         'slot': hex(disp), 'startTick': start, 'durTicks': dur,
@@ -203,6 +207,7 @@ def export_draws(flat, d0, r2, out, mods=()):
                'uv_space': 'texels (0..128), wrapped — not normalised',
                'z': '4/z as a W3D_Double; w = 1/z; both from a PPC fres estimate',
                'tick': 'frame index at 50Hz, local to the scene',
+               'patches': PATCH_NOTE,
                'scenes': res}, open(f'{out}/draws.json', 'w'))
     return len(res), fails
 
@@ -218,6 +223,11 @@ def main():
     d0 = open(os.path.join(flat, next(f for f in os.listdir(flat)
                                       if f.startswith('seg0_'))), 'rb').read()
 
+    # Run a PATCHED copy: one word, the glyph-scan terminator. Without it the
+    # two text scenes spin forever; with it they decode, and every scene that
+    # already worked comes out byte-identical. See ppcrun.fix_glyph_scan.
+    print(f'patch       ... glyph scan {H.GLYPH_SCAN:#010x} -> '
+          f'{H.fix_glyph_scan(d0):#010x}')
     print('font        ...', end=' ', flush=True); ng = export_font(d0, out); print(f'{ng} glyphs')
     print('render state...', end=' ', flush=True); nf = export_render_state(d0, r2, out); print(f'{nf} fog presets')
     print('textures    ...', end=' ', flush=True)
