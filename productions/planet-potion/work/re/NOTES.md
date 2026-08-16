@@ -517,6 +517,32 @@ the rest need state a prior opcode would have set.
 the dispatch. Opcodes `0x50..0x78` are outside this table entirely and all route
 to the single parameterised handler at `0x10000f58`.
 
+## The exported dataset
+
+`export.py` runs everything above in one pass and writes the whole recovered
+production as consumable data:
+
+```
+python3 export.py flat/ out/
+
+  out/textures/p{1,3}_NN.png   69 textures, 128x128, plus a contact sheet
+  out/meshes.json              38 geometry programs: opcodes and vertex records
+  out/scenes.json              29 scenes: ordered typed draw-node lists
+  out/font.json                40 glyphs with the shipped quirks recorded
+  out/render_state.json        Warp3D configuration, fog presets, port notes
+  out/manifest.json            counts and what failed
+```
+
+About 2 MB, dominated by the textures, and **regenerable from the original
+archive by this one command** — so it is not committed, per the README's rule for
+baked intermediates. The two scene failures and one mesh failure are recorded in
+the output rather than silently dropped.
+
+`render_state.json` is written as port guidance rather than raw findings: the
+reversed depth convention, the blend factors as WebGL2 names, fog as
+per-vertex-interpolated linear, and the note that `W3D_ReadZPixel` is a
+synchronous stall needing an occlusion query rather than a literal translation.
+
 ## Tools here
 
 | file | what |
@@ -526,6 +552,9 @@ to the single parameterised handler at `0x10000f58`.
 | `rendertex.py` | every texture program → PNG + contact sheet |
 | `rungeo.py` | runs `_generate_obj` with Warp3D stubbed; dumps the decoded node list |
 | `texops.py` | one-opcode texture programs, for naming the texture ops |
+| `runscene.py` | runs the scene interpreter; dumps the typed draw-node graph |
+| `lvo.py` | reads a Warp3D library's own vector table from its ROMTag |
+| `export.py` | runs all of the above and writes the whole dataset |
 | `PPLoad.java` | Ghidra: load segments, apply symbols, decompile the named functions |
 | `PPVm.java` | Ghidra: pin `r2`, name the VM handlers, decompile them |
 
