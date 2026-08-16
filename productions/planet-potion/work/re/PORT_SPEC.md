@@ -253,18 +253,23 @@ coordinate to five decimals, and `w` is a reciprocal, so the recovered eye depth
 So a reimplemented `_calc_matrix` can be held to the screen positions tightly and
 to depth only for the near field.
 
-`export.py` now keeps `z` and `w` at full precision and rounds only the fields
-where five decimals are ample, so a fresh export does not have this limit. **The
-dataset in `web/data/` predates that change** and still carries the rounded `w`;
-the figures above describe it, not the exporter.
+**That limit is gone.** `export.py` now keeps `z` and `w` whole and rounds only
+the fields where five decimals are ample, and the stream has been re-exported:
+45,332 draws and 144,744 vertices, identical in count to the previous one, with
+`z == 4w` to **zero** error rather than 2e-5. `projcheck.mjs` detects which kind
+of stream it was handed rather than assuming, so it reports the table above for
+an old export and exact depth for a new one.
 
-Re-exporting is not yet a matter of pressing the button. A rerun here recorded
-9,266 draws where the shipped stream has 45,332, with 33,792 non-finite
-coordinates — a defective recording rather than an encoding problem, and its
-cause is not yet found. `export_draws` now refuses to write a stream containing
-them: `json.dump` emits bare `NaN`, which no other JSON parser accepts, so the
-failure would otherwise surface as a syntax error in a browser a long way from
-its cause.
+Getting there needed one thing worth writing down, because it will happen again
+to anyone driving these tools from a script. **Calling `export_draws` directly
+skips what `main` does first**, and the piece that matters is
+`H.preload_tables(d0)` — the four lookup tables the 68K bootstrap builds (sine,
+atan, 2^x, e^x). Without them the animation reads zeroed BSS, and the result is
+not an obvious crash: it is 9,266 draws instead of 45,332, with 33,792
+coordinates that are `NaN`. `export_draws` now refuses to write those. `json.dump`
+emits bare `NaN`, which no other JSON parser accepts, so the failure would
+otherwise have surfaced as a syntax error in a browser a long way from its
+cause.
 
 ## 5. Render state
 

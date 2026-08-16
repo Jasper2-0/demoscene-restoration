@@ -18,13 +18,12 @@
 // concluding the spec is wrong is reading the wrong field, which is exactly what
 // happened here first.
 //
-// So the invariant to test is `z == 4·w`, and the interesting number is not
-// whether it holds — it holds by construction — but how badly the EXPORT
-// degrades it. `draws.json` rounds every coordinate to five decimals, and `w` is
-// a reciprocal: at an eye depth of 40,000 the true `w` is 2.5e-5, and rounding
-// that to five places moves it by 20%. The export is a fine oracle for screen
-// positions and a poor one for far-field depth, and a port checked against it
-// needs to know where that line falls.
+// So the invariant to test is `z == 4·w`, and the second question is how much
+// the EXPORT degrades it. That used to matter a great deal: rounding every
+// coordinate to five decimals is ample for a screen position and ruinous for a
+// reciprocal — at an eye depth of 40,000 the true `w` is 2.5e-5, and five places
+// move it by 20%. `export.py` now keeps `z` and `w` whole, and this file detects
+// which kind of stream it was handed rather than assuming either.
 import fs from 'node:fs';
 
 const path = process.argv[2] ?? 'out/draws.json';
@@ -38,10 +37,26 @@ const say = (ok, what, detail = '') => {
 
 // Ten floats a vertex: x y z w u v r g b a.
 const STRIDE = 10;
-// draws.json rounds to five decimals, so z and w each carry up to 5e-6 of error
-// and the difference z - 4w up to 2.5e-5. Anything inside that is the export,
-// not the emitter.
-const ROUNDING = 2.5e-5;
+// How much the export rounded is a property of the FILE, not an assumption:
+// older streams rounded every field to five decimals, newer ones keep z and w
+// at full precision. Detect it rather than hard-coding either, because both the
+// tolerance and the depth-error table below depend on it, and quoting the wrong
+// one reports a fixed export as still broken.
+function detectStep(d) {
+  for (const s of d.scenes ?? []) {
+    for (const f of s.frames ?? []) {
+      for (const dr of f.draws ?? []) {
+        for (let i = 3; i < dr.v.length; i += 10) {
+          const w = dr.v[i];
+          if (w && Math.abs(w * 1e5 - Math.round(w * 1e5)) > 1e-9) return 0;
+        }
+      }
+    }
+  }
+  return 5e-6;                      // every w sits on a five-decimal grid
+}
+const STEP = detectStep(doc);
+const ROUNDING = STEP ? STEP * 5 : 1e-9;
 
 let verts = 0, draws = 0, degenerate = 0, offBy = 0, worst = 0, worstAt = null;
 const screen = { x: [Infinity, -Infinity], y: [Infinity, -Infinity] };
@@ -72,9 +87,10 @@ for (const scene of doc.scenes ?? []) {
           if (val < screen[k][0]) screen[k][0] = val;
           if (val > screen[k][1]) screen[k][1] = val;
         }
-        // w is known to +/- 5e-6, so the recovered depth 1/w is known to about
-        // 5e-6/w^2 absolute — which is 5e-6 * z_eye^2, and grows quadratically.
-        const rel = 5e-6 / (w * w);
+        // With w known to +/- STEP, the recovered depth 1/w is known to about
+        // STEP/w^2 absolute — STEP * z_eye^2, growing quadratically. STEP is 0
+        // for a full-precision export, and then so is this.
+        const rel = STEP / (w * w);
         const b = buckets.find((x) => zEye <= x.hi);
         b.n++;
         if (rel > b.worst) b.worst = rel;
@@ -84,11 +100,16 @@ for (const scene of doc.scenes ?? []) {
 }
 
 console.log(`${draws} draws, ${verts} vertices, ${degenerate} with w = 0`);
+console.log(STEP
+  ? `w is rounded to five decimals in this export (+/- ${STEP})`
+  : 'w is at full precision in this export');
 console.log(`${scales.size} distinct focal scales`);
 console.log(`screen extent  x [${screen.x[0].toFixed(2)}, ${screen.x[1].toFixed(2)}]`
   + `  y [${screen.y[0].toFixed(2)}, ${screen.y[1].toFixed(2)}]`);
 console.log(`eye depth 1/w  [${eye[0].toFixed(2)}, ${eye[1].toFixed(2)}]`);
-console.log("recovered eye depth, and what the export's rounding costs it:");
+console.log(STEP
+  ? "recovered eye depth, and what the export's rounding costs it:"
+  : 'recovered eye depth, exact to float32:');
 for (const b of buckets) {
   if (!b.n) continue;
   console.log(`   z_eye <= ${b.hi === Infinity ? 'inf' : b.hi}`.padEnd(22)
