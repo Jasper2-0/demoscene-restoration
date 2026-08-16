@@ -52,6 +52,7 @@ LOGPW, LOG = 0x20420000, 0x20420010
 MYVBUF, MYVBUFCAP = 0x21000000, 0x1000000
 SCRATCHSZ = 0x02000000
 LOGSZ, REC = 0x80000, 64        # log size, and one record
+ARENADUMP = 0x20000             # per-frame snapshot of the scene graph
 T_FAN, T_LINE = 0x29fe, 0x2a0e          # the .v field of each template
 FAKEOBJ = 0x20560000
 
@@ -132,7 +133,8 @@ def drawrec():
     return c + H.load32(3, FAKEOBJ) + [blr()]
 
 
-def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None, signal=None):
+def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None, signal=None,
+          nodes=False):
     c = []
     c += H.load32(1, H.STACK) + H.load32(2, R2) + H.load32(13, H.STACK - 0x1000)
 
@@ -200,6 +202,12 @@ def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None, signal=None):
         for glob in ((G_HEAD, G_OVER) if overlay else (G_HEAD,)):
             c += H.load32(3, glob) + [lwz(3, 3, 0)]
             c += H.call32(12, SHOW_SCENE)
+        if nodes:
+            # Stage C's output: _calc_matrix updates the graph IN PLACE, so a
+            # snapshot after each frame is the node state the emitter then read.
+            # These land on stdout ahead of the log, one per frame, in order.
+            c += H.load32(4, ARENA) + H.load32(5, ARENADUMP)
+            c += [H.li(0, 4), H.li(3, 1), H.sc()]
         # Marker: r3 = the frame, r4 = the "scene finished" halfword _play_scene
         # spins on. A handler sets it when the scene's own timeline runs out, so
         # this is where each scene's length comes from.
@@ -217,8 +225,8 @@ def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None, signal=None):
 
 
 def run(stream, frames=(0,), txt_tab=0x2642, obj_tab=0x2706, timeout=240, stop=99,
-        overlay=None, signal=None):
-    stub = build(stream, frames, txt_tab, obj_tab, stop, overlay, signal)
+        overlay=None, signal=None, nodes=False):
+    stub = build(stream, frames, txt_tab, obj_tab, stop, overlay, signal, nodes)
     segs = H.read_layout(FLAT)
     pieces = [(va, (None if fn is None else H.load_seg(FLAT, fn, va)), sz)
               for va, sz, fn in segs]
@@ -246,8 +254,28 @@ def run(stream, frames=(0,), txt_tab=0x2642, obj_tab=0x2706, timeout=240, stop=9
     return p.stdout, p.stderr.decode('utf8', 'replace')
 
 
-def parse(out):
+def snapshots(out, n):
+    """The per-frame scene-graph dumps, when run(nodes=True) produced them."""
+    return [out[i * ARENADUMP:(i + 1) * ARENADUMP] for i in range(n)]
+
+
+def node(snap, addr):
+    """Read a render node out of a snapshot: the fields _show_scene reads."""
+    o = addr - ARENA
+    if not 0 <= o < len(snap) - 0x30:
+        return None
+    anim, tex, typ = (struct.unpack_from('>I', snap, o)[0],
+                      struct.unpack_from('>I', snap, o + 4)[0],
+                      struct.unpack_from('>H', snap, o + 8)[0] // 4)
+    cx, cy, sc = struct.unpack_from('>fff', snap, o + 0x14)
+    return {'anim': anim, 'texture': tex, 'type': typ, 'clip': snap[o + 0x0e],
+            'cx': cx, 'cy': cy, 'scale': sc,
+            'next': struct.unpack_from('>I', snap, o + 0x10)[0]}
+
+
+def parse(out, nodes=0):
     """-> list of frames, each a list of draw dicts."""
+    out = out[nodes * ARENADUMP:]
     if not out or len(out) < 4 + LOGSZ:
         return []
     end = struct.unpack('>I', out[:4])[0]

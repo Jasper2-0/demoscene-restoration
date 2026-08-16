@@ -538,13 +538,28 @@ Local time is `frame - node[0x6c]`, converted with `int2float`. The loop modes
 keyframe spans from that local time before the search — hold, restart, and
 multi-key wrap variants.
 
-Keyframes are `0x100` bytes: `u16` time at `+0`, flags at `+2`, a float at `+4`,
-a rate at `+8`, then **16-byte cubic coefficient blocks** from `+0x0c` onward
-(`+0x0c`, `+0x1c`, `+0x2c`, `+0x3c`, …). The evaluator at `0x10005944` is handed
-one block plus `u`, `u²` and `u³`, so the interpolation is **cubic**, not linear.
-Results land at `node+0x3c` and up. Two next-pointers appear, at `+0xfc` and
-`+0x100`; the search walks `+0xfc` and the loop modes walk `+0x100`, and which
-is which is not yet settled.
+**The keyframe record, read out of a live track:**
+
+```
+  +0x000  u16  time in ticks
+  +0x002  u16  flags
+  +0x004  f32  the same time as a float
+  +0x008  f32  1 / (span to the next key)   — 0 on the last key
+  +0x00c  ..   16-byte cubic coefficient blocks, one per animated channel
+  +0x0fc  ptr  next        +0x100  ptr  prev
+  stride 0x104
+```
+
+Dumping the track on `anim 0x109a81c0` gives three keys at ticks 0, 100 and 200
+on **260-byte centres**, with `+0xfc` running forward and `+0x100` running back —
+a doubly-linked list, which settles the two-pointer question: the search walks
+`next`, the loop modes walk `prev`.
+
+`+4` duplicating `+0` as a float is what the evaluator needs (`f15 = localtime -
+key[4]`), and `+8` being `0.01` against a 100-tick span shows the cubic parameter
+is **normalised segment time**: `u = (t − t₀)/span`, then `u`, `u²`, `u³` into the
+helper at `0x10005944`. The interpolation is cubic, not linear. Results land at
+`anim+0x3c` and up.
 
 **The music trigger is the interesting part.** The evaluator reads
 `lhz r3, 0x23bc(r2)` — the value the 68K frame routine stores from
@@ -616,8 +631,23 @@ words copied out of the animation object into the buffer at `[r14+0x2c]` before
 a call to `0x10005b34`.
 
 So stage C's structure is: evaluate cubic keyframe tracks, compose down the
-parent hierarchy, publish into the render node. Three passes, in that order,
-over a list the harness can already dump.
+parent hierarchy, publish into the render node. Three passes, in that order.
+
+#### And the chain is measured, not just read
+
+`_calc_matrix` updates the graph **in place**, so `drawlog.run(nodes=True)` dumps
+the scene arena after every frame and those snapshots are stage C's output — the
+exact state the emitter then consumed. `drawlog.node()` reads one back.
+
+Checking the snapshots against the draws recorded in the same run, on three
+frames of `r2+0x25ba`: **258 draws, 258 agreements, 0 disagreements** on
+`cx`, `cy`, `scale` and the clip flag. And on the example node, `anim+0x60…0x68`
+reads `320.0, 240.0, 320.0` — identical to the render node's `cx, cy, scale`.
+The link that was read out of pass 3 is now also observed.
+
+Two details the dump adds: a root's parent is the sentinel **`0xFFFFFFFF`**, not
+null — and pass 2 dereferences the parent immediately after its dirty-bit test,
+so a root must never be dirty (the observed root has `flags[3] = 0x00`).
 
 ### Scene length comes from the music — and the schedule comes out whole
 
@@ -986,7 +1016,7 @@ synchronous stall needing an occlusion query rather than a literal translation.
 | `texops.py` | one-opcode texture programs, for naming the texture ops |
 | `texops2.py` | generator-then-opcode pairs, which separates modifiers from setters |
 | `runscene.py` | runs the scene interpreter; dumps the typed draw-node graph |
-| `drawlog.py` | runs `_show_scene` with recording vector stubs; dumps the draw stream |
+| `drawlog.py` | runs `_show_scene` with recording vector stubs; dumps the draw stream and, with `nodes=True`, the per-frame scene graph |
 | `runsynth.py` | runs the softsynth; returns the generated DBM0 module |
 | `dbmpatt.py` | unpacks DBM0 song and pattern data; finds the scene-advance signals |
 | `showorder.py` | the show schedule: call order from the code, durations from the music |
