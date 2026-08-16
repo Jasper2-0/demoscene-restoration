@@ -677,11 +677,23 @@ nodes, `p3_0` has 23 for 29. So the pattern that looked like framing across four
 hand-picked streams does not survive counting all of them; it is a byte pair
 common in the data, not a delimiter.
 
-What DOES survive: the u16 length, and a **constant `0x5b`** at `+2` — identical
-in all 29 streams and load-bearing under a bit flip, which fits a type or version
-marker rather than an opcode. The `00 80 00 ff ff ff` that follows is identical
-in every scene sampled, but "identical in four" has now been wrong once, so it
-wants the same count before it is believed.
+**And `0x5b` at `+2` is not constant either.** Counted across all 29: `0x5b` in
+22 streams, `0x53` in 4, and one each of `0x40`, `0xfb`, `0x1b` — five values,
+which is exactly what the byte-profile earlier in this section already said. I
+called it constant twice on the strength of four samples, having measured
+otherwise beforehand and forgotten it.
+
+What survives counting, and only this:
+
+* the **u16 length** at `+0..+1`, confirmed by patching it — shortening it empties
+  the node list;
+* `+3 = 0xff` and `+4 = 0x0f` in **all 29** streams, with `+3` load-bearing under
+  a bit flip and `+4` insensitive at both ends;
+* `+2` takes five values and is load-bearing, and is **not** an opcode — valid
+  opcodes patched there crash the build.
+
+Everything else this section has said about the stream's shape came from small
+samples and has been withdrawn.
 
 `scenegram.py` prints this split at the end of its run, so the data is in front
 of whoever picks this up rather than needing to be re-derived.
