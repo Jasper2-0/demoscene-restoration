@@ -233,6 +233,10 @@ driver stack under emulation, plus `dbplayer.library` behaving. That is the piec
 most likely to eat a week, and it is a sourcing problem, not a coding one. Worth
 attempting early precisely because it is the risk.
 
+See **[the ROM appendix](#appendix--the-cyberstorm-ppc-rom)**: the Aminet flash
+updater is a good route and it de-risks this considerably, with one version
+label to correct.
+
 **2. The "is it software-rendered?" question is answered: no.** Contemporary
 pouët commentary suggested software rendering; the binary says hardware Warp3D
 with an 18-call surface. What *is* software is the **generation** side — textures
@@ -310,3 +314,98 @@ reference is not.
 
 The original binaries and everything extracted from them stayed outside the
 repository, per the policy in the README.
+
+---
+
+## Appendix — the CyberStorm PPC ROM
+
+The hardest acquisition in this project is the CSPPC flash image, and deriving
+it by running the original Phase5/Ralph Schmidt updater inside the emulator is
+the right answer. It replaces "find this ROM somewhere" with a documented
+derivation from a publicly archived, permission-uploaded original — which is
+the same standard the rest of this repo holds itself to for `originals/`.
+
+Measured from `FlashUpdates-26042002.lha`
+(`bad227908bfc69c6b599917f6f2e6955fea0474c31fff8e3bcb726aae127d7a1`), 13 files:
+
+| file | bytes | for |
+|---|---|---|
+| `PPCUpdate` | 140,816 | **CyberStorm PPC, 128 KB flash** — the one we want |
+| `MK3Update` | 140,244 | CyberStorm MK3 (no PPC) |
+| `BlizzPPC040Update` / `...060Update` | 354,612 / 354,608 | Blizzard PPC |
+| `Cybppc.notes` | 11,925 | CSPPC firmware release notes |
+| `FlashBIOS.doc`, `HOW_TO_INSTALL_THE_FLASH.txt`, `ReadMeFirst.txt` | | procedure |
+
+`HOW_TO_INSTALL_THE_FLASH.txt` is unambiguous: *"for a CyberstormPPC with a
+128KB Flash use PPCUpdate"*.
+
+### There is no v44.71
+
+`Cybppc.notes` carries the firmware changelog, and its versions run:
+
+```
+V44.60 … V44.66  V44.67  V44.68  V44.69  V45.70  V45.71
+```
+
+It rolls **44.69 → 45.70**. The string `44.71` does not appear in any file in
+the archive. The newest CSPPC firmware here is **V45.71** ("Added PCI BootMenu
+info").
+
+So the three CSPPC images an emulator ROM database would plausibly know —
+remembered as "44.67, 44.69 and 44.71" — are almost certainly **44.67, 44.69 and
+45.71**, and the SHA-1 `c7cb3c4fa66e260f43bff7044049a264a729e590` belongs to
+**45.71**. Worth confirming against the emulator's own ROM table before relying
+on the label; that check was not run here, since fetching another project's
+source is outside this session's repository scope.
+
+The good news is that the archive is the right one either way: what it flashes
+is 45.71, which is the newest and the one most likely to be in the database.
+
+### The image cannot be lifted out statically — the emulator round-trip is real
+
+Worth ruling out before spending a week on emulation, so it was:
+
+- `PPCUpdate` is a valid AmigaOS Hunk executable, 4 hunks, CODE 132,912 bytes.
+  (`hunktool` rejects it with *"Invalid hunk type 141/8d"* — that is a gap in
+  `hunktool`, not a damaged file: it does not handle the `0xC0000000` "memory
+  flags follow" encoding in the header size table, which this file uses for all
+  four hunks. Parse it by hand and it is clean.)
+- Entropy across the payload is **7.99 over ~114 KB** — compressed or encoded,
+  not a raw ROM. A CSPPC image full of 68K code, PPC code and strings would sit
+  around 6.
+- The only strings in the file are the FlashTool's own (`CyberstormPPC 128KB
+  FlashTool V1.6`, `No CyberstormPPC installed`, `Oops..you're in deep trouble
+  now.`) and a table of flash part numbers (`28F010A`, `29F040`, `29F016`, …).
+  **No firmware strings at all** — no device name, no copyright, no version.
+- A sliding SHA-1 search for a 131,072-byte window matching the target: 9,745
+  windows in `PPCUpdate`, plus the same over `MK3Update` and both Blizzard
+  updaters, under five encodings (verbatim, 16- and 32-bit byte swap, 8- and
+  16-bit de-interleave). **No match.**
+
+So the payload only becomes a ROM by being decompressed and programmed by the
+tool itself. Run the updater under emulation, exactly as planned.
+
+Note `V1.6` is the **FlashTool** version, not the firmware version — the two are
+easy to conflate, and only the changelog names the firmware.
+
+### Two practical traps
+
+- The tool aborts with `No CyberstormPPC installed` if it cannot find
+  `CyberstormPPC.IDTag`. The emulated board has to be configured and detected
+  *before* the updater will do anything — a zero-byte writable
+  `cyberstormppc.rom` alone is not sufficient.
+- It probes the flash chip against that part-number table. An emulated flash
+  that does not answer with a recognised device ID is a plausible failure mode,
+  and it will look like a tool bug rather than a configuration problem.
+
+The install notes also insist on booting without the startup-sequence with all
+HD volumes disabled — worth honouring under emulation rather than assuming it
+only matters on real hardware.
+
+### One inconsistency in the archive
+
+`HOW_TO_INSTALL_THE_FLASH.txt` directs 512 KB DCE boards to `BigPPC040Update` /
+`BigPPC060Update`. Neither file is in this archive. Irrelevant for our purposes —
+we want the 128 KB `PPCUpdate` — but it means the documentation is shared across
+releases and does not describe this archive's contents exactly. Do not treat it
+as a manifest.
