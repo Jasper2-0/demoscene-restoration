@@ -52,6 +52,35 @@ export function f32(v) {
   return _bits.getFloat32(0);
 }
 
+// PowerPC's multiply-adds are FUSED — `fmadd`, `fnmsub` and friends round once,
+// not twice. JS has no fma, and `a * b + c` rounds the product before adding,
+// which is a different number. It survives the truncation to single often
+// enough to look right and not always: op2 was left with 28 float32 values one
+// ulp high after every store was accounted for, all of them from `fmadd`.
+//
+// Dekker's twoProduct recovers the exact product as an unevaluated sum, and a
+// twoSum folds the addend in, so the single rounding happens where the hardware
+// puts it.
+const _SPLIT = 134217729;            // 2^27 + 1
+
+function _split(a) {
+  const t = a * _SPLIT;
+  const hi = t - (t - a);
+  return [hi, a - hi];
+}
+
+/** `fmadd`: fl(a*b + c) with ONE rounding. */
+export function fma(a, b, c) {
+  const p = a * b;
+  if (!Number.isFinite(p) || p === 0) return p + c;
+  const [ah, al] = _split(a), [bh, bl] = _split(b);
+  const e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;   // p + e === a*b
+  const s = p + c;
+  const v = s - p;
+  const err = (p - (s - v)) + (c - v);
+  return s + (err + e);
+}
+
 /** One 128x128 RGBA surface, 0..255 floats, four per pixel. */
 const surface = () => new Float32Array(PIXELS * 4);
 
@@ -111,11 +140,13 @@ export function addStore(dst, d, src, s) {
  * Channel 0 of the destination is preserved: the three fnmsubs cover 1..3 only.
  */
 const _mix = [0, 0, 0, 0];
+const _tmp = [0, 0, 0, 0];      // second scratch: op2/op8 build a colour, then blend it
 
 export function blend(dst, d, src, s) {
   const t = src[s] / 255;
   _mix[0] = dst[d];                      // f26 is never touched, only re-stored
-  for (let i = 1; i < 4; i++) _mix[i] = src[s + i] - (src[s + i] - dst[d + i]) * t;
+  // `fnmsub f25, f25, f22, f21` = fl(src - (src - dst)*t), fused.
+  for (let i = 1; i < 4; i++) _mix[i] = fma(-(src[s + i] - dst[d + i]), t, src[s + i]);
   clampStore(dst, d, _mix);
 }
 
@@ -170,8 +201,8 @@ export function centralGradient(src, out, mask = 7) {
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
       const o = (y * SIZE + x) * 2;
-      out[o] = at(x + 1, y) - at(x - 1, y);
-      out[o + 1] = at(x, y + 1) - at(x, y - 1);
+      out[o] = f32(at(x + 1, y) - at(x - 1, y));
+      out[o + 1] = f32(at(x, y + 1) - at(x, y - 1));
     }
   }
   return out;
@@ -243,7 +274,10 @@ export function convolve(src, dst, k) {
         for (let ky = -1; ky <= 1; ky++) {
           for (let kx = -1; kx <= 1; kx++) {
             const sx = (x + kx) & 127, sy = (y + ky) & 127;
-            acc += src[((sy * SIZE) + sx) * 4 + c] * k[(ky + 1) * 3 + (kx + 1)];
+            // `fmadd f16, f21, f17, f16` — fused, and the handler skips a zero
+            // weight outright rather than adding zero.
+            const w = k[(ky + 1) * 3 + (kx + 1)];
+            if (w !== 0) acc = fma(src[((sy * SIZE) + sx) * 4 + c], w, acc);
           }
         }
         _mix[c] = acc * inv;
@@ -295,7 +329,7 @@ export function op15(s, [v]) {
  */
 export function contrastStep(px, o, ref, k) {
   _mix[0] = px[o];
-  for (let i = 1; i < 4; i++) _mix[i] = px[o + i] + (px[o + i] - ref) * k;
+  for (let i = 1; i < 4; i++) _mix[i] = fma(px[o + i] - ref, k, px[o + i]);
   clampStore(px, o, _mix);
 }
 
@@ -360,13 +394,17 @@ export function op9(s, ops) {
   for (let y = 0; y < 0x800; y += ystep) {
     for (let x = 0; x < 0x800; x += xstep) {
       const o = at(x, y);
-      for (let c = 0; c < 4; c++) buf[o + c] = base[c] + rng.next() * amp[c];
-      // (clamp4 below is the store, so the values land truncated there)
       // The seed store is `bl 0x100006d0` — the CLAMP entry, which falls into
       // the store. The refinement store below is `bl 0x10000700`, the raw one.
       // With base 36 and amplitude 255 the seed reaches 291, so the difference
       // is visible: unclamped seeds feed high midpoints one octave later.
-      clamp4(buf, o);
+      //
+      // Via _tmp, not straight into buf: writing the fmadd result to the
+      // Float32Array first would round it, and the clamp store would then
+      // truncate an already-rounded value. Two roundings where the hardware has
+      // one, and the whole surface comes out a couple of ulps high.
+      for (let c = 0; c < 4; c++) _tmp[c] = fma(rng.next(), amp[c], base[c]);
+      clampStore(buf, o, _tmp);
     }
     // One extra draw per ROW — the `bl 0x100008e4` at 0x100011d8, between the x
     // loop ending and y advancing. Without it row 0 matches and everything after
@@ -614,8 +652,8 @@ export function op2(s, ops) {
       const gi = (y * SIZE + x) * 2;
       const t = falloff(distance(x - cx + g[gi], y - cy + g[gi + 1], mode),
         start, span, mode);
-      for (let c = 0; c < 4; c++) shaded[c] = A[c] + delta[c] * t;
-      clamp4(shaded, 0);
+      for (let c = 0; c < 4; c++) _tmp[c] = fma(delta[c], t, A[c]);
+      clampStore(shaded, 0, _tmp);
       blend(s.current, (y * SIZE + x) * 4, shaded, 0);
     }
   }
@@ -654,8 +692,8 @@ export function op8(s, ops) {
       const delta = far ? dBC : dAB;
       const t = falloff(d, far ? knee : inner,
         (far ? outer - knee : knee - inner) || 1, mode);
-      for (let c = 0; c < 4; c++) shaded[c] = base[c] + delta[c] * t;
-      clamp4(shaded, 0);
+      for (let c = 0; c < 4; c++) _tmp[c] = fma(delta[c], t, base[c]);
+      clampStore(shaded, 0, _tmp);
       blend(s.current, (y * SIZE + x) * 4, shaded, 0);
     }
   }
