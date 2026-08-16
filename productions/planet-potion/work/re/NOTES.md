@@ -122,6 +122,33 @@ Zero taps are skipped rather than multiplied, so the sparse kernels are cheap.
 Wrapped addressing means every filter tiles seamlessly, which is why the
 textures can be scrolled without seams.
 
+**Tested, not just decoded.** Running `op9` (noise) then one convolution under
+the harness, and applying the decoded kernel to the same baseline in Python:
+
+| opcode | sum | exact | within 1 | max |
+|---|---|---|---|---|
+| `0x50` blur | 8 | 67.8% | **100%** | 1 |
+| `0x51` cross | 6 | 68.6% | **100%** | 1 |
+| `0x52` Laplacian | 0 | 47.6% | 65.0% | 255 |
+| `0x53` emboss | 0 | 55.7% | 73.8% | 255 |
+
+The positive-sum kernels agree to within one unit everywhere — rounding, so the
+shapes and the normalisation are right. The zero-sum ones do not, and trying
+wrap-around instead of clamping made it *worse* (10% exact against 47.6%), which
+said the model was wrong rather than the kernel.
+
+**Reading further explains it: the working surface is not bytes.** The inner
+loop addresses pixels with `slwi r11, 4` — **16 bytes per pixel** — and
+accumulates only three channels (`f21`, `f20`, `f19`). So the texture VM works on
+a **128×128 float RGBA surface**, 256 KB, and converts to `A8R8G8B8` only at the
+end; alpha is not convolved at all.
+
+That is why a byte-domain model reproduces the blur kernels and not the
+edge-detect ones: with a positive sum the intermediate never leaves range, but a
+zero-sum kernel goes negative in floats and only the final conversion decides
+what that becomes. Reproducing those exactly needs the float pipeline, which is
+`0x100006ac` (load pixel) and `0x100006d0` (store), both still unread.
+
 **`0x55` is special-cased** out of the table and is not a convolution at all:
 `max(255 − x, 0)` over the surface — **invert**.
 
