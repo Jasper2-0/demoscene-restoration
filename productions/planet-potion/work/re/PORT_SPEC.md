@@ -283,6 +283,9 @@ Values are **0…255 floats**. The per-pixel primitive library at
 | `0x100007f8` | swap two channels at given offsets within one surface |
 | `0x1000080c` | `fres(b − a)` — a reciprocal span, for gradients |
 | `0x10000820` | step one pixel: interpolate three channels toward `f18` by `f16`, clamp-store, advance `r16` by `0x10` and compare against the end |
+| `0x10000850` | scaled difference — `(src − dst)·f16` on four channels, **no store** |
+| `0x10000880` | **the symmetry blit** (below) |
+| `0x100008e4` | the **PRNG** — shift/xor/add mixing on three words; `op9` draws from it four times per lattice point |
 
 **Clamping is a separate entry point, and not every path takes it.** `0x100006d0`
 falls *into* `0x10000700`, so calling the clamp entry clamps and stores while
@@ -293,10 +296,15 @@ is not reproducing this; the out-of-range values propagate.
 The clamp is branchless `fsel`, which also means it does not behave like a
 comparison on NaN. Alpha is not touched by the convolution.
 
-**Every operation ends with a symmetry blit** — copy the work surface to the
-current one through one of four transforms selected per operation: identity,
-mirror x, mirror y, transpose-with-flip. The records are `(x0, y0, xstep, ystep)`
-at `r2+0x24e2`.
+**Every operation ends with a symmetry blit** — `0x10000880`, copying the work
+surface to the current one through one of four transforms. It indexes
+`r2+0x24e2` by a selector and reads four **halfwords** — `(x0, y0, xstep,
+ystep)` — then walks the source linearly for 128×128 pixels, writing each to
+`((x + y) << 4) + base` and stepping `x` and `y` by their strides.
+
+Four halfwords is 8 bytes, which independently confirms `op4`: its 2-bit
+selectors are scaled by 8 precisely because that is the record size. Two facts
+derived from opposite ends of the program agreeing is the check worth having.
 
 **The stream decodes exactly, and the operand widths come from the code.** The
 fetch loop at `0x100004b0` reads one opcode byte, looks its width up in the table
