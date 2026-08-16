@@ -329,6 +329,31 @@ instrument by instrument:
 `r8 = 0` gives 201,600 and non-zero gives 100,800 — but it is not the only
 producer of either, so do not read the histogram as a routine census.
 
+### 8g. `0x1000742c` — part three's voice, read
+
+18 of part three's 39 calls, sixteen of them consecutive with no setup. Per call
+it reads **ten consecutive `u16`** from the tape at `r25+0x00…0x12` and runs each
+through a one-pole smoother toward that target:
+
+```c
+  state = state + (target - state) * k;   /* k = r2+0x2ad2 for the first nine */
+                                          /*     r2+0x2ae2 for the tenth      */
+```
+
+into `f28, f27, f26, f25, f24, f23, f22, f21, f20, f19` — ten smoothed control
+parameters, the tenth deliberately on a different time constant.
+
+Then four phase accumulators are advanced by
+
+```c
+  x = x + (K - trunc(x));      /* i.e. frac(x) + K */
+```
+
+with distinct `K` per oscillator at `r2+0x2ab6`, `0x2aba`, `0x2aca` and one more.
+So this is a four-oscillator voice under ten smoothed controls, and the reason
+sixteen consecutive calls need no arguments is that `r25` is a **tape cursor the
+routine advances itself**.
+
 ### 8c. The container
 
 Chunk order is `NAME, INFO, SONG, INST, VENV, DSPE, PATT, SMPL` — legal but not
