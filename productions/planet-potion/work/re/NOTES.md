@@ -1814,6 +1814,44 @@ because it ran from the wrong directory and the tool never started; `grep -c` on
 a failed command's empty output is a confident-looking `0`. Redirecting stderr
 to `/dev/null` is what hid it.
 
+## The scene stream — six wrong causes, and what actually settled them
+
+Kept here in order, because the order is the point.
+
+A twenty-line checker (`scenegram.py`) applied the operand widths read from the
+seven scene handlers to all 29 shipped streams. **0/29.** Everything after that
+was diagnosis, and the first six attempts were all wrong:
+
+1. *the grammar is wrong somewhere* — each width was individually correct;
+2. *the exporter records a different pointer* — it records exactly `r4`;
+3. *the byte dump is wrong* — reading the same addresses through `ppcrun`
+   gives identical bytes;
+4. *the opcode space is the full seven bits, sparsely handled* — the handler
+   table is exactly eight entries, and `0x28ca − 0x28aa = 0x20` proves it;
+5. *`ff 0f` delimits records* — it does across four streams and not across
+   twenty-nine: 15 occurrences in a 2-node stream, 23 in a 29-node one;
+6. *`0x5b` at `+2` is a constant marker* — it takes five values, which this
+   very notebook had already recorded before the four-sample impression
+   overwrote it.
+
+What worked was perturbation. Patching one byte and rebuilding the scene
+answered in about a minute each what six readings could not:
+
+* the u16 length bounds the walk — shortening it empties the node list;
+* `+2`, `+3`, `+5` are read and their values matter; `+4` and `+6` do not
+  reach the graph, insensitive at both bit 0 and bit 7;
+* **`+2` is not an opcode** — patching it to `0x03` or `0x01`, both valid
+  opcodes, crashes exactly as `0x00` does.
+
+That last one is the finding. Every decoder attempted here assumed the opcode
+stream begins immediately after the length, and that assumption is now
+disproved rather than merely doubted. The stream format is still unknown;
+`scenegram.py` is kept as a failing check with the measured facts beside it.
+
+The general lesson went to `METHOD.md`: count the population before naming a
+field, and prefer perturbing the running program to reading it once reading has
+produced two answers that disagree.
+
 ## Tools here
 
 | file | what |
