@@ -1131,7 +1131,32 @@ That is byte-exact ground truth for differential testing, available today, for:
 - **the scene interpreter** — which also sidesteps the BSS-table wall, because
   running the code *is* how those tables get built.
 
-### So, three tiers
+### Tiers 1 and 2 are now done
+
+Everything below that does not need the outside world has been built and is in
+[`productions/planet-potion/`](../productions/planet-potion/). What that produced:
+
+- **`ppcrun.py`** — a hand-built static big-endian PPC Linux ELF (an ELF header,
+  eight program headers and a twenty-instruction stub encoded inline) that maps
+  the seven hunks at their linked addresses and calls any function through CTR.
+  Needs `qemu-user-static` and nothing else.
+- **All 69 texture programs rendered**, byte-exactly, 128×128 ARGB. 66 carry
+  varied content, 3 are uniform. The size and format come from the
+  `W3D_AllocTexObj` tag list `_calculate_txt` builds, not from assumption.
+- **38 of the 39 geometry programs decoded** — by running `_generate_obj` with
+  `_Warp3DBase` pointed at no-op vectors and reading back the linked list it
+  builds. Modelling the operand widths had failed three times; measurement
+  worked first try. **Opcodes 1 and 2 turn out never to be used**, so a port
+  needs three of the five build handlers.
+- **A first pass at the texture opcodes**, including identifying `op9` as the
+  noise generator and `op13`/`op14`/`op15` as the alpha ops.
+- **`prod.json`** with full provenance, and **`work/re/NOTES.md`** as the address
+  notebook.
+
+What remains is Tier 3 and the reference capture, both of which need the outside
+world.
+
+### The three tiers, as originally set out
 
 **Tier 1 — start now, needs nothing.** Commit the hunk loader and Ghidra scripts
 as `work/re/`, write `prod.json`, extract the font (2,248 bytes, already
