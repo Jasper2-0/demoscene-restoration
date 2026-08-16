@@ -519,12 +519,63 @@ export function op8(s, ops) {
   }
 }
 
+/**
+ * op1 — a bilinearly-shaded rectangle. 20 operands: x0, x1, y0, y1 and FOUR
+ * corner colours. Per row it walks x blending a colour that advances by a
+ * per-pixel delta, then advances the row's two edge colours by their own deltas.
+ * All the deltas are precomputed with fres() spans, not divides.
+ */
+export function op1(s, ops) {
+  const [x0, x1, y0, y1] = ops.slice(0, 4);
+  const TL = ops.slice(4, 8), TR = ops.slice(8, 12);
+  const BL = ops.slice(12, 16), BR = ops.slice(16, 20);
+  const rows = Math.max(y1 - y0, 1), cols = Math.max(x1 - x0, 1);
+  const left = TL.slice(), right = TR.slice(), c = new Float32Array(4);
+  const dl = TL.map((v, i) => (BL[i] - v) / rows);
+  const dr = TR.map((v, i) => (BR[i] - v) / rows);
+  for (let y = y0; y <= y1; y++) {
+    for (let i = 0; i < 4; i++) c[i] = left[i];
+    const step = right.map((v, i) => (v - left[i]) / cols);
+    for (let x = x0; x <= x1; x++) {
+      blend(s.current, (((y & 127) * SIZE) + (x & 127)) * 4, c, 0);
+      for (let i = 0; i < 4; i++) c[i] += step[i];
+    }
+    for (let i = 0; i < 4; i++) { left[i] += dl[i]; right[i] += dr[i]; }
+  }
+}
+
+/**
+ * op6 — a colour-interpolated line, drawn with textbook Bresenham: the error
+ * accumulator starts at half the major span, and each step is either straight or
+ * diagonal. The colour advances by a delta per pixel, so the line is a gradient.
+ *
+ * The frsqrte in its prologue computes the endpoints' separation; the drawing
+ * itself is integer.
+ */
+export function op6(s, ops) {
+  let [x0, y0, x1, y1] = [ops[8], ops[9], ops[10], ops[11]];
+  const col = ops.slice(0, 4).map(Number), delta = ops.slice(4, 8);
+  let dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+  const sx = Math.sign(x1 - x0), sy = Math.sign(y1 - y0);
+  const steep = dx <= dy;
+  const major = steep ? dy : dx, minor = steep ? dx : dy;
+  let err = major >> 1, x = x0, y = y0;
+  const c = Float32Array.from(col);
+  for (let i = 0; i <= major; i++) {
+    blend(s.current, (((y & 127) * SIZE) + (x & 127)) * 4, c, 0);
+    for (let k = 0; k < 4; k++) c[k] += delta[k];
+    err += minor;
+    if (err >= major && major !== 0) { err -= major; x += sx; y += sy; }
+    else if (steep) y += sy; else x += sx;
+  }
+}
+
 /** op18 — set the draw rectangle. op19 — reset it to the full surface. */
 export const op18 = (s, o) => { s.rect = [o[0], o[1], o[2], o[3]]; };
 export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 
 /** Opcodes whose bodies are specified but not yet written here. */
-export const UNIMPLEMENTED = new Set([1, 6]);
+export const UNIMPLEMENTED = new Set([]);
 
 /** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
 export function toARGB(surf) {
