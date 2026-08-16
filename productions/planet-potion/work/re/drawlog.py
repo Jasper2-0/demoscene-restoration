@@ -316,6 +316,10 @@ def parse(out, nodes=0):
                     # the emitter's own inputs — see drawrec()
                     'node': r[7] & 0xFFFFFFFF, 'cx': cx, 'cy': cy, 'scale': sc,
                     'clip': bool(r[11]), 'minVerts': r[12],
+                    # r19 as the emitter left it: initial + 4*count. For an
+                    # unclipped primitive the initial value is the face record,
+                    # so the source vertices are reachable from here.
+                    'srcEnd': r[13] & 0xFFFFFFFF,
                     'vertices': vs})
     if cur:
         frames.append({'time': None, 'draws': cur})

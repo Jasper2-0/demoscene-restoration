@@ -282,11 +282,14 @@ each vertex's position at `+0x24…+0x2c`:
   colour maths — then multiplies, and afterwards rescales the per-vertex normals
   at `+0x3a/+0x3e/+0x42` and renormalises them.
 
-**Two approximations, both deliberate.** That renormalisation uses `frsqrte`
-with **no Newton refinement** — a reciprocal-square-root *estimate*, about five
-bits — just as the projection uses `fres` rather than a divide. A port that
-normalises exactly and divides exactly will not match the original's shading or
-its perspective, and the difference is systematic rather than noise.
+**Two approximations, both deliberate — and both invisible to the harness.**
+That renormalisation uses `frsqrte` with **no Newton refinement**, just as the
+projection uses `fres` rather than a divide. On the hardware these are low-
+precision estimates and the difference from exact maths is systematic. Under
+qemu both are computed exactly (measured: the recorded `w` matches `1/z` to
+float32 rounding), so the recorded stream shows the *exact* answer and a port
+matched against it inherits qemu's precision, not a 604e's. Only a capture can
+say whether that is visible.
 
 With this the **five dispatch tables are all read**: texture, scene, geometry
 build, geometry evaluate, render.
@@ -689,9 +692,36 @@ projection without any fitting against a capture:
   out.alpha = firstVertex[0x0c];   /* ONE alpha for the whole primitive */
 ```
 
-`fres` is a **reciprocal estimate** instruction, not a divide — accurate to about
-one part in 256. The original's perspective divide is therefore approximate, and
-that approximation is part of what the picture looks like.
+`fres` is a **reciprocal estimate** instruction, not a divide. The PowerPC
+architecture only requires it to be within about one part in 256, so on the
+603e/604e this intro ran on, the perspective divide is approximate.
+
+### The projection verifies exactly — and the estimate does not survive the harness
+
+With the node snapshots giving stage C's output and the draw log giving stage
+D's, the formula can be checked against the program rather than believed. For
+every unclipped primitive, walk `srcEnd − 4·count` to the face record, follow its
+vertex pointers, and apply the formula to the source positions:
+
+**1,059 vertices across four scenes and two frames each: zero mismatches.**
+
+The example is as clean as it gets — source `(−640, −480, 640)` with
+`cx = 320, cy = 240, scale = 320` projects to exactly `(0, 0)`, a full-screen
+quad's corner in authored round numbers.
+
+**But the `fres` claim above does not hold for the recording.** Comparing the
+recorded `w` against an exact `1/z` gives a relative error of **1.5e-8 median,
+5.7e-8 maximum** — float32 rounding, not the ~3.9e-3 a 1/256 estimate would show.
+qemu implements `fres` as a correctly-rounded reciprocal, so **the harness does
+not reproduce the hardware's approximation**, and neither will a port checked
+only against this stream.
+
+That is a limitation of the oracle, not of the intro, and it is worth stating
+plainly because an earlier note here claimed the approximation was visible in
+what was recorded. It is not. The same applies to the `frsqrte` in the geometry
+evaluate pass. Whether the difference matters at 640×480 into a 16-bit
+framebuffer is a question only a capture can answer — and it is now on the short
+list of things that a capture, and nothing else, can settle.
 
 ### The projection is per-node, and that is the camera model
 
