@@ -89,6 +89,26 @@ The mode-0 search itself is `0x10005054`: advance while the NEXT keyframe's tick
 is below the local time. That is the same selection as "the last keyframe at or
 before it", which `animcheck.mjs` confirms against the running program.
 
+**The loop mode is a THREE-BIT field**, `flags2 & 0xe0`, so there are up to eight
+modes and not the handful the phrase "loop modes" suggests. They differ only in
+what happens when the walk reaches the end of the track (`+0xfc == 0`), and each
+non-clamping one rewinds `r21` and re-enters the search at `0x1000502c`:
+
+| `flags2 & 0xe0` | at the end of the track |
+|---|---|
+| `0x00` | clamp — local time becomes `key+0x04`, so `u = 0` and the value freezes at `c0` |
+| `0x20` | **restart** — back to the track head at `anim+0x08`, local time zero |
+| `0x40` | clamp, the same as mode 0 |
+| `0x60` | **modulo the whole track** — subtract the last keyframe's tick from local time, search again from the head |
+| `0x80` | **modulo the final span** — subtract `last.tick − prev.tick`, using `+0x100` to reach the previous keyframe |
+| `0xa0` | modulo the last TWO spans — `+0x100` twice |
+| `0xe0` | subtract the final span, then compare against the one before it (`0x10005150`–`0x10005178`); the tail beyond that is **unread** |
+| `0xc0` | **unread** |
+
+A local time BEFORE the first keyframe takes a separate path at `0x10005370`,
+also unread. So the modes are a family of "how far back do I wind" rules rather
+than distinct behaviours, and only the first four are fully read.
+
 Keyframes are `0x104` bytes, doubly linked (`+0xfc` next, `+0x100` prev):
 
 ```
