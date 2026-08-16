@@ -171,6 +171,26 @@ def main():
                  and ((word(BASE + a) >> 1) & 0x3ff) in fpscr)
     check('nothing writes FPSCR, so the rounding mode is the default', writes, 0)
 
+    # --- section 3c's publish, confirmed three ways and guarded once
+    #
+    # The channels the publish pass moves onto the render node are the whole
+    # basis for checking a reimplemented _calc_matrix, so read the offsets out
+    # of the instructions rather than trusting the prose. `lfs` is primary 48
+    # and `stfs` primary 52; the displacement is the low 16 bits.
+    def disp(va):
+        return struct.unpack_from('>I', d0, va - BASE)[0] & 0xFFFF
+
+    check('publish reads channel-block +0x54/0x58/0x5c',
+          [disp(0x10005530), disp(0x10005534), disp(0x10005538)],
+          [0x54, 0x58, 0x5c])
+    check('publish writes render node +0x14/0x18/0x1c',
+          [disp(0x1000553c), disp(0x10005540), disp(0x10005544)],
+          [0x14, 0x18, 0x1c])
+    check('those are lfs then stfs (primary 48, then 52)',
+          [struct.unpack_from('>I', d0, 0x10005530 - BASE)[0] >> 26,
+           struct.unpack_from('>I', d0, 0x1000553c - BASE)[0] >> 26],
+          [48, 52])
+
     # --- the scene VM's tables, which section 4a now rests on
     #
     # The eight-entry handler table and the -1 at index 7 were measured by
