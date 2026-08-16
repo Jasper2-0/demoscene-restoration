@@ -281,7 +281,7 @@ two dominant ones are `0x10009510` (13 calls, fixed-size builder with two length
 presets, 201,600 and 100,800) and `0x1000742c` (18 calls, the stream reader,
 which lerps toward each target with `fmadd`).
 
-### 8f. The synth ABI — every primitive is "compute `f29`, emit"
+### 8c. The synth ABI — every primitive is "compute `f29`, emit"
 
 Three shared routines define the whole convention, and reading them makes the
 other 29 tractable:
@@ -329,7 +329,7 @@ instrument by instrument:
 `r8 = 0` gives 201,600 and non-zero gives 100,800 — but it is not the only
 producer of either, so do not read the histogram as a routine census.
 
-### 8g. `0x10009510` — part one's voice, and what `r18` is for
+### 8d. `0x10009510` — part one's voice, and what `r18` is for
 
 13 of part one's 57 calls. The emitter's period counter `r16` is a **step
 index**: the routine reads one byte per step from four tables — the per-call
@@ -357,7 +357,7 @@ second oscillator's wrap point again, so the flag is octave as well as length.
 Envelopes decay as `x *= (1 - k)` via `fnmsubs`, and a filter pair `f10, f9`
 smooths toward `f8, f7`.
 
-### 8h. Every routine's sample length, checked against the module
+### 8e. Every routine's sample length, checked against the module
 
 `synthlen.py` reads `r19` (frames) and `r18` (frames per step) out of all 32
 primitives mechanically — both are immediates — and checks the total each length
@@ -383,7 +383,7 @@ nobody. Part one calls two routines whose length comes from neither an immediate
 nor the script — `0x10008adc` and `0x10009a68`, one call each. Two orphan
 samples, two orphan routines. That is where to look, and it is not yet proven.
 
-### 8i. The three table accessors
+### 8f. The three table accessors
 
 Every voice reaches the lookup tables through exactly three routines, and each is
 four instructions:
@@ -403,7 +403,7 @@ are addressable through this path.
 A port that calls `Math.cos` instead of rebuilding the table is choosing a
 different quantisation, not a different spelling — see §0.
 
-### 8j. `0x10009020` and `0x10009258` — the percussion pair
+### 8g. `0x10009020` and `0x10009258` — the percussion pair
 
 Both hardcode their tables rather than taking them from the script, and both
 share one body: `f10` advances linearly while `f9` (rate) and `f5` (amplitude)
@@ -419,10 +419,10 @@ downward under an exponential decay. That is a drum.
 exactly 8 samples of 50,400 frames. `0x10009020`'s 100,800 is shared with
 `0x10009510`'s 16-step preset so it cannot be counted the same way.
 
-Both carry the same per-step portamento as §8g — a flag byte per step choosing
+Both carry the same per-step portamento as §8d — a flag byte per step choosing
 glide or jump — on their own coefficients (`r2+0x2ac2` and `r2+0x2abe`).
 
-### 8k. `0x1000742c` — part three's voice, read
+### 8h. `0x1000742c` — part three's voice, read
 
 18 of part three's 39 calls, sixteen of them consecutive with no setup. Per call
 it reads **ten consecutive `u16`** from the tape at `r25+0x00…0x12` and runs each
@@ -447,7 +447,7 @@ So this is a four-oscillator voice under ten smoothed controls, and the reason
 sixteen consecutive calls need no arguments is that `r25` is a **tape cursor the
 routine advances itself**.
 
-### 8c. The container
+### 8i. The container
 
 Chunk order is `NAME, INFO, SONG, INST, VENV, DSPE, PATT, SMPL` — legal but not
 the traditional save order, so **key off chunk IDs, never position**. Version
@@ -456,7 +456,7 @@ parser must not assert on it. **No `PENV`** in either module. Samples are
 **8-bit**, and length fields count frames, not bytes — DigiBooster 3 converts to
 16-bit on load, which makes 16 an easy wrong assumption.
 
-### 8d. The DSP echo is mandatory
+### 8j. The DSP echo is mandatory
 
 `DSPE` is `2 + N + 8` bytes — channel count, per-channel enables, four global
 u16s — and both modules match that layout exactly:
@@ -472,7 +472,7 @@ subtle tail, which is why this is not deferrable. Neither module uses delay 0, s
 the documented original bug (0 yields ~334 ms rather than the minimum) does not
 bite, but a port remapping the parameters should still get the curve right.
 
-### 8e. Effects
+### 8k. Effects
 
 Two are read, because the timeline needed them: **effect 7 parameter 1 is the
 signal** that ends a scene, and **effect 15 sets speed/tempo**. The rest of the
