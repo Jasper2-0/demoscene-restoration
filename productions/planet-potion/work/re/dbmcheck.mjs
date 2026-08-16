@@ -153,5 +153,44 @@ for (const f of files) {
   }
 }
 
+// --- audio.json on its own, which needs no .dbm files ------------------------
+//
+// This runs whether or not the modules are here, because it is checkable from
+// the JSON alone and it caught something: the committed dataset carries
+// `sizeMatches: false` for part one, and the mismatch is in the EXPECTATION,
+// not in the generator.
+//
+// `declaredSize` is the u32 prefix the generator itself writes; `expectedSize`
+// is synthhash.py's constant. Summing the recorded chunks settles which is
+// right without either — payload + an 8-byte module header + one 8-byte header
+// per chunk. For part one that is exactly 5,324,378, the declared value.
+// 5,324,890 is `0x513e5a` converted wrong, a figure this repo has now had to
+// kill three times: it was corrected in NOTES.md, copied back out of the older
+// paragraphs into synthhash.py's constant, corrected there too — and a dataset
+// exported in between still carries it.
+//
+// So a `sizeMatches: false` whose chunk sum agrees with `declaredSize` is a
+// STALE EXPORT, not a broken synth, and saying so is the difference between
+// regenerating audio.json and going looking for a bug in 32 primitives.
+if (audio) {
+  console.log('\n=== audio.json, self-consistency');
+  for (const [part, v] of Object.entries(audio)) {
+    const ids = Object.keys(v.chunks ?? {});
+    const payload = ids.reduce((n, id) => n + Number(v.chunks[id].bytes ?? v.chunks[id]), 0);
+    const total = payload + 8 + 8 * ids.length;
+    say(total === v.declaredSize,
+      `${part}: the ${ids.length} chunks account for declaredSize exactly`,
+      `sum ${total} vs declared ${v.declaredSize}`);
+    if (v.sizeMatches === false && total === v.declaredSize) {
+      console.log(`      ${part}: expectedSize ${v.expectedSize} disagrees with both `
+        + `— this export predates the synthhash.py constant fix. Regenerate `
+        + `audio.json; the generator is fine.`);
+    } else {
+      say(v.sizeMatches !== false, `${part}: declaredSize matches expectedSize`,
+        `${v.declaredSize} vs ${v.expectedSize}`);
+    }
+  }
+}
+
 console.log(bad === 0 ? '\nall checks passed' : `\n${bad} checks FAILED`);
 process.exit(bad ? 1 : 0);

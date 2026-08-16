@@ -1578,6 +1578,22 @@ it on the first run. The chunk sum settles it independently: 44 + 10 + 80 + 2800
 + 274 + 28 + 14,574 + 5,306,496, plus an 8-byte header and eight 8-byte chunk
 headers, is exactly 5,324,378.
 
+**And it came back a fourth time, in the data rather than in prose.** The
+committed `web/data/audio.json` records `expectedSize: 5324890` and
+`sizeMatches: false` for part one — an export taken while `synthhash.py` still
+held the bad constant. `speccheck.py` guards the binary side (it re-derives the
+`lis`/`ori` pair at `r2+0x6b88`), and nothing guarded the exported side, so the
+acceptance file for the softsynth shipped a red flag against a generator that is
+correct. Anyone reimplementing those 32 primitives would have started by
+hunting a 512-byte discrepancy that does not exist.
+
+`dbmcheck.mjs` now sums the chunk table and compares it against `declaredSize`,
+which needs no modules and no binary, and says explicitly that a `sizeMatches:
+false` whose chunks add up is a stale export rather than a broken synth. The
+general lesson is the one `docpatch.py` was written for: a wrong number that has
+been corrected in the prose is still live in every artifact derived from it, and
+only a check that re-derives it closes the loop.
+
 **A port therefore needs a DBM0 replayer plus these two generators** — and the
 generators now run byte-exactly without an Amiga.
 

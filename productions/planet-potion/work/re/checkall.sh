@@ -61,6 +61,12 @@ if [ -n "$MODS" ]; then
   run "dbmtime — the sequencer reproduces the show timeline" \
     node "$HERE/dbmtime.mjs" "$MODS/part1_full.dbm" "$MODS/part3.dbm" \
     --showorder "$DATA/showorder.json"
+elif [ -f "$DATA/audio.json" ]; then
+  # No modules, but audio.json alone is worth checking: its chunk table has to
+  # account for the size the generator declared, and that is what catches a
+  # stale export carrying the old 5,324,890.
+  run "dbmcheck — audio.json only, no modules here" \
+    node "$HERE/dbmcheck.mjs" --audio "$DATA/audio.json"
 fi
 
 [ -n "$ANIM" ] && run "animcheck — the keyframe evaluator against real motion" \
