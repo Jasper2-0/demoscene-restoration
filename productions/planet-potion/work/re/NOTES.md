@@ -496,10 +496,13 @@ earlier is the whole story:
 Running all 28 of part one's geometry programs and reading `[head+8]` finds
 **exactly two** objects with no payload: index 12 (`0x10030d18`, builds but
 `[+8] = 0`) and index 26 (`0x100317bb`, the one program of 39 that does not
-decode at all). So the six silent scenes and the known geometry failure are very
-likely **the same defect**, reached through this branch — not six separate ones,
-and not missing camera state. `_restore_time` is ruled out: it only writes the
-frame into `node+0x6c`, which a fresh arena already holds as 0.
+decode at all). The other 26 all carry a pointer there, including five whose
+node list is a bare `[0]` exactly like index 12's — so `[+8] = 0` is an
+anomaly, not a normal property of that shape. The six silent scenes and the
+known geometry failure are therefore very likely **the same defect**, reached
+through this branch — not six separate ones, and not missing camera state.
+`_restore_time` is ruled out: it only writes the frame into `node+0x6c`, which a
+fresh arena already holds as 0.
 
 What is not yet settled is which way round it goes — whether those two objects
 genuinely have no drawable payload, or whether the harness mis-builds them and
