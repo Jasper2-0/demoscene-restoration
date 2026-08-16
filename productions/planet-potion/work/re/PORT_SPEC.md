@@ -373,8 +373,18 @@ they are read with `lbz`, so there are no spare high bits to carry any, while
 `p0`, `p1` and `p4` come through `lhz` and have room for the `0x4000`, `0x8000`
 and `0x8000` bits the handler extracts.
 
-**Scene op 4 is the text builder**, `0x10002e10`. It stores **1** at `node+0x20`
-where op 3 stores 0, so that field is a kind flag rather than a pointer; links
+**Ops 0, 1 and 2 consume no stream operands at all.** Each writes its count to
+`node+0x20` — 2, 3, 4 — and then loops that many times over `0x1000243c`,
+chaining the sub-objects on `+0x74`. So `node+0x20` is a **sub-object count**,
+not a kind flag: op 4 stores 1 and op 3 stores 0 despite allocating several
+through a different routine (`0x100023a8`), which is either deliberate — its
+sub-objects are found by walking `+0x74` — or a quirk. Not established either way.
+
+That a handler can consume nothing is what a stream decoder has to know: the
+opcode byte alone advances the cursor for three of the seven ops.
+
+**Scene op 4 is the text builder**, `0x10002e10`. It stores **1** at `node+0x20`;
+links
 the animation object through `+0x74` and `node+0x24`; and then, per character,
 does `cmpwi r26, 0x41` / `cmpwi cr1, r26, 0x5a` and `addi r26, r26, 0x20` —
 **folding `A`–`Z` to lower case before the glyph lookup**, keeping a flag in `r8`
