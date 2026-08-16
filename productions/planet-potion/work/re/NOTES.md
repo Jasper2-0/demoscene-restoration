@@ -168,6 +168,25 @@ varied content; 3 are a single uniform colour.
 
 **All 38 decodable geometry programs**, via `rungeo.py`.
 
+**Both music modules**, via `runsynth.py`. The generators take their destination
+in **r5** (`_music_buffer`); miss that and they segfault in a way that looks like
+a missing dependency. What they emit is not raw sample data but a complete
+**DBM0 (DigiBooster Pro 2) module** — magic four bytes in, then `NAME`, `INFO`,
+`SONG`, `INST`, `VENV`, `DSPE`, `PATT`, `SMPL`. Afterwards the demo points
+`_module` at the same buffer and hands it to `dbplayer.library` through
+`_run68k`.
+
+| | name | instruments | patterns | channels | INST | VENV | PATT | SMPL |
+|---|---|---|---|---|---|---|---|---|
+| part 1 | `"part1"` | 56 | 19 | 18 | 2,800 | 274 | 14,574 | — |
+| part 3 | `"part3"` | 38 | 17 | 16 | 1,900 | 546 | 9,978 | 3,002,748 |
+
+`DSPE` is DigiBooster Pro 2's DSP-effect chunk (28 and 26 bytes). Roughly 37 KB
+of seed data in seg 4 expands to about 3 MB of module per part.
+
+**A port therefore needs a DBM0 replayer plus these two generators** — and the
+generators now run byte-exactly without an Amiga.
+
 ## Texture opcodes — first pass
 
 `texops.py` synthesises one-opcode programs (`[u16 len][op][operands]`, operand
