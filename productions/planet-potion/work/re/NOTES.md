@@ -161,14 +161,35 @@ globals confirm it — `r2+0x2472`, `0x246a`, `0x2466` and `0x246e` hold
 **`0x40000` = 128 × 128 × 16**. So the texture VM has **four float work
 surfaces** and ping-pongs between them.
 
-That is where this stops for now, and the failure is worth recording as
-carefully as the success. Convolving the surface at `0x2466` with the decoded
-kernels and comparing against the same surface after the opcode mismatched
-*every* pixel — worse than the byte-domain attempt — because it is not the buffer
-being read. The kernels, the normalisation, the wrap addressing, the clamp and
-the untouched alpha are all established; **which surface is source and which is
-destination at each step is not**, and an exact float-domain reproduction waits
-on that.
+`_generate`'s prologue names them outright:
+
+```
+  lwz r30, 0x246a(r2)      ; SOURCE       0x101229f0
+  lwz r28, 0x2466(r2)      ; DESTINATION  0x101629f0   (set earlier)
+```
+
+Four surfaces sit on `0x40000` centres — `0x2472`, `0x246a`, `0x2466`, `0x2476`
+— with a fifth pointer `0x246e` a further `0x10000` on, which is the size of a
+128×128 **byte** image rather than a float one.
+
+**With the right pair, the convolution reproduces exactly.** Dumping both
+surfaces before and after one opcode, convolving the source with the decoded
+kernel and comparing against the destination:
+
+| opcode | sum | mismatches | worst |
+|---|---|---|---|
+| `0x50` blur | 8 | **0** | 0.00001 |
+| `0x52` Laplacian | 0 | **0** | 0.00000 |
+| `0x53` emboss | 0 | **0** | 0.00000 |
+
+The reversed pairing gives thousands of mismatches and errors above 57, so the
+test discriminates rather than merely agreeing. The zero-sum kernels that the
+byte-domain attempt could not reproduce come out **exact** in float.
+
+So the whole family is settled: kernel shapes, the signed-byte weight encoding,
+normalise-by-sum with 0 → 1.0, wrapped addressing, the `[0, 255]` clamp, alpha
+untouched, and source and destination named. The earlier float-domain failure
+was reading the destination as if it were the input, and nothing else.
 
 **`0x55` is special-cased** out of the table and is not a convolution at all:
 `max(255 − x, 0)` over the surface — **invert**.
