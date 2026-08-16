@@ -289,6 +289,15 @@ Values are **0…255 floats**. The per-pixel primitive library at
 | `0x1000091c` | add the operand pixel, then scale by `f27` (= 128/255) — tails into `0x10000868` |
 | `0x1000093c` | **distance field** — `sqrt(dx² + dy²)` computed as `fres(frsqrte(x))`, with bits 2 and 3 of `r12` zeroing one axis to give horizontal, vertical or radial |
 | `0x10000990` | the mix `op2` and `op8` step through per pixel |
+| `0x10000a50` | **central-difference gradient** — for every pixel, `s(x+1,y) − s(x−1,y)` and `s(x,y+1) − s(x,y−1)`, written as two floats per pixel. A 3-bit mode comes from `r12` |
+
+That last one explains `op2` and `op8`. Both call it before their per-pixel loop,
+so both are **bump/lighting** operations: build the slope field of a surface,
+then light it. It is why they are the widest opcodes in the set (13 and 18
+operands) and why `op2` is the most used of all (45 occurrences).
+
+**All 17 handlers and all 17 helpers are now read.** Everything in the texture VM
+above the level of individual constants is specified.
 
 **Clamping is a separate entry point, and not every path takes it.** `0x100006d0`
 falls *into* `0x10000700`, so calling the clamp entry clamps and stores while
