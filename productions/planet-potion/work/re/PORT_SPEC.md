@@ -219,10 +219,15 @@ Checked so far:
 * `0x80` **add** of channels 19–20 — confirmed on `0x100326c2`, where the child
   contributes 0.0 and the parent 128.0 and the result is 128.0. One
   non-degenerate value, which is one more than none;
-* `0x10` **add** of channels 9–11 — every example found so far has the child, the
-  parent AND the result all zero, so it is consistent with addition and equally
-  consistent with multiplication. **Not confirmed**, and a scene where those
-  channels are non-zero is what would settle it.
+* `0x10` **add** of channels 9–11 — **undecidable from the shipped data.** Every
+  example has the child, the parent and the result all zero, which is consistent
+  with addition and equally consistent with multiplication. Sweeping all 22
+  part-one scenes for a `0x10`-gated node with any non-zero channel 9–11 found
+  **none**. So the gate exists in the code and the demo never exercises it in a
+  way that distinguishes one reading from another: a port may implement it either
+  way and no shipped scene will tell the difference. Read it from
+  `0x100054b8`–`0x100054e4` — three `fadd`s — rather than expecting a test to
+  catch it.
 
 `0x40` and the `0x10005b34` transform are unchecked.
 
