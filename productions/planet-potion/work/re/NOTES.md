@@ -504,7 +504,12 @@ part three's boundaries land on 15.000, 60.000, 75.000, 90.000 and 135.000
 seconds exactly. Part one runs 288.4 s, part three 149.9 s.
 
 `showorder.py` puts the two halves together — the call order from the code, the
-durations from the music — and writes the whole schedule:
+durations from the music — and writes the whole schedule. Given only `flat/` it
+generates both modules itself through `runsynth.py`, which is the honest default:
+they are not data that exists anywhere, they are output of the intro's own
+softsynth. (Part one's takes minutes under qemu — it builds 5.3 MB of samples —
+so `runsynth.module()` waits properly rather than returning an empty buffer that
+fails much later as "not a DBM0 module".)
 
 ```
   [ 0] synchro       0x25aa      0.000..  18.429s  (  921 ticks)
