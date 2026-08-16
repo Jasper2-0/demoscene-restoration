@@ -585,7 +585,10 @@ export function op6(s, ops) {
   const major = steep ? dy : dx, minor = steep ? dx : dy;
   let err = major >> 1, x = x0, y = y0;
   const c = Float32Array.from(col);
-  for (let i = 0; i <= major; i++) {
+  // EXCLUSIVE of the endpoint. The original's loop is `cmpw r8, r25; blt` with
+  // r8 from 0, so it runs `major` times and never plots the final point —
+  // visible as exactly one wrong pixel at (127,64) in p3_8.
+  for (let i = 0; i < major; i++) {
     blend(s.current, (((y & 127) * SIZE) + (x & 127)) * 4, c, 0);
     for (let k = 0; k < 4; k++) c[k] += delta[k];
     err += minor;
