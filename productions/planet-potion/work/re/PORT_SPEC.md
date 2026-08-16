@@ -312,9 +312,22 @@ length = 0`. It is called twice in part three, and part three's `SMPL` contains
 exactly two zero-length samples with `flags = 0`. Two independent counts of the
 same thing.
 
-The script's literal `r19` values are sample lengths in frames, and they show up
-in the output directly: `0x1d4c0` = 120,000 appears three times in part three's
-length list.
+The script's literal `r19` values are sample lengths in frames, and they appear
+in the output directly. Part one calls `0x10008c9c` exactly twice, with
+`r19 = 0x1d4c0` and `0x249f0`; its `SMPL` chunk contains exactly one sample of
+120,000 frames and exactly one of 150,000. One call, one sample, both times.
+
+Part one's full length histogram, for anyone checking a reimplementation
+instrument by instrument:
+
+```
+      0 x8    20,000 x3    25,200 x1    32,768 x3    50,400 x8
+100,800 x17  120,000 x1   128,000 x2   150,000 x1  201,600 x11  262,144 x1
+```
+
+56 samples, 48 real and 8 empty. `0x10009510`'s `r8` flag chooses its length —
+`r8 = 0` gives 201,600 and non-zero gives 100,800 — but it is not the only
+producer of either, so do not read the histogram as a routine census.
 
 ### 8c. The container
 
