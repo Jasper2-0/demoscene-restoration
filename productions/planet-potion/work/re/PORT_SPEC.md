@@ -276,6 +276,23 @@ current one through one of four transforms selected per operation: identity,
 mirror x, mirror y, transpose-with-flip. The records are `(x0, y0, xstep, ystep)`
 at `r2+0x24e2`.
 
+**The stream decodes exactly, and the operand widths come from the code.** The
+fetch loop at `0x100004b0` reads one opcode byte, looks its width up in the table
+at `r2+0x2502` (`0x7f` means 1), and stops when the pointer passes the end. The
+one exception is the convolution range, which branches *before* that lookup and
+sets the count to **zero** — a convolution is a single byte with no operands.
+With that, **69 of 69 programs decode to exactly their declared length**.
+
+That zero was not guessable. Trying 1, 2, 3 and 9 operands scored 44, 54, 52 and
+44 of 69; the best of them looked like a promising near-miss and was wrong, and
+it also produced a wrong opcode histogram — `op4` appeared unused when it is used
+four times. `tex_programs.json` carries the decoded opcode list per program.
+
+**Only 18 of the 20 table opcodes and 12 of the 41 kernels are ever used.**
+`op7` and `op10` never appear (the convolution family uses `op7`'s *handler*, not
+its slot), and the kernels in the shipped data are `0x50`–`0x53`, `0x55`–`0x57`,
+`0x59`, `0x5b`–`0x5d` and `0x60`. A port needs twelve, not forty.
+
 **Opcodes `0x50…0x78` are 3×3 convolutions**, one per opcode, weights in
 `tex_kernels.json` — normalise by the sum (0 means 1), wrap both axes, clamp,
 leave alpha. All 40 verified exact. `0x55` is not a kernel: it is

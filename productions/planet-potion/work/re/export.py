@@ -133,17 +133,41 @@ def export_programs(flat, d0, r2, out):
                 return data[o:o + 2 + n], n
         return None, 0
 
-    res = []
+    # Operand widths, read from the VM's own fetch loop at 0x100004b0:
+    #   count = byte[r2+0x2502 + opcode], with 0x7f meaning 1
+    # EXCEPT 0x50..0x78, which branch before that and set the count to ZERO —
+    # a convolution is a single byte with no operands at all.
+    counts = [d0[0xa500 + i] for i in range(20)]
+
+    def width(op):
+        if 0x50 <= op <= 0x78:
+            return 0
+        return None if op >= 20 else (1 if counts[op] == 0x7f else counts[op])
+
+    res, undecoded = [], 0
     for part, disp, n in (('p1', 0x2642, 48), ('p3', 0x27a6, 21)):
         for i, prog in enumerate(table(d0, r2, disp, n)):
             blob, ln = fetch(prog)
+            ops, j, end, exact = [], 2, 2 + ln, False
+            while blob and j <= end - 1:
+                op = blob[j]; k = width(op); j += 1
+                if k is None:
+                    break
+                ops.append(op); j += k
+            else:
+                exact = (j == end)
+            if not exact:
+                undecoded += 1
             res.append({'part': part, 'index': i, 'at': hex(prog), 'bytes': ln,
+                        'ops': ops, 'decodes': exact,
                         'hex': blob.hex() if blob else None})
     json.dump({'note': 'u16 length (bit 15 is a flag) then the opcode stream. '
-                       'Operand counts are in tex_operands.json; the 0x50..0x78 '
-                       'range is the 3x3 convolution family in tex_kernels.json.',
+                       'Operand widths come from the table at r2+0x2502 (0x7f '
+                       'means 1); opcodes 0x50..0x78 are the 3x3 convolution '
+                       'family and take NO operands, which the fetch loop sets '
+                       'explicitly rather than reading from the table.',
                'programs': res}, open(f'{out}/tex_programs.json', 'w'), indent=2)
-    return len(res), sum(1 for r in res if not r['hex'])
+    return len(res), undecoded
 
 
 def export_meshes(flat, d0, r2, out):
