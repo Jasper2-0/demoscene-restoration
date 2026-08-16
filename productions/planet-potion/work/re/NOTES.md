@@ -145,9 +145,30 @@ end; alpha is not convolved at all.
 
 That is why a byte-domain model reproduces the blur kernels and not the
 edge-detect ones: with a positive sum the intermediate never leaves range, but a
-zero-sum kernel goes negative in floats and only the final conversion decides
-what that becomes. Reproducing those exactly needs the float pipeline, which is
-`0x100006ac` (load pixel) and `0x100006d0` (store), both still unread.
+zero-sum kernel goes negative in floats and only the conversion decides what that
+becomes.
+
+Reading the two pixel routines settles the arithmetic. `0x100006ac` loads four
+floats from `r15` **and** four from `r16`; `0x100006d0` clamps each to
+`[0, 255]` with a pair of `fsel` and stores to `r16`. So the surface really is in
+**0…255 float**, the clamp is two-sided, and only three channels move — the one
+at offset 0 is loaded and stored untouched.
+
+**And there is more than one surface.** `r15` and `r16` are different pointers:
+the convolution reads neighbours from one buffer and writes to another. The
+globals confirm it — `r2+0x2472`, `0x246a`, `0x2466` and `0x246e` hold
+`0x100e29f0`, `0x101229f0`, `0x101629f0` and `0x101b29f0`, spaced by
+**`0x40000` = 128 × 128 × 16**. So the texture VM has **four float work
+surfaces** and ping-pongs between them.
+
+That is where this stops for now, and the failure is worth recording as
+carefully as the success. Convolving the surface at `0x2466` with the decoded
+kernels and comparing against the same surface after the opcode mismatched
+*every* pixel — worse than the byte-domain attempt — because it is not the buffer
+being read. The kernels, the normalisation, the wrap addressing, the clamp and
+the untouched alpha are all established; **which surface is source and which is
+destination at each step is not**, and an exact float-domain reproduction waits
+on that.
 
 **`0x55` is special-cased** out of the table and is not a convolution at all:
 `max(255 − x, 0)` over the surface — **invert**.
