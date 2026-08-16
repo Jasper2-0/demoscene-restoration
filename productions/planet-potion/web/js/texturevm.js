@@ -163,8 +163,47 @@ export function convolve(src, dst, k) {
   }
 }
 
+/**
+ * 0x10000714 — mean of selected channels, each optionally inverted.
+ * Bits 0..2 select channels 1..3, bits 3..5 invert that channel as 255-x, and
+ * bit 6 inverts the mean. Channel 0 is never selectable, which is the same
+ * "alpha is not touched" rule the convolution follows.
+ */
+export function combineChannels(px, o, mask) {
+  let sum = 0, n = 0;
+  for (let i = 0; i < 3; i++) {
+    if (!(mask & (1 << i))) continue;
+    let v = px[o + 1 + i];
+    if (mask & (8 << i)) v = 255 - v;
+    sum += v; n++;
+  }
+  if (n !== 0) sum /= n;
+  return (mask & 0x40) ? 255 - sum : sum;
+}
+
+const clamp255 = (v) => (v < 0 ? 0 : (v > 255 ? 255 : v));
+
+/** op13 — write the mask from a channel combination chosen by the operand. */
+export function op13(s, [m]) {
+  for (let i = 0; i < PIXELS; i++) s.mask[i] = combineChannels(s.current, i * 4, m);
+}
+
+/** op14 — mask += (128 - operand). op15 — mask = (mask-128)*(operand/128) + 128. */
+export function op14(s, [v]) {
+  const k = 128 - v;
+  for (let i = 0; i < PIXELS; i++) s.mask[i] = clamp255(s.mask[i] + k);
+}
+export function op15(s, [v]) {
+  const k = v / 128;
+  for (let i = 0; i < PIXELS; i++) s.mask[i] = clamp255((s.mask[i] - 128) * k + 128);
+}
+
+/** op18 — set the draw rectangle. op19 — reset it to the full surface. */
+export const op18 = (s, o) => { s.rect = [o[0], o[1], o[2], o[3]]; };
+export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
+
 /** Opcodes whose bodies are specified but not yet written here. */
-export const UNIMPLEMENTED = new Set([0, 1, 2, 3, 4, 5, 6, 8, 9, 11, 12, 13, 14, 15, 16, 17]);
+export const UNIMPLEMENTED = new Set([0, 1, 2, 3, 4, 5, 6, 8, 9, 11, 12, 16, 17]);
 
 /** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
 export function toARGB(surf) {

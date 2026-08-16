@@ -451,8 +451,23 @@ following pass is directional. Note this is the texture VM's own use of a
 Read so far:
 `op10` permutes channels by two swaps, `op11` applies an `frsqrte` curve about
 128, `op12` is `out = in + (in − 128)·k` with `k = (operand − 128)/128` doubled
-above 128, `op13` copies a channel into the mask, `op14`/`op15` add to and scale
-the mask, `op18`/`op19` set and reset the draw rectangle at `r2+0x25a6`.
+above 128.
+
+Four are now exact:
+
+```
+  op13   mask[i] = combine(current[i], operand)
+  op14   mask[i] = clamp(mask[i] + (128 - operand))
+  op15   mask[i] = clamp((mask[i] - 128) * (operand/128) + 128)
+  op18   rect = operands 0..3        op19   rect = (0, 0, 128, 128)
+```
+
+where `combine` is `0x10000714`: the **mean** of the channels selected by bits
+0–2, each inverted as `255 − x` if its bit in 3–5 is set, with bit 6 inverting
+the mean. Channel 0 is never selectable, the same rule the convolution follows.
+`op13` was previously recorded as "copies a channel into the mask", which is the
+one-bit case of this and would have been wrong for every operand with more than
+one bit set.
 
 Several opcodes share a parameter block: **one global value then three
 per-channel**, appearing in ops 2, 3, 5 and 9 — twice over in 5 and 9.
