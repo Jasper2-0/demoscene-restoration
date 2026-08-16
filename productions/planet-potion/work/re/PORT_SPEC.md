@@ -103,6 +103,32 @@ node's channels at `anim+0x40/0x44/0x48`, each scaled by 255 and packed into
 `r2+0x2846` (`0x10004f50`–`0x10004f90`). The shim clears to black today, so this
 is read but not yet wired.
 
+**3a-bis. The blocks feed MATRICES, not channels.** This is why the fifteen
+coefficient blocks do not map onto the twenty-four channels: the first pass
+evaluates them in **triples** and hands each triple to a matrix builder. Five
+triples, and the builders are four sibling routines that each write a 3x4 into
+one of four scratch matrices in the small-data area:
+
+| routine | matrix | rows | destination |
+|---|---|---|---|
+| `0x100059b4` | **rotate Y** | `(cos, 0, −sin)`, `(0, 1, 0)`, `(sin, ·, cos)` | `r2+0x29e2` |
+| `0x10005a08` | **rotate X** | `(1, 0, 0)`, `(0, cos, sin)`, `(0, −sin, cos)` | `r2+0x29e6` |
+| `0x10005a5c` | **rotate Z** | `(cos, sin, 0)`, `(−sin, cos, 0)`, `(0, 0, 1)` | `r2+0x29ea` |
+| `0x10005ab0` | **translate** | identity, with the triple at `+0x30/0x34/0x38` | `r2+0x29ee` |
+| `0x10005ae8` | **identity** | into the node's own matrix at `r31`, `+0x3c`–`+0x48` set to 1.0 | node |
+
+Layout is rows at `+0x00`, `+0x0c`, `+0x18` and the translation at
+`+0x30/0x34/0x38`. The three rotations take an angle through `float2int`, mask
+with `0x7ffc` and index the **sine table** at `r28` with the cosine read from
+`r28+0x2000` — the same table and quarter-turn offset §8f documents for the
+synth.
+
+So blocks 12, 13 and 14 — the ones that do land on channels 21, 22 and 23 — are
+the last triple, and they are the **projection** parameters `cx`, `cy` and
+`scale`: evaluated like the rest and then published rather than fed to a matrix.
+That is why they check out one-for-one while ten of the other blocks only appear
+to.
+
 **3b. Compose down the hierarchy.** For a node whose parent is resolved,
 component-wise multiply four channels by the parent's, gated by flag bit `0x40`.
 Multiplication, not matrix concatenation.
