@@ -633,13 +633,24 @@ consulted for the synthesised root and the table really does reach index 7.
 it only affects how much memory the node gets, not which nodes exist — a probe
 that cannot discriminate, recorded so it is not re-run.)
 
-So every link is now measured except the table's upper bound, which rests on
-`0x28ca − 0x28aa = 0x20` — arithmetic, not inference. The walk starts at `+2`,
-the byte there matters, the length bounds the walk, the opcode space is eight
-wide, and the bytes at `+2`, `+3`, `+5` reach the graph while `+4` and `+6` do
-not. **They still do not compose into a decoder**, and that is where this section
-stands: a dozen readings and eleven probes, every individual claim measured,
-and the assembly of them still wrong somewhere.
+**And `+2` is NOT the opcode byte.** Setting it to `0x03` or `0x01` — both
+perfectly valid opcodes — crashes the build exactly as `0x00` did. If the walk
+read an opcode there, a valid one would produce a different scene, not a dead
+one. So the byte is load-bearing and it is *not* a dispatch:
+
+```
+  +2 -> 0x00   CRASH        +2 -> 0x03   CRASH        +2 -> 0x01   CRASH
+```
+
+That is the assumption every failed decoder in this section rested on, and it is
+now disproved rather than doubted. The length is at `+0..+1` and bounds the walk;
+the first opcode is somewhere after `+2`; and `+2`, `+3` and `+5` are header
+fields whose exact values matter.
+
+Every individual claim here is measured. They still do not compose into a working
+decoder, and the remaining question is narrow and well-posed: **where does the
+first opcode actually sit, and what are `+2`, `+3` and `+5`?** Twelve probes got
+it from "the grammar does not work" to that.
 
 `+4` is still worth noting: identical in all 29 streams *and* insensitive, where
 `+3` is identical in all 29 *and* sensitive. "Constant across the production" and
