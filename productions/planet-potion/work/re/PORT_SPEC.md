@@ -856,6 +856,35 @@ bilinearly-shaded rectangle with four corner colours, not "a two-point gradient,
 one fill"; `op6` is a Bresenham line, not "a two-point distance op" — that
 `frsqrte` is only its prologue.
 
+**`op0` adds a signed offset.** Its pre-loop `bnel` adds the constant block at
+`r2+0x24d2` — four `−128.0` floats — into its own parameter block, so the per-pixel
+step is `dst += operand − 128`. That is how one opcode both darkens and
+brightens. `op17` skips that call, which is why it fills with raw operands.
+
+**`op9` needed four separate corrections**, none visible end-to-end because the
+programs that use it mostly end in `op17`:
+
+| | |
+|---|---|
+| operands | 0–3 are the BASE colour, 4–7 the amplitudes — the handler loads `r16 = r22+0`, `r15 = r22+0x10` and does `rng·amp + base` |
+| lattice step | `16 << n`, not `8 << n` — the doubling loop is a do-while, so it runs once even at nibble 0. The minimum step is exactly one pixel |
+| index | a raw byte offset `(y << 7) + x`, not snapped to pixel boundaries |
+| PRNG | two more mixing steps than first read, and it extracts **byte 2** via `rlwinm r3, r14, 24, 24, 31`. Plus **one extra draw per row**, the `bl` at `0x100011d8` |
+| midpoint | lands at `x + half`. The original advances the coordinate before computing the destination, so `subf r16, r11, r25` is `(x + step) − half` |
+
+### Test what a program actually runs, not what is convenient
+
+Two measurements passed for reasons unrelated to correctness before this was
+taken seriously. The 69 references include **25 uniform images**, so an
+implementation emitting only black matched all of them. And a standalone `op9`
+test with a nibble of 0 skips refinement entirely, so the midpoint error above
+survived a byte-exact per-opcode check.
+
+`work/re/texopsuite.py` therefore takes each opcode's operands from **the first
+real occurrence in the shipped programs**, and seeds every case with an `op9`
+so the input is non-trivial — run alone on a zeroed surface, 27 of 30 opcodes
+produce a single colour.
+
 ### Still open
 
 **The last ULP belongs to `fres(frsqrte(x))`.** `p1_12` differs in 8 subpixels at
