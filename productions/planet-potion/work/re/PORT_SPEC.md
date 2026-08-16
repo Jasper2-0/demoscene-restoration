@@ -248,7 +248,7 @@ blending. Z-buffer and its update are toggled per frame; fog per scene.
 | | |
 |---|---|
 | **16-bit dither** | the original composites into a 16-bit target; an RGBA8 port will not band the same way |
-| **`fres` / `frsqrte`** | low-precision estimates on hardware, exact under qemu, so neither the recorded stream nor the exported textures can show them — `op6` and `op11` both use `frsqrte`, so the 69 PNGs are byte-exact *reproductions of the code*, not necessarily of what a Permedia-era Amiga drew. Bounded from the stream: median 0.39 px, p95 1.25 px, max 2.50 px displacement; 39.6% of vertices over half a pixel. An architectural ceiling, and a systematic warp about the projection centre rather than jitter |
+| **`fres` / `frsqrte`** | low-precision estimates on hardware, exact under qemu, so neither the recorded stream nor the exported textures can show them. The texture VM uses both — `frsqrte` in `op6` and `op11`, and `fres` in the gradient helper `0x1000080c` — so the 69 PNGs are byte-exact *reproductions of the code*, not necessarily of what a Permedia-era Amiga drew. Bounded from the stream: median 0.39 px, p95 1.25 px, max 2.50 px displacement; 39.6% of vertices over half a pixel. An architectural ceiling, and a systematic warp about the projection centre rather than jitter |
 | **fill rule** | triangle fill and the top-left tie-break are `unknown` |
 | **blend overflow** | clamp or wrap is `unknown` |
 | **raw Z encoding** | before the driver normalises, `unknown` |
@@ -278,6 +278,11 @@ Values are **0…255 floats**. The per-pixel primitive library at
 | `0x100006d0` | **clamp** all four to `[0, 255]` with `fsel`, then fall through |
 | `0x10000700` | **store** the four floats to `r16` |
 | `0x10000714` | combine channels under the `r14` bitmask, one bit selecting a channel and another inverting it as `255 - x` |
+| `0x100007a4` | **add** the operand pixel to the destination, then store **raw** |
+| `0x100007c4` | **blend** — `dst + (src − dst)·t` on three channels with `t = src[0]/255`, then clamp-store. Five handlers use this; it is the VM's core mix |
+| `0x100007f8` | swap two channels at given offsets within one surface |
+| `0x1000080c` | `fres(b − a)` — a reciprocal span, for gradients |
+| `0x10000820` | step one pixel: interpolate three channels toward `f18` by `f16`, clamp-store, advance `r16` by `0x10` and compare against the end |
 
 **Clamping is a separate entry point, and not every path takes it.** `0x100006d0`
 falls *into* `0x10000700`, so calling the clamp entry clamps and stores while
