@@ -166,7 +166,13 @@ one of four scratch matrices in the small-data area:
 | `0x10005ae8` | **identity** | into the node's own matrix at `r31`, `+0x3c`–`+0x48` set to 1.0 | node |
 
 Layout is rows at `+0x00`, `+0x0c`, `+0x18` and the translation at
-`+0x30/0x34/0x38`. The three rotations take an angle through `float2int`, mask
+`+0x30/0x34/0x38` — **which is the animation object's own channel block**. The
+builders write a matrix into channels 0–11, and §3c's type-5 path reads exactly
+those back to transform mesh vertices. So the first twelve "channels" are a 3x4
+matrix and the rest is separate state: 15–18 and 19–20 the compose groups, 21–23
+the projection. That is why the compose gates treat `+0x30…+0x38` specially —
+transforming that triple through `0x10005b34` composes a translation, and adding
+it concatenates one. The three rotations take an angle through `float2int`, mask
 with `0x7ffc` and index the **sine table** at `r28` with the cosine read from
 `r28+0x2000` — the same table and quarter-turn offset §8f documents for the
 synth.
@@ -259,7 +265,7 @@ After that the work is per node type, read from `node+0x08` (the type times four
 |---|---|
 | 7 (`0x1c`) | nothing further |
 | 6 (`0x18`) — **camera** | copy the WHOLE 24-float channel block into the sub-structure at `node+0x2c`, run `0x10005b34` against the parent's block, and walk `+0x64` to the next — so a camera pushes its full state down a chain rather than publishing three numbers |
-| 5 (`0x14`) — mesh | its body runs from `0x100055b0`, **unread** |
+| 5 (`0x14`) — mesh | `0x100055b0`. Skips when the byte at `node+0x0f` is 1 — a built-already flag. Otherwise it loads channels 0–8 as a 3x3 and the `+0x30…+0x38` triple as a translation, walks the vertex list at `node+0x20`, and transforms each vertex (`+0x24/+0x28/+0x2c`) with **fused** `fmadd`s: `v.x·m00 + tx` and so on |
 | 4 (`0x10`) — text | `0x1000570c`. Reads the `+0x3c…+0x50` channels and the `+0x30…+0x38` triple, steps to the sub-object on `+0x74`, divides two channels by 255 where they are non-zero, and combines them with the render node's own `+0x2c`/`+0x30` through an `fmadd` and two `fdiv`s — glyph layout, and it uses constants at `r2+0x2bd6` and `r2+0x2da6`. **Read only this far** |
 
 **`anim+0x60/0x64/0x68` in the table above is the same location as
