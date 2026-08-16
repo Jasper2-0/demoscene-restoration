@@ -61,9 +61,23 @@ A word-by-word decode says exactly where the boundary is:
 ```
 seg0 + 0x0000 .. 0x0350   68K bootstrap — LEA $7FFE,A4; ExecBase; OpenLibrary xN
 seg0 + 0x035c             _W3D_ContextTag (data, a Warp3D TagItem list)
-seg0 + 0x0404 .. ~0x7000  PowerPC, ~27 KB, 100% clean linear decode
+seg0 + 0x0404 .. 0xa334   PowerPC — 40,752 bytes (39.8 KB)
 seg0 + 0xa334 .. 0xb770   globals, then a float-literal constant pool
 ```
+
+**Correction.** An earlier pass here put the code at "0x0404..~0x7000, ~27 KB".
+That was wrong, and the way it was wrong is worth recording because the same
+mistake is easy to repeat: the figure came from a *linear* capstone sweep, which
+stops at the first word that is not a valid instruction, and the stopping point
+was read as the end of the code. Decoding each word independently instead shows
+every 2 KB block from `0x0800` to `0x9fff` valid at 99–100%, and the highest `bl`
+target in the binary is `0xa2f0` — just under `_SysBase`. The real figure is
+**40 KB**, and 12,852 bytes had gone unscanned.
+
+Everything derived from the short range was re-run over the full one. The Warp3D
+surface is **unchanged** — still 22 distinct functions over 29 sites, with no W3D
+call anywhere in the missed region. The global counts were understated and are
+corrected below.
 
 Every PPC function opens with the same compiler prologue
 (`mflr r0; stw r0,8(r1); mfcr r0; stw r0,4(r1); stw r13,-4(r1); addi r13,r1,-4`),
@@ -72,8 +86,8 @@ and 195 of the 327 symbols are auto-named float literals (`__0_70710678`,
 constants are handed over verbatim, and the compiler even tells you which ones
 mattered.
 
-**27 KB of compiled PPC C is the entire intro.** That is the number that decides
-feasibility.
+**40 KB of compiled PPC C is the entire intro**, and a third of that is the
+softsynth (below). That is the number that decides feasibility.
 
 ### The small-data base, and why it matters
 
@@ -83,9 +97,9 @@ The 68K stub opens `LEA $00007FFE,A4` — the classic Amiga small-data base, at
 (`_context`, `timer`, `__exit`, `_next_effect`), where `+0x8000` hits 0 of 4.
 
 That one constant turns every `r2 + disp` in the decompilation into a named
-global: 411 references, 57 of them landing exactly on a recovered name. The
-remaining 162 displacements are un-named BSS and are the natural first
-naming backlog.
+global: **1,138 references over 482 distinct displacements, 260 of them landing
+exactly on a recovered name**. The remaining 222 are un-named BSS and are the
+natural first naming backlog.
 
 ## The architecture, from the names and the decompiler
 
@@ -559,10 +573,26 @@ replayer**, and the bespoke part is narrow: `_generate_samples_part1` and
 `_generate_samples_part3` synthesise the instrument samples at runtime, with
 `_module` and `_music_buffer` as the handoff.
 
-That reframes the audio job completely. It is not "reverse a vocoder". It is
-"port two named sample-generator functions, and drive a documented module format
-through an existing replayer". The vocoder character the pouët comments describe
-is a *result* of those two functions, and they are 27 KB of C away.
+That reframes the audio job — but **not** in the direction first written here.
+An earlier pass called it "narrow: two named functions", which was an artifact of
+the short scan range. Those two functions are small drivers
+(`_generate_samples_part1` is 564 bytes and almost pure call sequence, 57 calls
+with 2 floating-point instructions), and they sit on top of the **12.8 KB of
+synthesis helpers** that had gone unscanned. Every one of the 259 calls into that
+region comes from the audio code.
+
+`_generate_samples_part3` is where the DSP is: 864 bytes, 70 floating-point
+instructions, and it is the only code in the intro that touches `_sinus`,
+`_power` and `_mexp`. Its constants are a giveaway — `0.9997`, `0.99996`,
+`0.999985` are per-sample decay/feedback coefficients, and `32768` is the
+sample scale.
+
+So the softsynth is roughly **14 KB of the 40 KB — the single largest subsystem
+in the intro**, larger than the texture VM, the geometry VM and the renderer put
+together. It is still a better position than a bespoke format, because the
+*playback* side is a documented DigiBooster module through a self-contained
+replayer, and only the instrument synthesis has to be recovered. But it is not
+the cheap part, and planning it as an afterthought would be a mistake.
 
 ### 68K interop
 
