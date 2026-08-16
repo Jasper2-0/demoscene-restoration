@@ -433,6 +433,26 @@ otherwise flag as a porting error.
 
 The caller is `_play_scene_p_end`, so this is the text in the closing scene.
 
+**And the glyphs themselves are seg 2.** That 2,048-byte block, flagged early as
+"low entropy (2.99) — a table" and left alone, is a **128×128 one-bit bitmap**,
+16 bytes per row — the same 128 as the texture VM's output. Rendered, its first
+two rows read `0 1 2 3 4 5 i` then `6 7 8 9 0 a`, which is the descriptor's
+row-0 and row-19 order exactly.
+
+Cross-validating the two against each other closes it: **all 40 descriptor rects
+contain ink**, none spills past its right edge, and the bitmap's inked rows run
+3..111 inside the descriptor's 0..113 extent. The 200-byte table in seg 0 and
+the 2,048-byte bitmap in seg 2 are a matched pair.
+
+So the font is **fully recovered, 2,248 bytes for 40 proportional glyphs**, and
+it needs no emulator, no trace and no further reversing — it can be lifted
+straight out and shipped. It is the first asset in this study that is simply
+*done*.
+
+That also explains the duplicate `'0'` and the shared `'v'`/`'w'` rectangle:
+there is no `v` in the bitmap at all, so drawing `v` as `w` was the only option
+once the atlas was full. A deliberate economy, not a bug.
+
 ### The 3D is a bounded, documented API
 
 Not a bespoke software rasteriser. `Warp3DPPC.library` is opened, `_Warp3DBase`
