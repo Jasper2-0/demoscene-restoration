@@ -404,12 +404,15 @@ references to `r31`**, the stream cursor. Whatever it builds, it builds from
 So four of the seven ops (0, 1, 2, 5) are a bare opcode byte, and only 3, 4 and
 6 carry operands.
 
-**Op 4 consumes `1 + N` bytes.** Its only two reads are `bl 0x10002738` — the u8
-reader — one at `0x10002e28`, whose value goes to `node+0x28`, and one at
-`0x10002e44` inside the per-character loop. So the first byte precedes the
-string and one byte follows per character. That `node+0x28` is the character
-COUNT is consistent with the shape and **not proven here**; the loop's bound was
-not read.
+**Op 4 consumes `1 + N` bytes, and `N` is the first of them.** Its only two reads
+are `bl 0x10002738` — the u8 reader — one at `0x10002e28`, whose value goes to
+`node+0x28`, and one at `0x10002e44` inside the per-character loop. `mr r25, r26`
+at `0x10002e38` copies that first byte into the loop counter, and the back-edge
+at `0x10002f00` is `addic. r25, r25, -1; bgt`. So `node+0x28` **is** the string
+length — proven, not inferred from the shape.
+
+The loop also accumulates `f20` per character and stores it to `node+0x30` at the
+end, which is the string's total advance width.
 
 That is the whole stream grammar:
 
