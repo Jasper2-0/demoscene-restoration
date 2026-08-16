@@ -279,17 +279,29 @@ export function op9(s, ops) {
   // the amplitudes — not the other way round.
   const base = [ops[0], ops[1], ops[2], ops[3]];
   const amp = [ops[4], ops[5], ops[6], ops[7]];
-  let xstep = 8 << (ops[8] & 0xf);
-  let ystep = 8 << (ops[8] >> 4);
+  // `li r9, 8` then `mulli r9, r9, 2; addic. r14, r14, -1; bge` is a DO-while:
+  // it doubles once even when the nibble is zero. So the step is 16 << n, and
+  // the minimum is exactly one pixel — never sub-pixel.
+  let xstep = 16 << (ops[8] & 0xf);
+  let ystep = 16 << (ops[8] >> 4);
   const rng = new Rng(ops[10], ops[11], ops[9]);   // r12, r11, r14
-  const buf = new Float32Array(PIXELS * 4);
-  const at = (xb, yb) => (((yb << 7) + xb) >> 4) * 4;
+  // +4 because the last lattice point can start three floats from the end.
+  const buf = new Float32Array(PIXELS * 4 + 4);
+  // `slwi r16, r24, 7; add r16, r16, r25` — a BYTE offset, and with a step of 8
+  // (nibble 0) the lattice lands mid-pixel, so consecutive points overlap by two
+  // channels. Snapping to pixel boundaries loses that aliasing, which is part of
+  // the noise's character rather than an artefact to clean up.
+  const at = (xb, yb) => ((yb << 7) + xb) >> 2;
 
   for (let y = 0; y < 0x800; y += ystep) {
     for (let x = 0; x < 0x800; x += xstep) {
       const o = at(x, y);
       for (let c = 0; c < 4; c++) buf[o + c] = base[c] + rng.next() * amp[c];
     }
+    // One extra draw per ROW — the `bl 0x100008e4` at 0x100011d8, between the x
+    // loop ending and y advancing. Without it row 0 matches and everything after
+    // is desynchronised by one value, which is exactly how this was found.
+    rng.next();
   }
 
   // THE MIDPOINT IS NOT AN AVERAGE. 0x1000091c adds the two neighbours and
