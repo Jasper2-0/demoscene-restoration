@@ -87,6 +87,42 @@ is why payloads begin `5B FF 0F xx 80 00` and that is *not* a magic number. The
 low bits of an operand byte index `param_3`/`param_4`, which are built at
 runtime in seg 6 — so scene streams cannot be decoded statically.
 
+`runscene.py` is the attempt to run the interpreter for real, the way `rungeo.py`
+did for geometry. **It does not work yet**, but it has narrowed the problem to a
+named spot and produced three findings on the way.
+
+*The Warp3D vector stubs have to blanket the region, not sit on 6-byte
+centres.* The globals hold **base + 2**, so real fetches land on odd-looking
+displacements — `W3D_AllocTexObj` is read at `-0x5e`, `UploadTexture` at
+`-0x8e`, `SetFilter` at `-0x76`. Filling only multiples of 6 leaves those reading
+zero. The fix is to fill every 2-byte slot below the base with a pointer whose
+two halves are **identical** (the stub sits at `0x20402040`), so any aligned
+`lwz` returns it. With that, `_alloc_txt` runs.
+
+*`W3D_SetFilter` is called with `(2, 2)`.* That is `W3D_LINEAR` for both
+minification and magnification — bilinear, no mipmapping — read straight out of
+`_alloc_txt` rather than inferred from driver documentation.
+
+*The scene interpreter needs the font table built first.* `_play_scene_p_end`
+calls `_init_txtgen` and `_init_scene_generate` before any scene runs, and scene
+handler **[4] at `0x10002e10` is the text renderer**, which walks the 20-byte
+glyph records. Without the unpacker having run, that walk never terminates.
+
+**A latent bug in the original, at `0x10002e78`.** The glyph scan reads a table
+entry into `r10`, compares it against the sought character in `r26` — and then
+tests **`r26`** against `0xFF` for the loop exit, not `r10`. So the terminator
+check is against the search key rather than the table sentinel: looking up a
+character that is not among the 40 glyphs **scans forever** and walks off memory.
+It never bites in the demo because the text only uses characters that exist. Two
+consequences: a port must not reproduce it as a hang, and it is independent
+evidence that the shipped strings are confined to that 40-glyph set.
+
+What still fails: the character source at `0x10002738` yields values absent from
+the font table, so the run dies in that unterminated scan. The remaining setup
+gap is between `_play_part_1`'s real prologue and what `runscene.py` reproduces —
+`_next_effect`, the per-scene frame setup at `0x10001d9c`, and the fact that part
+one's first scene is `r2+0x25d2`, not `r2+0x25aa`.
+
 **Geometry.** Opcode byte, then operands — but **do not try to model the
 widths**. Three attempts failed and the reason is instructive:
 
