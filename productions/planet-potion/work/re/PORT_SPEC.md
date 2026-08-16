@@ -488,10 +488,27 @@ of a **header longer than the u16 length**, not of an opcode stream. A varying
 u16 followed by a fixed three bytes is a length and then something constant, and
 `0x5b` is that constant rather than an opcode that happens to be invalid twice.
 
-So the prologue's `lhz`/`addi` is real and the walk starts further in than
-`+2`. What sits between is the thing to identify, and two scenes is already
-enough to see it is fixed-width; dumping the same offsets across all 29 would
-show how far it runs.
+So the prologue's `lhz`/`addi` is real and the walk starts further in than `+2`.
+Profiling the first ten bytes of all 29 streams shows how much of it is fixed:
+
+```
+  offset 0   9 distinct   the u16 length, high half
+  offset 1  26 distinct   the u16 length, low half
+  offset 2   5 distinct   0x1b 0x40 0x53 0x5b 0xfb
+  offset 3   1 distinct   ALWAYS 0xff
+  offset 4   1 distinct   ALWAYS 0x0f
+  offset 5+  varies
+```
+
+Offsets 3 and 4 being constant across every scene in both parts is not something
+an opcode stream does. So there is a fixed header after the length, and the five
+values at offset 2 are a field of it rather than opcodes that are invalid by
+coincidence in all 29.
+
+**This is where the trail stops, with a measurement rather than a guess.** What
+the header is, and how far past it the opcode walk begins, needs the loop at
+`0x100021f4` read against a live `r31` — the harness can print it, and one run
+would replace the whole chain of inference above.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
