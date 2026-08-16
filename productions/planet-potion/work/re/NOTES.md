@@ -430,6 +430,19 @@ vertices all landed on one point, noticed early and shrugged off — are gone
 entirely. That shrug was the mistake: a collapsed primitive is a *symptom*, and
 it was visible from the first recorded frame.
 
+**Which subsystems this touches**, checked one at a time rather than assumed:
+
+| subsystem | reads the tables? | earlier output |
+|---|---|---|
+| textures (`_generate`) | **no** — 12 programs hash identically | **correct as published** |
+| geometry (`_generate_obj`) | yes, `_sinus` at `0x10003a58` | all 10 sampled programs differ — **was wrong** |
+| renderer (`_calc_matrix`) | yes, `_sinus` at `0x10004f34` | **was wrong** |
+| softsynth (`_generate_samples_part3`) | yes — `_sinus`, `_power`, `_mexp` at `0x10006ef4`–`0x10006efc` | **suspect**; the modules and therefore the timeline are regenerated |
+| scene graphs (`_generate_scene`) | not directly | node type lists come from the stream and are unchanged |
+
+The texture result is the useful one to have checked: 69 PNGs are a shipped
+artefact for a port, and they did not need redoing.
+
 ## The renderer, recorded — `drawlog.py`
 
 The three pure subsystems could be run as functions because they touch no
