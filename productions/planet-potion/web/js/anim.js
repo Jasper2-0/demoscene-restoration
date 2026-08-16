@@ -32,24 +32,13 @@
 // be more forgiving — a position that is a few ulps off feeds a reciprocal in
 // the emitter, which amplifies it.
 
-/** `fmadd`: fl(a*b + c) with ONE rounding. Dekker twoProduct + twoSum. */
-const _SPLIT = 134217729;                       // 2^27 + 1
+// `fmadd`: fl(a*b + c) with ONE rounding. This file carried its own copy of the
+// Dekker implementation, identical to the texture VM's — two copies of the one
+// primitive the whole port's exactness rests on, and two places to fix a bug in
+// one of them. One definition now, in fp.js, pinned by work/re/fpcheck.mjs.
+import { fma } from './fp.js';
 
-function _split(a) {
-  const t = a * _SPLIT;
-  const hi = t - (t - a);
-  return [hi, a - hi];
-}
-
-export function fma(a, b, c) {
-  const p = a * b;
-  if (!Number.isFinite(p) || p === 0) return p + c;
-  const [ah, al] = _split(a), [bh, bl] = _split(b);
-  const e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
-  const s = p + c;
-  const v = s - p;
-  return s + (((p - (s - v)) + (c - v)) + e);
-}
+export { fma };
 
 /**
  * One channel of one keyframe. `k` is the 16-byte coefficient block as

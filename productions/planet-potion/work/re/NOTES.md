@@ -1869,6 +1869,7 @@ produced two answers that disagree.
 | `runsynth.py` | runs the softsynth; returns the generated DBM0 module |
 | — | `export.py` also writes `tex_programs.json`: the 69 texture programs as bytecode, 3,407 payload bytes. Adding the 69 two-byte length prefixes gives 3,545, which is exactly the 2,780 + 765 in the program table above — the table counts the prefix, this export does not |
 | `docpatch.py` | replace text in a doc and **fail** if the anchor is missing or ambiguous — five PORT_SPEC edits silently did nothing before this existed |
+| `fpcheck.mjs` | the two PowerPC float semantics (`fp.js`) against references computed a different way — `fma` vs exact BigInt arithmetic, truncating `stfs` vs a `Math.fround`-derived characterisation. Needs no dataset and no binary |
 | `texvmdiff.mjs` | runs the JS texture VM against the 69 byte-exact PNGs; the test that can actually fail |
 | `texbuildcheck.mjs` | the same 69, but through `textures.js` — the function the browser calls. Covers the part split, the array indexing and the ARGB→RGBA reorder, none of which `texvmdiff` touches because it compares before the reorder |
 | `texvmcheck.mjs` | decode and instruction-coverage report for the texture VM |

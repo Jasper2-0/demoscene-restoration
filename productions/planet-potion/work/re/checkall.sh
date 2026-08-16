@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir]
 #
-# Nine checks accumulated over the work and there is no point in remembering
-# nine invocations. Each either passes or names what drifted; none of them
+# Ten checks accumulated over the work and there is no point in remembering
+# ten invocations. Each either passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -40,6 +40,8 @@ run() {
   esac
 }
 
+run "fpcheck — the two floating-point primitives, against exact arithmetic" \
+  node "$HERE/fpcheck.mjs"
 run "speccheck — spec numbers re-derived from the binary" \
   python3 "$HERE/speccheck.py" "$FLAT"
 run "texvmdiff — 69 texture programs against the original's own output" \
