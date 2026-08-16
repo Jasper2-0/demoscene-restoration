@@ -527,12 +527,16 @@ state for those is most likely to be.
 
 ### What the recording covers, and what it does not
 
-27 of 29 scenes record. Part three is the heaviest — `r2+0x277e` submits 200
-primitives at t=20 — and part one's early scenes run from 11 to 89. The two that
-fail are the same two text scenes as before, on the same unbounded glyph scan.
+26 of 28 scene spans record, **4,358 primitives** across the whole show at five
+samples each. Part three is the heaviest — `r2+0x277e` holds 200 to 215
+primitives throughout — and `r2+0x25c6` climbs from 3 primitives to 225 over its
+life, which is the reason for sampling across a scene's own span rather than a
+fixed early window. The two that fail are the same two text scenes as before, on
+the same unbounded glyph scan.
 
 Six part-one scenes (`0x25da`, `0x25d6`, `0x25de`, `0x25e2`, `0x25ea`, `0x25e6`)
-record the overlay and **nothing of their own**. They are the ones whose graphs
+record the overlay and **nothing of their own** — confirmed across their full
+915-, 914- and 457-tick spans, not just an early window. They are the ones whose graphs
 are all type-5 nodes, and render handler 5 at `0x100061a0` bails immediately when
 `node+0x24` — its object pointer — is zero.
 
