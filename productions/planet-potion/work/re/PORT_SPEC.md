@@ -240,8 +240,30 @@ Checked so far:
 
 `0x40` and the `0x10005b34` transform are unchecked.
 
-**3c. Publish.** `anim+0x60/0x64/0x68` become the render node's `cx`, `cy`,
-`scale` — channels 21, 22 and 23 of the block at `+0x0c`. **Confirmed against
+**3c. Publish** — `0x10005510`, and it does three things in order.
+
+It copies the animation object's resolved byte at `+0x00` into the render node at
+`+0x0c`, and **publishes nothing unless that byte is 1** — so a node whose track
+has not started leaves last frame's values on the render node rather than
+writing zeros.
+
+Then `lfs` from `+0x54/+0x58/+0x5c` of the channel block and `stfs` to the render
+node's `+0x14/+0x18/+0x1c`: channels 21, 22 and 23 becoming `cx`, `cy` and
+`scale`, which is the same three the compose pass copies down a hierarchy and the
+same three `animcheck.mjs` verifies against the running program. Three
+independent routes to the same conclusion.
+
+After that the work is per node type, read from `node+0x08` (the type times four):
+
+| type | |
+|---|---|
+| 7 (`0x1c`) | nothing further |
+| 6 (`0x18`) — **camera** | copy the WHOLE 24-float channel block into the sub-structure at `node+0x2c`, run `0x10005b34` against the parent's block, and walk `+0x64` to the next — so a camera pushes its full state down a chain rather than publishing three numbers |
+| 5 (`0x14`) — mesh | a separate path at `0x1000570c`, **unread** |
+
+**`anim+0x60/0x64/0x68` in the table above is the same location as
+`(+0x0c)+0x54/0x58/0x5c`** — the offsets differ only in what they are measured
+from, which is worth stating because both forms appear in this document. **Confirmed against
 the running program**: `work/re/animdump.py` dumps the scene graph per frame and
 those three channels equal the `cx`/`cy`/`scale` the emitter used, to the last
 digit, at every time sampled.
