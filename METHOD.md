@@ -285,6 +285,50 @@ quietly lying, so the harness rules are now explicit:
 
 ---
 
+## Run the original's own code instead of reimplementing it
+
+The Planet Potion work added a technique the earlier restorations did not need,
+and it generalises: **where a subsystem is pure computation, execute the
+original's code and read its output, rather than deriving what it would produce.**
+
+The test is cheap. Take a function's transitive call closure and ask whether it
+touches any library base or OS entry point. For that intro, three of five
+subsystems touched none — the procedural texture VM, the scene interpreter and
+the whole softsynth were pure functions over memory. Those need no operating
+system, no ROM, no accelerated hardware and no emulator of the original machine.
+They need a CPU.
+
+So: hand-build a static ELF that maps the executable's hunks at their linked
+addresses, set the small-data base register, call one function through a
+register-indirect branch, and write the result buffer out with a `write(2)`.
+That is an ELF header, a few program headers and a twenty-instruction stub —
+no cross-toolchain — under `qemu-user`.
+
+What it bought, repeatedly, was answers where modelling had failed:
+
+- **Texture data.** 69 textures byte-exactly, rather than reimplementing a
+  20-opcode image language.
+- **Geometry.** Three attempts to model the operand widths failed, because a
+  shared prologue's byte consumption depended on a table built at runtime.
+  Running the interpreter and reading back the linked list it builds decoded 38
+  of 39 programs and made the widths irrelevant.
+- **The scene graph.** Blocked statically because operand bytes index structures
+  that only exist once earlier passes have run. Running those passes first builds
+  them.
+
+Two practical notes. Stub the hardware library by pointing its base at a table of
+no-op vectors, and **blanket the vector region rather than placing entries on
+their nominal spacing** — Warp3D's globals hold *base + 2*, so real fetches land
+on displacements that are not multiples of six. Give the stub an address whose two
+halves are identical and fill every slot, so any aligned load returns it. And when
+a run faults, `qemu -d in_asm -dfilter <lo>..<hi>` narrows it to a function in one
+pass; that is how the missing font-table initialiser was found.
+
+The limit is honest and worth stating: this recovers *what the original computed*,
+not why. It is extraction, not understanding. The naming still has to be done by
+reading the code — but it can be done against known-correct output instead of
+guesses.
+
 ## Reconstruction, not restoration
 
 None of this is the original source code. It is a reconstruction from the
@@ -303,6 +347,11 @@ night, and that is the artefact worth keeping.
 `yt-dlp` · `node-canvas` (offline text rasterising with the period-correct
 fonts) · `puppeteer-core` + headless Chrome (verification) · plain WebGL2 ·
 a hand-written Direct3D 7 immediate-mode shim over WebGL2.
+
+For the Amiga work: `lhasa` · `amitools` (`hunktool`) · `capstone` · `ghidra`
+with the PowerPC processor module · `qemu-user` (running the original's own
+subsystems, above) · a hand-written Hunk loader, because stock tooling rejects
+the `0xC0000000` memory-flags encoding these executables use.
 
 ## Credits
 
