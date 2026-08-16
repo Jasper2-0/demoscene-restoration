@@ -110,6 +110,13 @@ Result: opcode counts across the shipped data are **op0 ×62, op3 ×56, op4 ×24
 and opcodes 1 and 2 are never used at all.** 17 distinct shapes; the commonest
 are `[4]`, `[0]`, `[4,3,3]`, `[0,0]`. A port needs three of the five handlers.
 
+**And the mesh comes out too, not just the opcode sequence.** The nodes carry the
+generated geometry: an `op4` node holds a vertex count at `+0x1a` and a pointer
+at `+0x1c` to an array of 20-byte records — `(x, y, z, w)` floats plus a flag
+word. Program `0x10030b56` yields two control vertices at `z = ±1024, w = 100`.
+So geometry is extractable as data on the same terms as the textures, without
+reimplementing a single handler.
+
 ## Warp3D surface — 22 functions, 29 sites
 
 Named against ReWarp3DPPC's `VecTable68K[]` (LGPL-3.0, github.com/Sakura-IT),
