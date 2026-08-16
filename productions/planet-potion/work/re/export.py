@@ -29,7 +29,9 @@ import runscene
 BASE = 0x10000000
 PATCH_NOTE = ['glyph scan at 0x10002e78: compare rA r26 -> r10, so the lookup '
               'terminates on the table sentinel rather than the search key. '
-              'Scenes that decode without it are byte-identical with it.']
+              'Scenes that decode without it are byte-identical with it.',
+              'seg5 preloaded with the four lookup tables the 68K bootstrap '
+              'builds (sin, atan, 2^x, e^x), rebuilt from its own constants.']
 
 
 def g(d0, r2, disp):
@@ -234,6 +236,10 @@ def main():
     # already worked comes out byte-identical. See ppcrun.fix_glyph_scan.
     print(f'patch       ... glyph scan {H.GLYPH_SCAN:#010x} -> '
           f'{H.fix_glyph_scan(d0):#010x}')
+    # seg 5 is BSS and the 68K bootstrap fills it. Without this the harness runs
+    # with sin = cos = 0 and rotating geometry collapses to a point.
+    print('tables      ...', ', '.join(f'{a}:{n}' for a, n in
+                                       H.preload_tables(d0).items()))
     print('font        ...', end=' ', flush=True); ng = export_font(d0, out); print(f'{ng} glyphs')
     print('render state...', end=' ', flush=True); nf = export_render_state(d0, r2, out); print(f'{nf} fog presets')
     print('textures    ...', end=' ', flush=True)

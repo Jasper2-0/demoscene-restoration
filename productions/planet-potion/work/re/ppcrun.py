@@ -73,6 +73,60 @@ def fix_glyph_scan(d0, base=0x10000000):
     return PATCHES[GLYPH_SCAN]
 
 
+# --- the four lookup tables, which the 68K bootstrap builds and we do not run
+#
+# seg 5 is BSS, so it maps as zeros — and nothing in the PowerPC code writes it.
+# The 68K stub fills it with the FPU before handing over (`fsin`, `fatan`,
+# `ftwotox`, `fetox`), which is why a PowerPC-only harness silently runs with
+# sin = cos = 0 and any rotating node collapses to a point.
+#
+# The formulas are read from the bootstrap, not assumed, down to the exact
+# single-precision constants it loads. The four sizes add to 505,056 bytes
+# against seg 5's 513,248, and _mexp ends at 0x100cd4e0 which is seg 5's last
+# byte — so this IS what that segment is for.
+PRELOAD = {}                       # virtual address -> bytes, laid into BSS
+
+F32 = {'pi': 0x40490FDA, 'e-4': 0x38D1B717, 'e-3': 0x3A83126E}
+
+
+def _f32(bits):
+    return struct.unpack('>f', struct.pack('>I', bits))[0]
+
+
+def build_tables(d0, base=0x10000000):
+    """-> {va: bytes} for _sinus, _atan, _power, _mexp.
+
+    _sinus is 10,240 entries stepping by float32(pi)/4096 — 8,192 for a full
+    turn plus 2,048 more, which is exactly why cosine can be the same table read
+    0x2000 bytes along.
+    """
+    import math
+    r2 = base + R2_BIAS
+
+    def ptr(disp):
+        return struct.unpack_from('>I', d0, r2 + disp - base)[0]
+
+    def ramp(start, step, n, fn):
+        out, x = bytearray(), start
+        for _ in range(n):
+            out += struct.pack('>f', fn(x))
+            x += step
+        return bytes(out)
+
+    return {
+        ptr(0x2382): ramp(0.0, _f32(F32['pi']) / 4096.0, 10240, math.sin),
+        ptr(0x2386): b''.join(struct.pack('>f', math.atan(i / 1024.0))
+                              for i in range(1024)),
+        ptr(0x238a): ramp(-1.0, _f32(F32['e-4']), 100000, lambda x: 2.0 ** x),
+        ptr(0x238e): ramp(0.0, _f32(F32['e-3']), 15000, math.exp),
+    }
+
+
+def preload_tables(d0, base=0x10000000):
+    PRELOAD.update(build_tables(d0, base))
+    return {hex(a): len(b) for a, b in PRELOAD.items()}
+
+
 def load_seg(flat, fn, va):
     """Read a segment image, applying any PATCHES that land inside it."""
     d = bytearray(open(os.path.join(flat, fn), 'rb').read())
@@ -80,6 +134,29 @@ def load_seg(flat, fn, va):
         if va <= a < va + len(d) - 3:
             struct.pack_into('>I', d, a - va, w)
     return bytes(d)
+
+
+def segments(flat):
+    """-> [(va, file image or None, memsz)] with PATCHES and PRELOAD applied.
+
+    A BSS segment normally has no file image. If PRELOAD puts anything inside
+    one, it gets an image long enough to carry it and the rest stays zero-fill.
+    """
+    out = []
+    for va, size, fn in read_layout(flat):
+        if fn is not None:
+            out.append((va, load_seg(flat, fn, va), size))
+            continue
+        inside = {a: b for a, b in PRELOAD.items() if va <= a < va + size}
+        if not inside:
+            out.append((va, None, size))
+            continue
+        need = max(a + len(b) for a, b in inside.items()) - va
+        img = bytearray(need)
+        for a, b in inside.items():
+            img[a - va:a - va + len(b)] = b
+        out.append((va, bytes(img), size))
+    return out
 
 
 def read_layout(flat):
@@ -94,7 +171,7 @@ def read_layout(flat):
 
 
 def build(flat, target, regs, out_addr, out_len, path):
-    segs = read_layout(flat)
+    segs = segments(flat)
     r2 = segs[0][0] + R2_BIAS
     code = []
     code += load32(1, STACK)
@@ -109,8 +186,7 @@ def build(flat, target, regs, out_addr, out_len, path):
     code += [li(0, 1), li(3, 0), sc()]        # exit(0)
     stub = b''.join(struct.pack('>I', w) for w in code)
 
-    pieces = [(va, (None if fn is None else load_seg(flat, fn, va)), sz)
-              for va, sz, fn in segs]
+    pieces = list(segs)
     pieces.append((SCRATCH, stub, SCRATCH_SZ))
 
     EH, PH, ALIGN = 52, 32, 0x1000

@@ -14,7 +14,7 @@ this file is the address notebook.
 | 2 | DATA | 2,048 | table, entropy 2.99 |
 | 3 | DATA | 12,796 | **part one's** scene / texture / geometry programs |
 | 4 | DATA | 52,500 | **part three's** programs (28%) + softsynth data (~72%) |
-| 5 | BSS | 513,248 | |
+| 5 | BSS | 513,248 | four lookup tables the **68K bootstrap** fills: sin, atan, 2^x, e^x |
 | 6 | BSS | 17,766,496 | runtime arenas; the texture buffers live here |
 
 ```
@@ -375,6 +375,60 @@ triangle fan. `ReadZPixel` appears once, in render slot 4's handler, after a
 four-way float bounds test and before a `DrawTriFan` — an occlusion-tested
 screen-space element. It is the only readback in the intro and the only call
 that does not map cleanly onto WebGL2.
+
+## seg 5 is four lookup tables, and the 68K bootstrap builds them
+
+This is the correction that invalidated a run of earlier measurements, so it goes
+before them.
+
+`_sinus`, `_atan`, `_power` and `_mexp` (`r2+0x2382…0x238e`) point into **seg 5,
+which is BSS**. No PowerPC instruction anywhere writes it — the scan for stores
+to those pointers comes back empty, and so does the scan for indexed float stores
+into the region. The **68K bootstrap** fills them, with the FPU, before it hands
+over:
+
+```
+  movea.l $2382(a4), a1        ; _sinus
+  fmove.s #<0x40490FDA>, fp5   ; float32 pi
+  fmove.s #4096.0, fp6
+  fdiv    fp6, fp5             ; step = pi/4096
+  move.w  #$27ff, d7           ; 10,240 entries
+  loop: fsin fp0, fp1 ; fadd fp5, fp0 ; fmove.s fp1, (a1)+
+```
+
+| table | entries | contents | bytes |
+|---|---|---|---|
+| `_sinus` `0x10050000` | 10,240 | `sin(x)`, `x` stepping by float32 π/4096 | 40,960 |
+| `_atan` `0x1005c000` | 1,024 | `atan(i/1024)` | 4,096 |
+| `_power` `0x1005d000` | 100,000 | `2^x`, `x` from −1 by float32 1e-4 | 400,000 |
+| `_mexp` `0x100bea80` | 15,000 | `e^x`, `x` from 0 by float32 1e-3 | 60,000 |
+
+`_mexp` ends at `0x100cd4e0`, which is `0x10050000 + 0x7d4e0` — **seg 5's last
+byte**. The four sizes account for the segment exactly, which is the check that
+this is what it is for. And 10,240 = 8,192 + 2,048 explains the cosine trick: a
+full turn is 8,192 entries and the table carries a quarter turn extra, so
+`_sinus + 0x2000` is a cosine table for free.
+
+**What this cost.** A PowerPC-only harness maps BSS as zeros, so every run before
+this had `sin = cos = 0`: rotating geometry collapsed to a point, and whole
+scenes drew nothing. `ppcrun.build_tables` rebuilds all four from the
+bootstrap's own constants and `ppcrun.segments` lays them into the otherwise-BSS
+segment. The recovered sine matches `sin(2πi/8192)` to 3e-7 — float32 precision.
+
+The difference at one frame:
+
+| scene | zeroed | with tables |
+|---|---|---|
+| `0x25ba` | 167 | **393** |
+| `0x25ce` | 12 | **137** |
+| `0x25da` | 0 | **403** |
+| `0x277a` | 31 | **59** |
+| `0x279e` | 7 | **12** |
+
+Two to eleven times as much geometry, and the degenerate primitives — fans whose
+vertices all landed on one point, noticed early and shrugged off — are gone
+entirely. That shrug was the mistake: a collapsed primitive is a *symptom*, and
+it was visible from the first recorded frame.
 
 ## The renderer, recorded — `drawlog.py`
 
@@ -746,41 +800,27 @@ state for those is most likely to be.
 
 ### What the recording covers, and what it does not
 
-All 28 scene spans record once the glyph-scan patch is on (26 without it) —
-**9,266 primitives** across the show at five samples each, zero failures. Part three is the heaviest — `r2+0x277e` holds 200 to 215
+All 28 scene spans record once the glyph-scan patch is on (26 without it). The
+primitive counts quoted here predate the seg-5 table fix above and are therefore
+low by a factor of two to eleven; the export's own manifest carries the current
+numbers. Part three is the heaviest — `r2+0x277e` holds 200 to 215
 primitives throughout — and `r2+0x25c6` climbs from 3 primitives to 225 over its
 life, which is the reason for sampling across a scene's own span rather than a
 fixed early window.
 
-Six part-one scenes (`0x25da`, `0x25d6`, `0x25de`, `0x25e2`, `0x25ea`, `0x25e6`)
-record the overlay and **nothing of their own** — confirmed across their full
-915-, 914- and 457-tick spans, not just an early window. They are the ones whose graphs
-are all type-5 nodes, and render handler 5 at `0x100061a0` bails immediately when
-`node+0x24` — its object pointer — is zero.
+**Six part-one scenes recorded nothing of their own, and the reason was the
+harness, not the intro.** `0x25da`, `0x25d6`, `0x25de`, `0x25e2`, `0x25ea` and
+`0x25e6` produced only the overlay — and an explanation was written here that
+tied them to `_generate_scene`'s null-object branch and to the two geometry
+programs with no payload. **That explanation was wrong.** It was a correlation
+between two things that both happened to be broken, and it did not survive the
+next fix: with seg 5's lookup tables present (see below) all six render — 666,
+854, 623, 114, 289 and 292 primitives of their own. The two geometry programs are
+unchanged by the tables, so they were never the cause.
 
-That pointer is filled at `0x10002890`, and the branch three instructions
-earlier is the whole story:
-
-```
-  0x10002874  lwz    r26, 8(r10)      ; r10 = the object _calculate_obj built
-  0x10002878  cmpwi  r26, 0
-  0x1000287c  beq    0x1000298c       ; nothing to attach — leave node+0x24 = 0
-```
-
-Running all 28 of part one's geometry programs and reading `[head+8]` finds
-**exactly two** objects with no payload: index 12 (`0x10030d18`, builds but
-`[+8] = 0`) and index 26 (`0x100317bb`, the one program of 39 that does not
-decode at all). The other 26 all carry a pointer there, including five whose
-node list is a bare `[0]` exactly like index 12's — so `[+8] = 0` is an
-anomaly, not a normal property of that shape. The six silent scenes and the
-known geometry failure are therefore very likely **the same defect**, reached
-through this branch — not six separate ones, and not missing camera state.
-`_restore_time` is ruled out: it only writes the frame into `node+0x6c`, which a
-fresh arena already holds as 0.
-
-What is not yet settled is which way round it goes — whether those two objects
-genuinely have no drawable payload, or whether the harness mis-builds them and
-the scenes are fine in the original. Left as an open item rather than guessed at.
+Worth keeping as a caution. The null-object branch at `0x10002874` is real code
+and the two payload-less programs are real; joining them into an explanation was
+the mistake, and the joint was never tested.
 
 The running order recorded above also needs a correction. `_play_part_1` loads
 `r2+0x25d2` first, but hands it to **`_init_synchro`** — it is the overlay built

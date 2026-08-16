@@ -38,8 +38,7 @@ def run(target, dump_addr, dump_len, timeout=300):
     c+=[H.li(0,4),H.li(3,1),H.sc()]
     c+=[H.li(0,1),H.li(3,0),H.sc()]
     stub=b''.join(struct.pack('>I',w) for w in c)
-    segs=H.read_layout(FLAT)
-    pieces=[(va,(None if fn is None else open(os.path.join(FLAT,fn),'rb').read()),sz) for va,sz,fn in segs]
+    pieces=H.segments(FLAT)
     pieces.append((H.SCRATCH,stub,0x00600000))
     EH,PH,AL=52,32,0x1000; blob=b''; loads=[]; cur=EH+PH*len(pieces)
     for va,data,msz in pieces:

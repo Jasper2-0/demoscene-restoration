@@ -134,7 +134,7 @@ def drawrec():
 
 
 def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None, signal=None,
-          nodes=False):
+          nodes=False, probe=None):
     c = []
     c += H.load32(1, H.STACK) + H.load32(2, R2) + H.load32(13, H.STACK - 0x1000)
 
@@ -214,22 +214,26 @@ def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None, signal=None,
         c += [H.li(0, 1)] + H.load32(3, t) + [lhz(4, 2, 0x23ba)]
         c += H.call32(12, RECORDER)
 
-    for addr, n in ((LOGPW, 4), (LOG, LOGSZ)):
+    # An arbitrary extra region, dumped last — for asking whether some table the
+    # real program builds at startup is actually populated in the harness.
+    dumps = [(LOGPW, 4), (LOG, LOGSZ)]
+    for addr, n in dumps:
         c += H.load32(4, addr) + H.load32(5, n) + [H.li(0, 4), H.li(3, 1), H.sc()]
     # The vertex arena is dumped to its REAL extent: the fan template's .v field
     # is the shared cursor, so cursor - MYVBUF is exactly what was written.
     c += H.load32(4, MYVBUF) + [lwz(5, 2, T_FAN), subf(5, 4, 5)]
     c += [H.li(0, 4), H.li(3, 1), H.sc()]
+    if probe:
+        c += H.load32(4, probe[0]) + H.load32(5, probe[1])
+        c += [H.li(0, 4), H.li(3, 1), H.sc()]
     c += [H.li(0, 1), H.li(3, 0), H.sc()]
     return b''.join(struct.pack('>I', w) for w in c)
 
 
 def run(stream, frames=(0,), txt_tab=0x2642, obj_tab=0x2706, timeout=240, stop=99,
-        overlay=None, signal=None, nodes=False):
-    stub = build(stream, frames, txt_tab, obj_tab, stop, overlay, signal, nodes)
-    segs = H.read_layout(FLAT)
-    pieces = [(va, (None if fn is None else H.load_seg(FLAT, fn, va)), sz)
-              for va, sz, fn in segs]
+        overlay=None, signal=None, nodes=False, probe=None):
+    stub = build(stream, frames, txt_tab, obj_tab, stop, overlay, signal, nodes, probe)
+    pieces = H.segments(FLAT)
     pieces.append((H.SCRATCH, stub, SCRATCHSZ))
     EH, PH, AL = 52, 32, 0x1000
     blob, loads = b'', []
