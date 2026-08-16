@@ -64,11 +64,20 @@ export async function launch({
   extraArgs = [],
 } = {}) {
   const puppeteer = require('puppeteer-core');
+  // Chrome refuses to start as root without --no-sandbox, which is every
+  // container and every CI runner — the process exits 1 with the reason on
+  // stderr and puppeteer reports only "Failed to launch the browser process".
+  // Added ONLY when actually running as root, so a developer's desktop session
+  // keeps the sandbox it should have. --disable-dev-shm-usage goes with it:
+  // containers commonly cap /dev/shm at 64 MB and Chrome crashes rendering
+  // large canvases without it.
+  const asRoot = typeof process.getuid === 'function' && process.getuid() === 0;
   const args = [
     '--hide-scrollbars',
     `--window-size=${width},${height}`,
     ...(angle ? [`--use-angle=${angle}`] : []),
     ...(autoplay ? ['--autoplay-policy=no-user-gesture-required'] : []),
+    ...(asRoot ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
     ...extraArgs,
   ];
   const browser = await puppeteer.launch({

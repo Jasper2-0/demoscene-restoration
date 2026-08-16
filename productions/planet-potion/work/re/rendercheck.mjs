@@ -33,7 +33,13 @@ const ABSENT = 77;
 const argv = process.argv.slice(2);
 const pngIdx = argv.indexOf('--png');
 const pngDir = pngIdx >= 0 ? argv[pngIdx + 1] : null;
-const dir = argv.filter((a, i) => !a.startsWith('--') && i !== pngIdx + 1)[0] ?? 'web/data';
+// `pngIdx` is -1 when --png is absent, so a naive `i !== pngIdx + 1` drops
+// argv[0] instead of the flag's value — which silently discarded the dataset
+// argument and fell back to the default. It passed anyway from the one
+// directory where the default is right, which is how it survived being written.
+const positional = argv.filter((a, i) =>
+  !a.startsWith('--') && !(pngIdx >= 0 && i === pngIdx + 1));
+const dir = positional[0] ?? 'web/data';
 
 try {
   findChrome(null);
@@ -44,13 +50,15 @@ try {
   process.exit(ABSENT);
 }
 
-// Running as root — which is every container — Chrome refuses to start without
-// this. Passing it unconditionally would weaken a developer's local run for no
-// reason, so it is conditional on actually being root.
+// --no-sandbox and --disable-dev-shm-usage are NOT here: tools/harness adds them
+// when it detects it is running as root, which is the only time they are needed.
+// This file had its own copy first and that is one copy too many — the same
+// duplication that put `fma` in two modules.
+//
+// SwiftShader is this file's own business, though. A container has no GPU, so
+// WebGL2 falls back to software, and current Chrome requires this flag to opt in
+// to that fallback rather than failing the context outright.
 const EXTRA = ['--enable-unsafe-swiftshader'];
-if (typeof process.getuid === 'function' && process.getuid() === 0) {
-  EXTRA.push('--no-sandbox', '--disable-dev-shm-usage');
-}
 
 let bad = 0;
 const say = (ok, what, detail = '') => {
