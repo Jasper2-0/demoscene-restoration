@@ -407,6 +407,30 @@ value is measurable in ulps rather than inferred from where it happened to tip
 over. Doing that turned "eight subpixels off by one" into "the step is one ulp
 high, here is the multiply".
 
+## Count the population before naming a field
+
+Reverse engineering a container tempts you to read structure off a hex dump, and
+four samples side by side are very persuasive. In this repository that has now
+produced two confident, wrong claims in consecutive commits: a byte pair that
+looked like a record delimiter across four scene streams turned out to appear 15
+times in a 2-node stream and 23 times in a 29-node one, and a byte called
+"constant across all 29" on the strength of the same four samples takes five
+distinct values when all 29 are counted.
+
+Both were killed by one command each — count the occurrences, tabulate the field
+across every instance — and both would have been believed indefinitely without
+it. So the rule is small and worth following literally: **before writing that a
+field is constant, count it across the whole population; before writing that a
+byte delimits records, count the records.** These are cheaper than the dump that
+suggested the pattern.
+
+The worse failure in that pair is the second one. The five values had already
+been measured and written down earlier in the same session, and a later
+impression from a smaller sample overwrote it. A measurement is only worth what
+it costs to take if it is recorded where it will be re-read — and if the document
+disagrees with a fresh impression, the document is more likely to be right,
+because it was written when someone was looking at the data.
+
 ## Reconstruction, not restoration
 
 None of this is the original source code. It is a reconstruction from the
