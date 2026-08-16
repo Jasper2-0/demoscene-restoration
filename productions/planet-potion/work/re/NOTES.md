@@ -10,7 +10,7 @@ this file is the address notebook.
 | seg | kind | size | contents |
 |---|---|---|---|
 | 0 | CODE | 46,960 | 68K bootstrap, all the PPC code, globals, float pool |
-| 1 | DATA | 16,960 | an embedded Hunk executable: `dbplayer.library 2.0 (16.8.98)` |
+| 1 | DATA | 16,960 | `dbplayer.library 2.0 (16.8.98)` — written to `ram:` by the bootstrap, opened, then deleted |
 | 2 | DATA | 2,048 | table, entropy 2.99 |
 | 3 | DATA | 12,796 | **part one's** scene / texture / geometry programs |
 | 4 | DATA | 52,500 | **part three's** programs (28%) + softsynth data (~72%) |
@@ -375,6 +375,41 @@ triangle fan. `ReadZPixel` appears once, in render slot 4's handler, after a
 four-way float bounds test and before a `DrawTriFan` — an occlusion-tested
 screen-space element. It is the only readback in the intro and the only call
 that does not map cleanly onto WebGL2.
+
+## The 68K bootstrap, read end to end
+
+606 bytes at `seg0+0x0000`, and after the seg-5 mistake it was worth reading all
+of them rather than only the part that had just bitten. The question it answers
+is *what else does the harness not do that the PowerPC code depends on* — and
+the answer is nothing.
+
+```
+  lea.l   $10007ffe.l, a4          ; the small-data base, hence r2
+  movea.l $4.w, a6                 ; SysBase
+  OpenLibrary x6 -> powerpc, dos, intuition, graphics, Warp3DPPC, cybergraphics
+  ... build the four seg-5 tables with the FPU ...
+  Open("ram:dbplayer.library", MODE_NEWFILE)
+  Write(fh, <seg1>, $4240)         ; 16,960 bytes — seg 1, exactly
+  Close(fh)
+  OpenLibrary("ram:dbplayer.library") -> _DBMBase
+  ... CyberGFX screen and bitmap, pointers into r2+0x2362/0x2366/0x236a ...
+  RunPPC(_main)                    ; 0x10001898 pushed as the entry
+  ... free the screen, DeleteFile("ram:dbplayer.library") ...
+```
+
+**seg 1 is explained.** The embedded `dbplayer.library 2.0` is written out to
+`ram:`, opened as a library, and deleted on exit — the period trick for shipping
+a library inside a single-file intro. `r2+0x2392` points at `0x10010000` and the
+write length is `0x4240`, which is seg 1's base and size to the byte.
+
+**The library is `Warp3DPPC.library`, not `warp3d.library`** — read from the
+`OpenLibrary` name at `0x100003b6`, which is the same library `lvo.py` took the
+88-vector table from. That agreement was assumed before and is now checked.
+
+So the bootstrap initialises exactly three kinds of thing: library bases, the
+four lookup tables, and CyberGFX display resources. The harness stubs the first
+and third and now builds the second, and **nothing else it does is read by the
+PowerPC subsystems**. There is no second seg 5 waiting.
 
 ## seg 5 is four lookup tables, and the 68K bootstrap builds them
 
