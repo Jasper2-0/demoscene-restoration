@@ -375,7 +375,10 @@ Three things had to be arranged, and each is a fact about the program:
   returns *its own log record's address*, so every call gets a distinct non-null
   handle and the draw calls that bind a texture can be tied back to which one.
   Allocation order is table order, so the handle maps straight to a texture
-  index.
+  index — and the counts confirm it is the *identity* mapping: `_alloc_txt`
+  issues exactly 48 `AllocTexObj` calls for part one and 21 for part three,
+  matching the two texture tables entry for entry. A `texture: 10` in the
+  recorded stream is `rendertex.py`'s `p1_10.png`, with nothing in between.
 * **The vertex array is one shared buffer, reused every call.** Left alone, only
   the last primitive of the frame survives. The stub advances the pointer past
   the slice it was just handed — in *both* primitive templates, since fans and
