@@ -328,12 +328,71 @@ export function op17(s, ops, ch0 = 0) {
   }
 }
 
+/**
+ * op5 — 1D stripes. Walks the surface LINEARLY (not per row), alternating
+ * between two colours with run lengths from operands 8 and 9. Because the walk
+ * is linear over 16,384 pixels, stripes wrap across row ends rather than
+ * forming columns, unless the run length divides 128.
+ *
+ * Operand layout confirms itself: 10 operands = colour A (0..3), colour B
+ * (4..7), two run lengths (8, 9).
+ */
+export function op5(s, ops) {
+  const A = ops.slice(0, 4), B = ops.slice(4, 8);
+  const runA = ops[8], runB = ops[9];
+  let phase = 1, left = runA;
+  for (let i = 0; i < PIXELS; i++) {
+    const src = phase > 0 ? B : A;
+    const reload = phase > 0 ? runA : runB;
+    if (left <= 0) { left = reload; phase = -phase; }
+    left--;
+    // BLENDS, does not overwrite: the handler ends in 0x100007c4, so the
+    // colour's channel 0 is the mix weight and a zero there is a no-op.
+    blend(s.current, i * 4, src, 0);
+  }
+}
+
+/**
+ * op3 — checkerboard. Two independent run-length toggles, one per axis,
+ * combined through the sign of a running flag. Operands 10 and 11 are the
+ * periods and 8 and 9 the starting phases; the handler first reduces each phase
+ * modulo its period, flipping the sign once per subtraction, so the initial
+ * parity comes out of that reduction.
+ *
+ * 12 operands = colour A (0..3), colour B (4..7), phase x, phase y, period x,
+ * period y.
+ *
+ * Either period at zero never terminates — the hang recorded in section 9.
+ */
+export function op3(s, ops) {
+  const A = ops.slice(0, 4), B = ops.slice(4, 8);
+  let px = ops[8], py = ops[9];
+  const perX = ops[10], perY = ops[11];
+  if (perX === 0 || perY === 0) throw new Error('op3: zero period would not terminate');
+  let sign = 1;
+  while (px >= perX) { sign = -sign; px -= perX; }
+  while (py >= perY) { sign = -sign; py -= perY; }
+
+  let yLeft = py, i = 0;
+  for (let y = 0; y < SIZE; y++) {
+    yLeft--;
+    if (yLeft <= 0) { yLeft = perY; sign = -sign; }
+    let rowSign = sign, xLeft = px;
+    for (let x = 0; x < SIZE; x++) {
+      xLeft--;
+      if (xLeft <= 0) { xLeft = perX; rowSign = -rowSign; }
+      const src = rowSign < 0 ? B : A;
+      blend(s.current, i++ * 4, src, 0);   // 0x100007c4, same as op5
+    }
+  }
+}
+
 /** op18 — set the draw rectangle. op19 — reset it to the full surface. */
 export const op18 = (s, o) => { s.rect = [o[0], o[1], o[2], o[3]]; };
 export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 
 /** Opcodes whose bodies are specified but not yet written here. */
-export const UNIMPLEMENTED = new Set([1, 2, 3, 4, 5, 6, 8, 16]);
+export const UNIMPLEMENTED = new Set([1, 2, 4, 6, 8, 16]);
 
 /** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
 export function toARGB(surf) {
