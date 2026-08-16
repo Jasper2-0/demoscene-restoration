@@ -203,13 +203,45 @@ drawing triangle fans.
 
 `_generate_scene` is a separate interpreter with its **own** node-size table at
 `0x1000a8c8`, 16-bit entries, running `[44, 48, 52, 108, 212, 44, 56, 60]` and
-then zero — **8 scene-level opcodes**. Unlike the object level it uses no
-function-pointer table; there is no `bctr` anywhere in its 520 bytes, so its
-dispatch is inline.
+then zero — **8 scene-level opcodes**.
 
-So the whole data-driven system is **8 scene operations over 5 geometry
-operations — 13 in total**. The hoped-for outcome was "a 20-operation scene
-language and 10 generators". It is smaller than that.
+It has a handler table too, at **`0x1000a8a8`, 7 entries**, terminated by
+`0xffffffff`. (An earlier pass here claimed there was no such table, on the
+grounds that `_generate_scene` contains no `bctr` in its 520 bytes. That was
+scanning the wrong range: the named body ends at `0x23a8`, the handlers live at
+`0x10002a54`–`0x10002f24`, and everything between is unnamed statics. Seven
+handlers for eight opcodes is consistent — opcode 7 is the root/terminator that
+consumes no operand and needs none.)
+
+### And a fifth table: the texture generator has 20 operations
+
+Sweeping the whole small-data area for runs of consecutive code pointers — rather
+than chasing one table at a time — turns up the last one, and it is the biggest.
+
+**`0x1000a47c` (r2+0x247e), 20 slots, 17 distinct handlers**, every entry
+pointing inside `_generate` — the 3,992-byte function at `0x10000404` that is the
+largest in the binary and the first symbol in it. It is read from
+`_generate+0x150` and from `_init_txtgen`. Three slots are shared: 0 and 17, 11
+and 12, 14 and 15.
+
+`_generate` is therefore the **procedural texture VM**, and it is a
+20-operation language.
+
+### The complete engine, in five tables
+
+| table | at | slots | handlers | language |
+|---|---|---|---|---|
+| texture | `0x1000a47c` | 20 | 17 | procedural texture ops, inside `_generate` |
+| scene | `0x1000a8a8` | 7 | 7 | scene ops 0–6 (7 is the inline root) |
+| geometry build | `0x1000a9b0` | 5 | 5 | construct pass |
+| geometry eval | `0x1000a9c4` | 5 | 5 | evaluate pass |
+| render | `0x1000aa20` | 7 | 6 | draw-node types |
+
+That is the whole intro: **20 texture operations, 8 scene operations, 5 geometry
+operations, 7 render node types.** The hope going in was "a 15-operation
+renderer, a 20-operation scene language, and 10 generators" — which turns out to
+be a good estimate of the total and a misallocation of where it sits. The scene
+language is small; the *texture* language is the twenty-operation one.
 
 #### The streams are located, and they are the demo's running order
 
@@ -439,8 +471,8 @@ over 6 distinct handlers**:
 | 5 | `0x100061a0` | |
 | 6 | `0x1000644c` | the largest; owns the `ClearZBuffer` |
 
-So the engine is **four tables end to end**: 8 scene operations feed 5 geometry
-build ops and 5 eval ops, which feed 7 render node types. Three of the seven
+So the renderer is the fifth of the engine's five dispatch tables: 8 scene ops feed 5 geometry
+build and 5 eval ops, which feed these 7 render node types. Three of the seven
 render handlers are ~24 bytes or less — they are literally "call this W3D
 primitive".
 
