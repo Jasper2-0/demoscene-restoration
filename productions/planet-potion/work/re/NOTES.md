@@ -320,6 +320,30 @@ labels are hypotheses, and eight of them are now replaced.
 `r11` and `r12`, then `rlwinm` to take a byte and `int2float` — a small
 pseudo-random generator, which is what `op9` draws on.
 
+#### `op9` is lattice noise, and it explains the whole language
+
+```
+  b   = byte[operands+8]
+  stepX = 8 << ((b & 0xf) + 1)          /* 16, 32, 64, … */
+  stepY = 8 << ((b >> 4)  + 1)
+  for y in 0, stepY, 2*stepY, …:
+      for x in 0, stepX, …:
+          for each of four channels:
+              channel += PRNG() * scale                /* fmadd */
+          store clamped at (y << 7) + x
+```
+
+So it does **not** fill the surface. It writes random values on a **sparse
+lattice** — every 16th, 32nd or 64th pixel on each axis independently, with a
+per-channel amplitude from the operands at `+9`, `+10`, `+11`.
+
+That reframes the texture language. A program seeds a coarse random lattice,
+then runs blur convolutions to interpolate it into smooth fields, then adjusts
+contrast and permutes channels — the classic plasma/clouds recipe. It is why
+seventeen of the forty kernels are blurs, why the addressing wraps, and why
+`op9` opens every program in the probe: **the convolutions are the interpolator**,
+not a decorative filter stage.
+
 They are **generated at run time**, not static: `_generate`'s prologue calls
 `0x1000067c` with `r31 = r2+0x2516` before anything else, and the table lives in
 seg 6. Deterministic, though — the verification runs the opcodes in *separate*
