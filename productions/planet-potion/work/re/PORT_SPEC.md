@@ -800,3 +800,59 @@ neither fires in the demo, and both hang a literal translation:
   search key against the table sentinel instead of the entry.
 - **Texture `op3` operands 10 and 11 at zero** — a loop step or divisor. Any
   value from 1 up terminates.
+
+---
+
+## 10. What the pixel diff found that reading did not
+
+`work/re/texvmdiff.mjs` runs the JS texture VM in `web/js/texturevm.js` against
+the 69 byte-exact PNGs. Every item below was implemented from a careful reading
+of the handler and was still wrong. They are listed because a port written from
+sections 7 and 9 alone would reproduce each one.
+
+**The core mix runs backwards.** `0x100007c4` is
+`out = src − (src − dst)·t` with `t = src[0]/255`, so **t = 0 yields the SOURCE
+and t = 1 the DESTINATION**. Written the intuitive way it produces black where
+the original writes white, costing exactly half of every checkerboard.
+
+**`op2` subtracts its span twice.** Its body does `fsub f22, f22, f26` and then
+calls `0x10000990`, which opens with the same instruction — so its falloff span
+is `end − 2·start`. `op8` does not pre-subtract, so its span is the plain
+difference. Confirmed from the output side: only span 18 reproduces `p1_12`'s
+profile at every radius.
+
+**The float-to-byte conversion rounds to nearest, ties to even** — PowerPC's
+default `fctiw` mode, not truncation. Measured over all 69 programs: truncating
+gives 29 exact and 1,496,133 differing subpixels; nearest-even gives 30 and
+1,460,146.
+
+**The draw rectangle clips every operation, in the dispatch loop.** `_generate`
+reads `r2+0x25a6..9` *after* each handler returns and bounds the copy back, so
+the handlers know nothing about it. Bounds are half-open, which is why `op19`
+resets to 128 rather than 127.
+
+**`op6` excludes its endpoint.** The loop is `cmpw r8, r25; blt` from zero, so it
+runs `major` times and never plots the final point — one wrong pixel in `p3_8`.
+
+**The distance field is perturbed by the surface's own gradient.**
+`0x1000093c` adds the central-difference gradient at each pixel to `(dx, dy)`
+before taking the length. That term is the whole difference between bump
+*lighting* and a radial gradient. It vanishes on a flat surface, so a lone `op2`
+looks nearly right without it and every composed program is wrong. The gradient
+samples a channel *combination*, mask `(mode >> 4) & 7`.
+
+**`op1` and `op6` are more specific than section 7 says.** `op1` is a
+bilinearly-shaded rectangle with four corner colours, not "a two-point gradient,
+one fill"; `op6` is a Bresenham line, not "a two-point distance op" — that
+`frsqrte` is only its prologue.
+
+### Still open
+
+**The last ULP belongs to `fres(frsqrte(x))`.** `p1_12` differs in 8 subpixels at
+max delta 1, all at radius exactly 18 where the value computes to exactly 15.5
+and the reference rounds *down*, while the same program's 77.5 at radius 6 rounds
+*up*. No rounding mode does both, so the two distances land on opposite sides of
+their exact values — an instruction-emulation detail, not a logic error.
+
+Current standing: **33 of 68 byte-exact** (8 non-trivial plus 25 uniform
+references, which are free passes and counted separately).
