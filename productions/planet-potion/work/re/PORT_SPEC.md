@@ -357,8 +357,15 @@ Sub-objects chain on `+0x74`, which is the same chain `_restore_time` walks when
 it rebases a scene's clock — so the animation and the geometry hang off one
 structure.
 
-**Cameras (scene op 6) are numbered per scene, from zero.** The handler reads a
-byte counter at `r2+0x29af`, stores it into `node+0x34`, and increments it — and
+**Scene op 5 is a one-line handler** — `0x10002f14` is `bl 0x100027b8` and
+nothing else, so whatever it does lives entirely in that shared routine.
+
+**Cameras (scene op 6) are numbered per scene, from zero**, and `0x10002f24`
+is that claim in four instructions: `lbz r3, 0x29af(r2)`, `stw r3, 0x34(r27)`,
+`addi r3, r3, 1`, `stb r3, 0x29af(r2)`. It then copies **bit 0 of `node+0x04`
+into `node+0x30`** before reading its own operand byte from the stream — a flag
+the rest of this document has not yet accounted for. The handler reads a byte
+counter at `r2+0x29af`, stores it into `node+0x34`, and increments it — and
 `_generate_scene` opens with `li r27, 0; stb r27, 0x29af(r2)`, so **every scene
 restarts the numbering**. `_play_scene_new_camera(n)` writes `n` to `r2+0x282e`,
 the `synchro` paths write 0 first, and render type 6 draws nothing but is live
