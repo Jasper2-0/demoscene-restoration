@@ -285,9 +285,36 @@ pixel. So op10 applies two transpositions to the RGBA channels. The behavioural
 pass had recorded it as darkening, which is what a channel swap looks like on a
 coloured noise field when you are only measuring mean luminance.
 
+**`op18` and `op19` set a region.** `op18` reads four operand bytes into
+`r2+0x25a6…0x25a9`; `op19` writes `0, 0, 0x80, 0x80` there. `_generate`'s
+prologue initialises the same four bytes to `0, 0, 128, 128`, so this is the
+**draw rectangle** — set and reset. The behavioural pass filed both under "no
+change", which was true of the pixels and missed the point.
+
+**`op14` and `op15` work on the mask, not the colour surface.** They share
+`0x10001324` and loop `0x4000` = 16,384 times over `r5` — one float per pixel,
+the single-channel buffer at `r2+0x246e`. `op14` adds `128 − operand`; `op15`
+scales about 128 by `operand/128`. Both clamp to `[0, 255]`. `op13` fills that
+same buffer from a channel of the colour surface. So there is a **mask pipeline
+running alongside the colour one**, which is why ops 13, 14 and 15 looked inert
+in a probe that only measured the colour output.
+
+| op | read as | the behavioural pass said |
+|---|---|---|
+| 10 | channel permutation, two swaps | "darken, lum −20" |
+| 11 | `frsqrte` curve about 128 | "state setter" |
+| 12 | contrast about 128, exact formula | "brighten, lum +34" |
+| 13 | copy a channel into the mask | "state setter" |
+| 14 | mask: add `128 − operand` | "state setter" |
+| 15 | mask: scale about 128 | "state setter" |
+| 18 | set the draw rectangle | "state setter" |
+| 19 | reset the draw rectangle | "state setter" |
+
 That is the lesson the differential pass could not have reached on its own:
 "what does this do to a test image" and "what does this do" are different
-questions, and the first only approximates the second.
+questions, and the first only approximates the second. It was still the right
+way in — it found which opcodes mattered and got the harness working — but its
+labels are hypotheses, and eight of them are now replaced.
 
 **And `0x100008e4` is the noise source.** Shifts, `xor`s and adds over `r14`,
 `r11` and `r12`, then `rlwinm` to take a byte and `int2float` — a small
