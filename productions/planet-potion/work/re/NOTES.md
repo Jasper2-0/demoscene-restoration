@@ -552,7 +552,8 @@ state for those is most likely to be.
 
 ### What the recording covers, and what it does not
 
-All 28 scene spans record once the glyph-scan patch is on (26 without it). Part three is the heaviest — `r2+0x277e` holds 200 to 215
+All 28 scene spans record once the glyph-scan patch is on (26 without it) —
+**9,266 primitives** across the show at five samples each, zero failures. Part three is the heaviest — `r2+0x277e` holds 200 to 215
 primitives throughout — and `r2+0x25c6` climbs from 3 primitives to 225 over its
 life, which is the reason for sampling across a scene's own span rather than a
 fixed early window.
@@ -821,7 +822,7 @@ for reasons that can be pointed at, and one that does not can be diffed
 primitive by primitive — without a video capture, and before a single pixel is
 rasterised.
 
-About 2 MB, dominated by the textures, and **regenerable from the original
+About 4.6 MB, dominated by the textures and the draw stream, and **regenerable from the original
 archive by this one command** — so it is not committed, per the README's rule for
 baked intermediates. The two scene failures and one mesh failure are recorded in
 the output rather than silently dropped.
