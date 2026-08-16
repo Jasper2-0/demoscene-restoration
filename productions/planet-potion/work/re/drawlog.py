@@ -61,21 +61,48 @@ DISPS = [-28, -34, -46, -58, -64, -70, -94, -100, -118, -142, -166, -184,
          -190, -196, -214, -220, -226, -232, -244, -292, -388, -448]
 DRAW = {-166, -388}           # DrawTriFan, DrawLineStrip
 
-d0 = open(os.path.join(FLAT, 'seg0_CODE_10000000.bin'), 'rb').read()
+ABSENT = 77
+
+
+def _load(path):
+    """The segment dump, or None — see runsynth.py for why this must not raise.
+
+    Importing this module used to die inside the import machinery when flat/ was
+    absent, which made every importer's own missing-binary handling unreachable.
+    Unchanged when the file is there."""
+    try:
+        return open(os.path.join(path, 'seg0_CODE_10000000.bin'), 'rb').read()
+    except FileNotFoundError:
+        return None
+
+
+d0 = _load(FLAT)
+
+
+def _need():
+    if d0 is None:
+        print(f'drawlog: no segment dump under {FLAT!r} — see speccheck.py for '
+              'the rehydration steps.', file=sys.stderr)
+        raise SystemExit(ABSENT)
 
 
 def g(disp):
+    _need()
     return struct.unpack_from('>I', d0, R2 + disp - BASE)[0]
 
 
-ARENA = g(0x2832)
+# Deferred rather than dropped: with the dump present this is the same value at
+# the same moment as before. Without it, ARENA is None and the first real call
+# reports the absence properly instead of the import raising.
+ARENA = g(0x2832) if d0 is not None else None
 
 
 def setflat(path):
     """Point the module at a different flat/ directory (export.py imports us)."""
     global FLAT, d0, ARENA
     FLAT = H.FLAT = path
-    d0 = open(os.path.join(FLAT, 'seg0_CODE_10000000.bin'), 'rb').read()
+    d0 = _load(path)
+    _need()
     ARENA = g(0x2832)
 
 

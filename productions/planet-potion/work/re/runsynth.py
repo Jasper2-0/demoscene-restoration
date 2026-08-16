@@ -9,14 +9,38 @@ import struct, os, sys, subprocess
 import ppcrun as H
 H.FLAT=FLAT=(sys.argv[1] if len(sys.argv)>1 else 'flat')
 BASE=0x10000000; R2=BASE+0x7FFE
-d0=open(os.path.join(FLAT,'seg0_CODE_10000000.bin'),'rb').read()
-def g(d): return struct.unpack_from('>I',d0,R2+d-BASE)[0]
+ABSENT=77
+def _load(path):
+    """The segment dump, or None.
+
+    IMPORTING THIS MODULE MUST NOT DIE when flat/ is missing. It used to read
+    the dump at module level with a bare open(), so `import runsynth` raised
+    FileNotFoundError from inside the import machinery — which meant every
+    importer's own "the binary is not here" handling was unreachable, because
+    the traceback happened before its main() ever ran. synthhash.py's was.
+
+    Behaviour is unchanged when the file exists; only the missing case differs,
+    and it now reaches the callers below."""
+    try:
+        return open(os.path.join(path,'seg0_CODE_10000000.bin'),'rb').read()
+    except FileNotFoundError:
+        return None
+d0=_load(FLAT)
+def _need():
+    if d0 is None:
+        print(f'runsynth: no segment dump under {FLAT!r} — see speccheck.py for '
+              'the rehydration steps.', file=sys.stderr)
+        raise SystemExit(ABSENT)
+def g(d):
+    _need()
+    return struct.unpack_from('>I',d0,R2+d-BASE)[0]
 GEN1=0x10006b6c; GEN3=0x10006da0; SET_ALLOC=0x10006b14
 def setflat(path):
     """Point the module at a different flat/ (showorder.py imports us)."""
     global FLAT, d0
     FLAT=H.FLAT=path
-    d0=open(os.path.join(FLAT,'seg0_CODE_10000000.bin'),'rb').read()
+    d0=_load(path)
+    _need()
 def module(part, n=0x40000, timeout=2400):
     """Generate one part's DBM0 module. n need only cover the chunks you want:
     NAME through PATT is under 20 KB, SMPL is megabytes.

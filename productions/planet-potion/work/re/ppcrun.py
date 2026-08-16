@@ -159,9 +159,21 @@ def segments(flat):
     return out
 
 
+# The shared "the original is not unpacked here" exit, so every tool that reads
+# the layout reports it the same way instead of raising from inside a helper.
+ABSENT = 77
+
+
 def read_layout(flat):
     segs = []
-    for line in open(os.path.join(flat, 'layout.txt')):
+    try:
+        lines = open(os.path.join(flat, 'layout.txt')).readlines()
+    except FileNotFoundError:
+        print(f'{os.path.basename(sys.argv[0]) or "ppcrun"}: no layout.txt under '
+              f'{flat!r} — see speccheck.py for the rehydration steps.',
+              file=sys.stderr)
+        raise SystemExit(ABSENT)
+    for line in lines:
         name, kind, base, size = line.strip().split(',')
         fn = None
         if kind != 'BSS':
@@ -224,6 +236,9 @@ def sym(flat):
 
 if __name__ == '__main__':
     flat = sys.argv[1] if len(sys.argv) > 1 else 'flat'
+    # read_layout carries the shared message, so ask it first rather than
+    # letting os.listdir raise on the directory itself.
+    read_layout(flat)
     d0 = open(os.path.join(flat, next(f for f in os.listdir(flat)
                                       if f.startswith('seg0_'))), 'rb').read()
     base = read_layout(flat)[0][0]

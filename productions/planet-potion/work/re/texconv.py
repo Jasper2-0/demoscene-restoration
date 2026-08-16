@@ -106,7 +106,12 @@ def main():
     flat = sys.argv[1] if len(sys.argv) > 1 else 'flat'
     dest = sys.argv[2] if len(sys.argv) > 2 else None
     H.FLAT = flat
-    d0 = open(os.path.join(flat, 'seg0_CODE_10000000.bin'), 'rb').read()
+    try:
+        d0 = open(os.path.join(flat, 'seg0_CODE_10000000.bin'), 'rb').read()
+    except FileNotFoundError:
+        print('texconv: no segment dump under ' + repr(flat) + ' — see '
+              'speccheck.py for the rehydration steps.', file=sys.stderr)
+        sys.exit(77)
     H.preload_tables(d0)
 
     def g(disp):

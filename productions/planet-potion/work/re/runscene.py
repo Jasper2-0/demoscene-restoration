@@ -19,9 +19,23 @@ W3DBASE=0x20500000; OUT=0x203c0000
 # real fetch displacements are not multiples of 6 — the global holds base+2, so
 # LVO -96 is read as -0x5e, -144 as -0x8e, -120 as -0x76.
 BLR=0x20402040
-d0=open(os.path.join(FLAT,'seg0_CODE_10000000.bin'),'rb').read()
-def g(d): return struct.unpack_from('>I',d0,R2+d-BASE)[0]
-ARENA=g(0x2832)
+ABSENT=77
+def _load(path):
+    """The segment dump, or None — see runsynth.py. Importing must not raise."""
+    try:
+        return open(os.path.join(path,'seg0_CODE_10000000.bin'),'rb').read()
+    except FileNotFoundError:
+        return None
+d0=_load(FLAT)
+def _need():
+    if d0 is None:
+        print(f'runscene: no segment dump under {FLAT!r} — see speccheck.py for '
+              'the rehydration steps.', file=sys.stderr)
+        raise SystemExit(ABSENT)
+def g(d):
+    _need()
+    return struct.unpack_from('>I',d0,R2+d-BASE)[0]
+ARENA=g(0x2832) if d0 is not None else None
 def stw(s,a,d): return (36<<26)|(s<<21)|(a<<16)|(d&0xFFFF)
 def blr(): return (19<<26)|(20<<21)|(16<<1)
 FAKEOBJ=0x20560000
@@ -83,6 +97,10 @@ def run(stream, txt_tab=0x2642, obj_tab=0x2706, dump=0x20000, steps=99, want_all
     except subprocess.TimeoutExpired:
         return b'',''
 if __name__=='__main__':
+    # Before anything formats ARENA, which is None without the dump — leaving
+    # that unguarded turned a clear FileNotFoundError into a TypeError about
+    # NoneType.__format__, which is a worse error than the one it replaced.
+    _need()
     print(f'scene arena = {ARENA:#010x}   param3={g(0x288e):#010x}  param4={g(0x2896):#010x}')
     strm=struct.unpack_from('>I',d0,R2+0x25aa-BASE)[0]
     for k in range(5):
