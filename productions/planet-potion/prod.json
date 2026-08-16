@@ -88,8 +88,8 @@
     }
   ],
   "status": {
-    "web": "none",
+    "web": "engineering",
     "pagesRepo": null,
-    "note": "evidence only - see docs/PLANET_POTION_FEASIBILITY.md. Capture source identified but not yet fetched or pinned, so nothing is scored yet."
+    "note": "web/ runs: the Warp3D shim over WebGL2 and the byte-exact texture VM are ported, and the textures on screen are generated from the intro's own bytecode rather than loaded. The ENGINE is not ported - scene build, animation and draw emission still come from the original's recorded stream, so this is not yet a self-contained restoration. docs/PLANET_POTION_FEASIBILITY.md is superseded by work/re/PORT_SPEC.md. Capture source identified but still not fetched or pinned (files.scene.org and natami.pl are both refused at the cloud egress proxy), so no visual score exists yet - which is why pagesRepo is null and this is 'engineering' rather than 'published'."
   }
 }

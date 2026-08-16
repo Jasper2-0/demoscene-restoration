@@ -49,3 +49,7 @@ for (const r of rows) {
     + `${String(r.diff).padStart(6)} differing subpixels, max delta ${r.maxd}`);
 }
 console.log(`\n${exact}/${rows.length} opcodes byte-exact in isolation`);
+
+// An exit code, for the same reason texvmdiff needed one: checkall.sh reads it,
+// and a suite that always exits 0 is a report, not a check.
+process.exit(exact === rows.length ? 0 : 1);

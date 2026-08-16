@@ -8,10 +8,11 @@
 // weaker claim.
 import fs from 'node:fs';
 import zlib from 'node:zlib';
-import { decode, run, toARGB, SIZE, PIXELS } from '../../web/js/texturevm.js';
+import {
+  decode, run, toARGB, SIZE, PIXELS, OPERAND_WIDTHS,
+} from '../../web/js/texturevm.js';
 
 const dir = process.argv[2];
-const WIDTHS = [3, 20, 13, 12, 1, 10, 12, 9, 18, 12, 1, 1, 1, 1, 1, 1, 127, 3, 4, 0];
 
 /** rendertex.py writes 8-bit RGB with filter 0 on every row, so inflate is enough. */
 function readPNG(path) {
@@ -47,7 +48,7 @@ for (const p of progs) {
   if (!fs.existsSync(png)) continue;
   let got;
   try {
-    const { ops } = decode(Uint8Array.from(Buffer.from(p.hex, 'hex')), WIDTHS);
+    const { ops } = decode(Uint8Array.from(Buffer.from(p.hex, 'hex')));
     got = toARGB(run(ops, kernels));           // the whole Surfaces: alpha is the mask
     ran++;
   } catch (e) { failed++; continue; }
@@ -79,3 +80,35 @@ console.log('\nevery non-trivial reference still differing:');
 for (const d of dist.filter((x) => !x.trivial && x.diff)) {
   console.log(`  ${d.id.padEnd(8)} ${String(d.diff).padStart(6)} differing subpixels, max delta ${d.maxd}`);
 }
+
+// THE OPERAND TABLE THE PLAYER SHIPS, AGAINST THE ONE THAT WAS MEASURED.
+// texturevm.js carries the table read out of the binary; tex_operands.json
+// carries what probing each operand actually moved. They are independent, so
+// they are worth diffing — with op 16's 127 folded to 1, since 127 is the
+// sentinel `decode` folds and the probe recorded the folded width. Without the
+// fold this reports a difference that is only a difference in notation.
+let tableBad = 0;
+try {
+  const measured = JSON.parse(fs.readFileSync(`${dir}/tex_operands.json`, 'utf8')).opcodes;
+  for (let op = 0; op < OPERAND_WIDTHS.length; op++) {
+    const mine = OPERAND_WIDTHS[op] === 0x7f ? 1 : OPERAND_WIDTHS[op];
+    const theirs = measured[String(op)]?.operands;
+    if (theirs !== undefined && theirs !== mine) {
+      console.log(`  op ${op}: shim says ${mine}, tex_operands.json says ${theirs}`);
+      tableBad++;
+    }
+  }
+  console.log(`\n${tableBad ? 'FAIL' : 'ok  '}  the shipped operand table matches the measured one`);
+} catch (e) {
+  console.log(`\n(no tex_operands.json in ${dir}, operand table not cross-checked)`);
+}
+
+// AND AN EXIT CODE, which this tool did not have. checkall.sh runs it with
+// `|| rc=1`, so until now the one check that can actually fail could not fail
+// the suite: it printed its differences and exited 0 like everything else.
+const differing = dist.filter((x) => !x.trivial && x.diff).length;
+const bad = failed + differing + tableBad;
+console.log(bad === 0
+  ? 'ok    every non-trivial reference reproduced exactly'
+  : `FAIL  ${differing} differ, ${failed} threw, ${tableBad} operand widths disagree`);
+process.exit(bad ? 1 : 0);

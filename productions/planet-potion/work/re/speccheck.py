@@ -36,9 +36,37 @@ def check(claim, got, want):
     results.append((claim, got, want, got == want))
 
 
+# Exit code for "the original is not here", kept distinct from 1 so that a
+# missing capture and a drifted spec number cannot be confused by a script. The
+# distinction is not hypothetical: work/flat/ is gitignored and a fresh clone or
+# a recycled container has none of it, so the common way to run this tool is
+# with nothing to run it against.
+ABSENT = 77
+
+
+def load_code(flat):
+    """seg0's bytes, or a message saying how to get them back."""
+    try:
+        return open(f'{flat}/seg0_CODE_10000000.bin', 'rb').read()
+    except FileNotFoundError:
+        print(
+            f'speccheck: no segment dump at {flat}/seg0_CODE_10000000.bin.\n'
+            '  This tool reads the ORIGINAL BINARY, which is copyrighted and so\n'
+            '  is never committed — a fresh clone never has it. Rehydrate:\n'
+            '      node tools/fetch/originals.mjs planet-potion\n'
+            '      lha x originals/potion/potionplanet_potion.lha\n'
+            '      python3 work/re/hunkload.py planet-potion_dcr.exe work/flat\n'
+            '  Use the _dcr (decrunched) member: the 65,288-byte one is packed\n'
+            '  and has no hunk structure to parse.\n'
+            '  A cloud session cannot do the first step — files.scene.org is\n'
+            '  refused at the egress proxy (403). See docs/CLOUD_ENVIRONMENT.md.',
+            file=sys.stderr)
+        sys.exit(ABSENT)
+
+
 def main():
     flat = sys.argv[1] if len(sys.argv) > 1 else 'flat'
-    d0 = open(f'{flat}/seg0_CODE_10000000.bin', 'rb').read()
+    d0 = load_code(flat)
     u32 = lambda o: struct.unpack_from('>I', d0, o)[0]
     f32 = lambda disp: struct.unpack_from('>f', d0, R2 + disp - BASE)[0]
 
@@ -183,10 +211,7 @@ def main():
     # --- op 3's constants, which are what say it draws a bevelled rectangle
     #
     # 0.5 makes p0/p1 full widths rather than half-extents, and the three insets
-    # are what the flag bits select. Read as float32 out of the small-data area.
-    def f32(disp):
-        return struct.unpack_from('>f', d0, R2 + disp - BASE)[0]
-
+    # are what the flag bits select. `f32` already reads the small-data area.
     check('op 3 scales by 0.5 — its operands are full widths', f32(0x2bd6), 0.5)
     check('op 3 insets are a halving series',
           [round(f32(d), 4) for d in (0x2e46, 0x2e4a, 0x2e4e)],

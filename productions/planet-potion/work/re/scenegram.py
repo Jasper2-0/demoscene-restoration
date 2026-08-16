@@ -32,10 +32,22 @@ BASE = 0x10000000
 WIDTHS = {0: [], 1: [], 2: [], 3: [2, 2, 1, 1, 2, 2], 5: [], 6: [1]}
 
 
+# Same contract as speccheck.py: 77 means "the original is not here", which is
+# not the same news as a grammar that stopped walking the streams.
+ABSENT = 77
+
+
 def load(flat):
     """layout.txt is COMMA separated: name,kind,va,size — and BSS has no file."""
     segs = {}
-    for line in open(f'{flat}/layout.txt'):
+    try:
+        lines = open(f'{flat}/layout.txt').readlines()
+    except FileNotFoundError:
+        print(f'scenegram: no {flat}/layout.txt — the original binary is not '
+              'unpacked here.\n  See speccheck.py for the rehydration steps.',
+              file=sys.stderr)
+        sys.exit(ABSENT)
+    for line in lines:
         parts = [x.strip() for x in line.split(',')]
         if len(parts) < 4 or parts[1] == 'BSS':
             continue

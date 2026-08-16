@@ -228,11 +228,28 @@ export function symmetryBlit(src, dst, [x0, y0, xstep, ystep]) {
 // --- the fetch loop, 0x100004b0 ---------------------------------------------
 
 /**
+ * The operand table at `r2+0xa500`, one byte per opcode, read out of the binary
+ * — `speccheck.py` re-derives it rather than trusting this copy.
+ *
+ * OP 16'S ENTRY IS 127 AND THAT IS A SENTINEL, not a length: no program carries
+ * 127 operand bytes and `decode` folds it to one. It matters because
+ * `tex_operands.json` — which is MEASURED by probing, not read from the table —
+ * records op 16 as taking a single operand, so the two documents disagree on
+ * this one byte while describing the same behaviour. Anyone rebuilding this
+ * list from the measured file gets 1 and is right; anyone diffing the two lists
+ * sees a mismatch that is not one. Hence one definition, here, with the
+ * discrepancy written down beside it.
+ */
+export const OPERAND_WIDTHS = [
+  3, 20, 13, 12, 1, 10, 12, 9, 18, 12, 1, 1, 1, 1, 1, 1, 127, 3, 4, 0,
+];
+
+/**
  * Decode one program. Widths come from the operand table; the convolution range
  * takes none. Verified: all 69 shipped programs decode to exactly their
  * declared length.
  */
-export function decode(bytes, operandWidths) {
+export function decode(bytes, operandWidths = OPERAND_WIDTHS) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const len = dv.getUint16(0) & 0x7fff;
   const out = [];

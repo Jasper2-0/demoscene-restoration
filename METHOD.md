@@ -379,6 +379,29 @@ not why. It is extraction, not understanding. The naming still has to be done by
 reading the code — but it can be done against known-correct output instead of
 guesses.
 
+### A check that cannot exit non-zero is a report
+
+`texvmdiff.mjs` opens with the sentence "this is the test that can actually
+fail". It printed its differences and exited 0, every time, for months. The
+aggregate script ran it as `texvmdiff … || rc=1`, so the one suite whose whole
+purpose was to fail could not fail the run, and nobody noticed because it had
+nothing to report.
+
+Two habits fall out of that, and they cost nothing:
+
+* **Assert the exit code of your checkers, not just their output.** A checker
+  that prints `FAIL` and returns 0 is worse than no checker, because it buys
+  the confidence without the coverage.
+* **Break it on purpose once.** Swapping two indices in the ARGB→RGBA reorder
+  turned the new `texbuildcheck.mjs` red on 34 of 69 textures. Until a check
+  has been seen to fail against a defect you introduced, all you know is that
+  it passes — which is also what an empty check does.
+
+That second habit is what found the gap this section is about. The reorder had
+never been tested at all: `texvmdiff` compares the VM's ARGB output, and the
+browser calls a wrapper that reorders it afterwards, so a channel swap would
+have put the entire intro in wrong colours with every suite green.
+
 ## Ask the instruction, not the arithmetic
 
 A reimplementation can have every structure right — the correct handler, the

@@ -16,8 +16,6 @@
 
 import { decode, run, toARGB, SIZE, PIXELS } from './texturevm.js';
 
-const WIDTHS = [3, 20, 13, 12, 1, 10, 12, 9, 18, 12, 1, 1, 1, 1, 1, 1, 127, 3, 4, 0];
-
 /**
  * A8R8G8B8 (the VM's own order, as `W3D_AllocTexObj` receives it) -> RGBA
  * bytes, which is what `texImage2D` reads.
@@ -61,7 +59,7 @@ export function buildTextures(programsDoc, kernelsDoc) {
     const list = byPart[p.part] ?? (byPart[p.part] = []);
     if (!p.hex) { list[p.index] = null; failures.push(`${p.part}_${p.index}: no bytecode`); continue; }
     try {
-      const { ops } = decode(hexToBytes(p.hex), WIDTHS);
+      const { ops } = decode(hexToBytes(p.hex));
       list[p.index] = argbToRGBA(toARGB(run(ops, kernels)));
     } catch (e) {
       list[p.index] = null;
