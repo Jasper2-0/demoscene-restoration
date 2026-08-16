@@ -463,12 +463,22 @@ the synthesised root, which gets a 60-byte node of its own. Node sizes also
 corroborate the handlers independently: op 3 at 108 bytes is the one that
 allocates most, op 4 at 212 the text node with its glyph array.
 
-**So the opcode width was never the problem, and `scenegram.py`'s remaining
-failure is the stream BASE.** With eight valid opcodes, bytes like `0x5b` and
-`0x9b` cannot be opcodes at the address `scenes.json` calls `stream`, whether or
-not two bytes of length are skipped first. What `_generate_scene` receives in
-`r4` and what the exporter recorded are not the same pointer. That is the one
-thing left to find, and it is a question about `export.py`, not about the VM.
+**So the opcode width was never the problem — and neither is the base.**
+`export.py`'s `export_scenes` records `strm = g(d0, r2, disp)`, which is the
+pointer read out of the small-data area and handed straight to `_generate_scene`
+as `r4`. It is the right address.
+
+**Which leaves a contradiction, and it is recorded as one.** The pointer is
+right, the opcode set is `0..7`, the prologue's `lhz`/`addi` skip a u16 length —
+and the bytes at that address are `0x02 0x9b 0x5b …`, which decode to nothing
+sensible under any combination of those three. One of them is wrong and the
+reading does not say which.
+
+Do not resolve this by picking whichever seems likeliest. The four commits before
+this one each picked one and two of them had to be reversed. The cheap decisive
+move is to make the harness print `r4` and the first sixteen bytes it sees at
+entry to `_generate_scene`, and compare that against what `scenes.json` holds —
+which settles in one run what argument has not.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
