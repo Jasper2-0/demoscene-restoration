@@ -108,7 +108,34 @@ Walk the node list on `+0x10`. Per node, dispatch on `node+0x08 / 4`:
 
 Wrap the whole walk in the z-buffer enable/disable pair the original uses.
 
-### 4a. Meshes (type 5)
+### 4a. Where the node types come from — the scene VM
+
+The seven scene-VM handlers at `0x1000a8a8` build the nodes `_show_scene` then
+walks. Three of them are the same routine with a different count:
+
+| scene op | writes `node+0x20` | allocates | becomes |
+|---|---|---|---|
+| 0 | 2 | 2 sub-objects | line strip |
+| 1 | 3 | 3 | triangle fan |
+| 2 | 4 | 4 | triangle fan (quad) |
+
+Sub-objects chain on `+0x74`, which is the same chain `_restore_time` walks when
+it rebases a scene's clock — so the animation and the geometry hang off one
+structure.
+
+**Cameras (scene op 6) are numbered per scene, from zero.** The handler reads a
+byte counter at `r2+0x29af`, stores it into `node+0x34`, and increments it — and
+`_generate_scene` opens with `li r27, 0; stb r27, 0x29af(r2)`, so **every scene
+restarts the numbering**. `_play_scene_new_camera(n)` writes `n` to `r2+0x282e`,
+the `synchro` paths write 0 first, and render type 6 draws nothing but is live
+only when `node+0x34` matches. That is the whole mechanism, and it is why part
+one can re-show one scene graph from cameras 1, 2 and 3 without rebuilding it.
+
+It also **rules out** one explanation for the six part-one scenes that record
+nothing (§8 of `NOTES.md`): the counter resetting per scene means a late scene's
+cameras still start at 0, so a drifting index is not the cause.
+
+### 4b. Meshes (type 5)
 
 Objects hang off `node+0x24` chained by `+0x60`; faces hang off each object
 chained by `+0x5c`. **The face record is also the vertex-pointer array.**
@@ -132,7 +159,7 @@ with `k = 1` for modes 0 and 4, `k = |face[0x50]|` for mode 2 (flat), and
 `k = |v[0x64]|` for mode 3 (Gouraud). The clamp is **one-sided** — nothing
 catches a negative.
 
-### 4b. Clipping
+### 4c. Clipping
 
 Sutherland–Hodgman in view space against four planes, two per pass:
 
@@ -144,7 +171,7 @@ Sutherland–Hodgman in view space against four planes, two per pass:
 All nine source fields interpolate. A primitive left with fewer than 3 (fan) or
 2 (strip) vertices is dropped.
 
-### 4c. The emitter
+### 4d. The emitter
 
 Per-primitive alpha comes from the **first** source vertex's `+0x0c`, and
 `alpha <= 0` skips the primitive entirely — this is how elements fade out.
