@@ -517,6 +517,31 @@ the rest need state a prior opcode would have set.
 the dispatch. Opcodes `0x50..0x78` are outside this table entirely and all route
 to the single parameterised handler at `0x10000f58`.
 
+**Second pass — `texops2.py`.** A single opcode shows nothing for most of the
+table because there is no surface to act on. Running the noise generator `op9`
+first and then the opcode under test separates them cleanly. Baseline: `op9`
+alone gives 3,607 colours, mean luminance 59, range 37–82.
+
+| class | opcodes | behaviour after `op9` |
+|---|---|---|
+| **surface writers** | `8`, `16` | wipe the whole surface to black |
+| | `17` | fill with a solid colour (uniform luminance 64) |
+| | `9` | additive — a second pass lifts mean luminance +22, range 53–108 |
+| **modifiers** | `0` | strong darken: 3,607→883 colours, luminance −57, range 0–18 |
+| | `2`, `3`, `5` | **identical** effect — compress the range to 57–68. One family |
+| | `7` | mild compression, range 45–75 |
+| | `10` | darken, luminance −20, range 24–57 |
+| | `12` | brighten, luminance +34, range 82–105 |
+| **state setters** | `1`, `4`, `6`, `11`, `13`, `14`, `15`, `18`, `19` | no surface change — they set parameters later opcodes consume |
+
+That `2`, `3` and `5` produce byte-identical results despite taking 13, 12 and 10
+operands is the most useful single fact here: they are one operation with three
+operand encodings, so a port implements it once. It also matches the dispatch
+table's shape, where 17 handlers serve 20 slots.
+
+`13`, `14` and `15` show alpha effects when run alone but none after `op9`,
+which is consistent — `op9` has already set the alpha channel.
+
 ## The exported dataset
 
 `export.py` runs everything above in one pass and writes the whole recovered
@@ -552,6 +577,7 @@ synchronous stall needing an occlusion query rather than a literal translation.
 | `rendertex.py` | every texture program → PNG + contact sheet |
 | `rungeo.py` | runs `_generate_obj` with Warp3D stubbed; dumps the decoded node list |
 | `texops.py` | one-opcode texture programs, for naming the texture ops |
+| `texops2.py` | generator-then-opcode pairs, which separates modifiers from setters |
 | `runscene.py` | runs the scene interpreter; dumps the typed draw-node graph |
 | `lvo.py` | reads a Warp3D library's own vector table from its ROMTag |
 | `export.py` | runs all of the above and writes the whole dataset |
