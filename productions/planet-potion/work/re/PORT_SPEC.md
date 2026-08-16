@@ -248,7 +248,7 @@ blending. Z-buffer and its update are toggled per frame; fog per scene.
 | | |
 |---|---|
 | **16-bit dither** | the original composites into a 16-bit target; an RGBA8 port will not band the same way |
-| **`fres` / `frsqrte`** | low-precision estimates on hardware, exact under qemu, so neither the recorded stream nor the exported textures can show them. The texture VM uses both — `frsqrte` in `op6` and `op11`, and `fres` in the gradient helper `0x1000080c` — so the 69 PNGs are byte-exact *reproductions of the code*, not necessarily of what a Permedia-era Amiga drew. Bounded from the stream: median 0.39 px, p95 1.25 px, max 2.50 px displacement; 39.6% of vertices over half a pixel. An architectural ceiling, and a systematic warp about the projection centre rather than jitter |
+| **`fres` / `frsqrte`** | low-precision estimates on hardware, exact under qemu, so neither the recorded stream nor the exported textures can show them. The texture VM uses both, and the distance helper `0x1000093c` **chains them** — its square root is `fres(frsqrte(x))`, two estimates deep, which is the most approximate arithmetic anywhere in the intro. The 69 PNGs are byte-exact *reproductions of the code*, not necessarily of what a Permedia-era Amiga drew. Bounded from the stream: median 0.39 px, p95 1.25 px, max 2.50 px displacement; 39.6% of vertices over half a pixel. An architectural ceiling, and a systematic warp about the projection centre rather than jitter |
 | **fill rule** | triangle fill and the top-left tie-break are `unknown` |
 | **blend overflow** | clamp or wrap is `unknown` |
 | **raw Z encoding** | before the driver normalises, `unknown` |
@@ -286,6 +286,9 @@ Values are **0…255 floats**. The per-pixel primitive library at
 | `0x10000850` | scaled difference — `(src − dst)·f16` on four channels, **no store** |
 | `0x10000880` | **the symmetry blit** (below) |
 | `0x100008e4` | the **PRNG** — shift/xor/add mixing on three words; `op9` draws from it four times per lattice point |
+| `0x1000091c` | add the operand pixel, then scale by `f27` (= 128/255) — tails into `0x10000868` |
+| `0x1000093c` | **distance field** — `sqrt(dx² + dy²)` computed as `fres(frsqrte(x))`, with bits 2 and 3 of `r12` zeroing one axis to give horizontal, vertical or radial |
+| `0x10000990` | the mix `op2` and `op8` step through per pixel |
 
 **Clamping is a separate entry point, and not every path takes it.** `0x100006d0`
 falls *into* `0x10000700`, so calling the clamp entry clamps and stores while
