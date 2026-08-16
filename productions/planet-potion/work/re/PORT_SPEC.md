@@ -1626,6 +1626,28 @@ all of that was right the VM still missed by one level at scattered pixels, and
 none of the remainder was structural. Three instruction-level facts closed it,
 and all three were settled by running the instruction rather than by argument.
 
+Both live in `web/js/fp.js` — they are CPU semantics, not texture semantics, and
+`web/js/anim.js` needs the same `fma` on entirely different numbers.
+`work/re/fpcheck.mjs` pins them against references computed a different way and
+needs neither the dataset nor the binary to run.
+
+**And the truncating conversion has a domain.** Keeping only the sign and the
+top exponent bit means the exponent field *wraps* outside float32's normal
+range instead of saturating, so it neither overflows to infinity nor flushes to
+zero — it returns a plausible finite number. `f32(2^129)` is `2`; `f32(1e40)` is
+`29.387357711791992`; `f32(3.5e38)` is `NaN`; `f32(2^-127)` is `0`, losing a
+representable subnormal. Valid domain is `|v|` in `[2^-126, 2^128)` plus zero,
+and `fpcheck.mjs` asserts both the exactness inside it and the exact wrapped
+values outside.
+
+This is qemu's behaviour and reproducing it is correct — the reference PNGs were
+produced under qemu, so a conversion "fixed" to saturate would disagree with the
+oracle rather than with the original. It is recorded because it fails silently.
+Nothing reaches it today: surfaces are `0..255` and parameter blocks are operand
+bytes. The evaluator in section 3a is the one to watch, since `c2` multiplies
+`u³` and `u` is unbounded if a track search runs past its end — which is what
+the end-of-track clamp at `0x10005060` prevents.
+
 **`stfs` TRUNCATES.** PowerPC treats a value in an FPR as already
 single-representable when `stfs` writes it, so the store is defined as a repack
 of the bits rather than a rounding conversion, and qemu implements exactly that:

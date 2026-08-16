@@ -250,7 +250,40 @@ function stepTowardZero(x) {
 }
 
 {
-  // 3. THE TWO MEASURED VALUES from PORT_SPEC §7, which are the whole reason
+  // 3. THE DOMAIN, pinned at both ends. The repack keeps only the top exponent
+  //    bit, so outside float32's normal range the exponent field WRAPS rather
+  //    than saturating: no Infinity, no flush to zero, just a plausible finite
+  //    number. That is qemu's behaviour and matching it is the point — the
+  //    reference PNGs came out of qemu — but a silent wrong answer deserves a
+  //    test that says so out loud, so the exact values are asserted here. If
+  //    one of them changes, something changed in the conversion.
+  let inRange = 0;
+  for (let e = -126; e < 128; e++) {
+    const v = 2 ** e;
+    if (Object.is(f32(v), v) && Object.is(f32(-v), -v)) inRange++;
+  }
+  say(inRange === 254, 'f32 is exact on every power of two in float32 normal range',
+    `${inRange}/254`);
+
+  const outside = [
+    [2 ** 128, Infinity], [2 ** 129, 2], [2 ** -127, 0], [2 ** -128, 1],
+  ];
+  const wrong = outside.filter(([v, want]) => !Object.is(f32(v), want));
+  say(wrong.length === 0,
+    'outside that range it wraps to these exact values, and does not overflow',
+    wrong.map(([v, want]) => `f32(${v}) = ${f32(v)} want ${want}`).join('; ')
+      || '2^128 -> Infinity, 2^129 -> 2, 2^-127 -> 0, 2^-128 -> 1');
+
+  // The one that would bite: a texture surface is 0..255, so nothing the VM
+  // produces can reach the broken region. Stated as a check because it is the
+  // reason the limitation is acceptable rather than a bug.
+  say(Object.is(f32(255), 255) && Object.is(f32(0), 0)
+    && Object.is(f32(-255), -255),
+    'the range the texture VM actually uses is inside the valid domain');
+}
+
+{
+  // 4. THE TWO MEASURED VALUES from PORT_SPEC §7, which are the whole reason
   //    this function is not `Math.fround`. Both came off the original: the ramp
   //    step read out of its float surface, and a PPC probe storing one double
   //    with `stfd` and `stfs` side by side.

@@ -18,6 +18,13 @@ so the recorded draw stream plays through it directly. That is the first
 milestone on purpose: it tests the WebGL2 translation **alone**, with no
 reimplemented engine present to confuse a difference with.
 
+`js/fp.js` holds the two PowerPC floating-point semantics everything else
+depends on: `stfs` stores truncate rather than round, and the multiply-adds are
+fused. Both were found from output that was wrong by one ulp, both are the
+difference between byte-exact and looks-right, and `work/re/fpcheck.mjs` pins
+them against references computed a different way — it needs no dataset and no
+original binary, so it is the one check that runs anywhere.
+
 `js/texturevm.js` is the intro's procedural texture language, and it is
 **byte-exact**: all 69 shipped programs and all 30 opcodes reproduce the
 original's own output exactly, checked with `work/re/texvmdiff.mjs` and

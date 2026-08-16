@@ -29,9 +29,36 @@
 // 0x40818619.
 //
 // The conversion is qemu's `helper_tosingle`, transcribed.
+//
+// ITS DOMAIN IS FLOAT32'S NORMAL RANGE AND NOTHING ELSE — measured, not assumed
+// (work/re/fpcheck.mjs holds the boundary). Keeping only the sign and the TOP
+// exponent bit means the exponent field wraps instead of saturating, so outside
+// that range this does not overflow to Infinity or flush to zero. It returns a
+// plausible finite number:
+//
+//     f32(2**128)  -> Infinity        (still correct, just)
+//     f32(2**129)  -> 2
+//     f32(1e40)    -> 29.387357711791992
+//     f32(3.5e38)  -> NaN
+//     f32(2**-127) -> 0               (a representable subnormal, lost)
+//     f32(2**-128) -> 1
+//
+// That is qemu's behaviour and matching it is the point — the reference PNGs
+// were produced under qemu, so a "fixed" conversion would disagree with the
+// oracle rather than with the original. But it is a silent wrong answer rather
+// than a loud one, which is worth knowing before feeding this anything but
+// surface values.
+//
+// Nothing currently reaches it: the texture VM's surfaces are 0..255 and its
+// parameter blocks are operand bytes. The animation evaluator is the one to
+// watch, since a keyframe's `c2` multiplies `u³` and `u` is unbounded if a track
+// search ever runs past its end — which is exactly why `search()` clamps.
 const _bits = new DataView(new ArrayBuffer(8));
 
-/** PowerPC `stfs`: double -> single by truncation, not by rounding. */
+/**
+ * PowerPC `stfs`: double -> single by truncation, not by rounding.
+ * Valid for |v| in [2^-126, 2^128) and for zero. See the note above.
+ */
 export function f32(v) {
   _bits.setFloat64(0, v);
   const hi = _bits.getUint32(0), lo = _bits.getUint32(4);
