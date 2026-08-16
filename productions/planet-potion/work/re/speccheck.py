@@ -107,6 +107,55 @@ def main():
     check('cosine offset in entries (a quarter turn)', 0x2000 // 4, 2048)
     check('degrees per turn from the 0x5b multiplier', round(32768 / 0x5b), 360)
 
+    # --- the instruction-level facts the port depends on
+    #
+    # These are single opcodes, and the whole texture VM's byte-exactness rests
+    # on each of them. A rebuild against a different dump, or a mis-transcribed
+    # address, should fail here rather than as one wrong pixel in one texture.
+    def word(va):
+        return struct.unpack_from('>I', d0, va - BASE)[0]
+
+    def form(va):
+        w = word(va)
+        return (w >> 26, (w >> 1) & 0x3ff)
+
+    def aform(va):
+        # The multiply-adds are A-form: XO is FIVE bits, because the field above
+        # it holds FRC. Masking ten bits reads the register number as part of
+        # the opcode and reports fmadd as 541.
+        w = word(va)
+        return (w >> 26, (w >> 1) & 0x1f)
+
+    # 0x10000ff0 — the convolution normalises by fres(kernel sum), not fdiv.
+    check('convolution normaliser is fres (primary 59, XO 24)',
+          form(0x10000ff0), (59, 24))
+    # 0x10000818 — the reciprocal span helper, likewise fres and not a divide.
+    check('reciprocal span helper is fres', form(0x10000818), (59, 24))
+    # 0x10000984 — frsqrte, the other estimate; a DIFFERENT primary opcode, and
+    # fpest.py shows it rounds differently too.
+    check('distance helper uses frsqrte (primary 63, XO 26)',
+          form(0x10000984), (63, 26))
+    # 0x10000a00 — the shaded colour is a FUSED multiply-add (fmadd, XO 29).
+    check('op2/op8 shade with fmadd (primary 63, XO 29)',
+          aform(0x10000a00), (63, 29))
+    # 0x100007e4 — the core mix is fnmsub (XO 30), fused likewise.
+    check('the core mix is fnmsub (primary 63, XO 30)',
+          aform(0x100007e4), (63, 30))
+    # 0x10000650 — the output byte store is stbu (primary 39): the low byte of
+    # a bare fctiw, so it truncates rather than clamping.
+    check('texture bytes are stored with stbu (primary 39)',
+          word(0x10000650) >> 26, 39)
+    # 0x10000648 — and the alpha byte is 255 - mask, an fsub before that store.
+    check('the alpha byte comes from an fsub (primary 63, XO 20)',
+          form(0x10000648), (63, 20))
+    # No FPSCR write anywhere in the code, so the rounding mode is the default
+    # throughout — which is what makes fctiw's ties-to-even reliable.
+    fpscr = {711, 70, 38, 134}
+    writes = sum(1 for a in range(CODE[0], CODE[1], 4)
+                 if (word(BASE + a) >> 26) == 63
+                 and ((word(BASE + a) >> 1) & 0x3ff) in fpscr)
+    check('nothing writes FPSCR, so the rounding mode is the default', writes, 0)
+
     # --- and now the document itself. Everything above passes by construction:
     # the checker and the spec were written together. What actually goes wrong is
     # the PROSE drifting from the binary, so read the spec back and require the
@@ -121,7 +170,9 @@ def main():
                 '640': 'screen width', '480': 'screen height',
                 '8,192': 'sine table entries',
                 '32 distinct': 'synth primitive count',
-                '17\n': 'texture handler count (in the table)'}
+                '17\n': 'texture handler count (in the table)',
+                'stfs` TRUNCATES': 'that stfs truncates',
+                '255 − mask': 'that the alpha byte is the inverted mask'}
         for lit, what in must.items():
             check(f'spec states {what}', lit.strip() in spec, True)
         # Figures superseded by later measurement. Their reappearance means a

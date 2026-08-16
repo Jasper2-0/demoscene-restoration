@@ -379,6 +379,34 @@ not why. It is extraction, not understanding. The naming still has to be done by
 reading the code — but it can be done against known-correct output instead of
 guesses.
 
+## Ask the instruction, not the arithmetic
+
+A reimplementation can have every structure right — the correct handler, the
+correct operands, the correct order — and still miss by one level at scattered
+pixels, because the arithmetic the code performs is not the arithmetic the code
+means. Three examples from one afternoon on one subsystem:
+
+* `stfs` is not a rounding conversion. PowerPC defines it as a repack of the
+  bits, so it **truncates**; a `Float32Array` assignment rounds to nearest.
+* `fmadd` and `fnmsub` round once. `a*b + c` rounds twice.
+* two reciprocal estimates in the same helper, `fres` and `frsqrte`, do not
+  round alike — one comes back single, the other double.
+
+None of these is decidable by reading, and all three are decidable by running:
+upload a handful of instructions with known inputs and read the result bits
+back. The probe is smaller than the argument about what the manual implies, and
+unlike the argument it cannot be wrong.
+
+The corollary is about oracles. A byte oracle cannot see a value that is wrong
+by less than a rounding boundary — it reports "correct" for as long as the error
+stays small, then reports one wrong pixel when it does not, pointing at the pixel
+that crossed rather than at the code that drifted. If the original keeps its
+state in memory, dump that state instead: the same harness that returns a
+program's output can be pointed at its intermediate surface, and then a wrong
+value is measurable in ulps rather than inferred from where it happened to tip
+over. Doing that turned "eight subpixels off by one" into "the step is one ulp
+high, here is the multiply".
+
 ## Reconstruction, not restoration
 
 None of this is the original source code. It is a reconstruction from the

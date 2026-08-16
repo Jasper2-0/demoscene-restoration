@@ -248,7 +248,7 @@ blending. Z-buffer and its update are toggled per frame; fog per scene.
 | | |
 |---|---|
 | **16-bit dither** | the original composites into a 16-bit target; an RGBA8 port will not band the same way |
-| **`fres` / `frsqrte`** | low-precision estimates on hardware, exact under qemu, so neither the recorded stream nor the exported textures can show them. The texture VM uses both, and the distance helper `0x1000093c` **chains them** — its square root is `fres(frsqrte(x))`, two estimates deep, which is the most approximate arithmetic anywhere in the intro. The 69 PNGs are byte-exact *reproductions of the code*, not necessarily of what a Permedia-era Amiga drew. Bounded from the stream: median 0.39 px, p95 1.25 px, max 2.50 px displacement; 39.6% of vertices over half a pixel. An architectural ceiling, and a systematic warp about the projection centre rather than jitter |
+| **`fres` / `frsqrte`** | low-precision estimates on hardware; under qemu they are deterministic but **not alike**, which `work/re/fpest.py` settles by running them on known inputs and reading the result bits back: `fres` rounds to single precision, `frsqrte` returns the full double. So the distance helper `0x1000093c`, whose square root is `fres(frsqrte(x))`, carries exactly ONE rounding, on the outer reciprocal — not two, as reading the pair of estimates suggests. The 69 PNGs are byte-exact *reproductions of the code under this emulation*, not necessarily of what a Permedia-era Amiga drew. Bounded from the stream: median 0.39 px, p95 1.25 px, max 2.50 px displacement; 39.6% of vertices over half a pixel. An architectural ceiling, and a systematic warp about the projection centre rather than jitter |
 | **fill rule** | triangle fill and the top-left tie-break are `unknown` |
 | **blend overflow** | clamp or wrap is `unknown` |
 | **raw Z encoding** | before the driver normalises, `unknown` |
@@ -885,13 +885,82 @@ real occurrence in the shipped programs**, and seeds every case with an `op9`
 so the input is non-trivial — run alone on a zeroed surface, 27 of 30 opcodes
 produce a single colour.
 
-### Still open
+### The arithmetic is not the arithmetic it looks like
 
-**The last ULP belongs to `fres(frsqrte(x))`.** `p1_12` differs in 8 subpixels at
-max delta 1, all at radius exactly 18 where the value computes to exactly 15.5
-and the reference rounds *down*, while the same program's 77.5 at radius 6 rounds
-*up*. No rounding mode does both, so the two distances land on opposite sides of
-their exact values — an instruction-emulation detail, not a logic error.
+Everything above is structure — which handler, which operand, which order. Once
+all of that was right the VM still missed by one level at scattered pixels, and
+none of the remainder was structural. Three instruction-level facts closed it,
+and all three were settled by running the instruction rather than by argument.
 
-Current standing: **33 of 68 byte-exact** (8 non-trivial plus 25 uniform
-references, which are free passes and counted separately).
+**`stfs` TRUNCATES.** PowerPC treats a value in an FPR as already
+single-representable when `stfs` writes it, so the store is defined as a repack
+of the bits rather than a rounding conversion, and qemu implements exactly that:
+sign, top exponent bit, next 30 bits, low 29 mantissa bits dropped on the floor.
+Every float32 store in this VM therefore truncates — the surfaces, the mask, the
+parameter blocks, the noise buffer. A JS `Float32Array` assignment rounds to
+nearest, which is the sane choice and the wrong one.
+
+It was found from `op1`, which came out one level high at exactly the twelve
+pixels where its ideal ramp lands on `.5`. `work/re/texfloat.py` points the
+harness's output window at the VM's float surface instead of the ARGB buffer, so
+the original's own float32 values come back: its per-pixel step was
+`3.363095283508301` where multiplying in JS gives `3.36309552192688`, one ulp
+apart. A PPC probe then stored the same product twice, `stfd` and `stfs`, and
+showed the double `4.047619281336665` landing as `0x40818618` when correct
+rounding gives `0x40818619`.
+
+**The multiply-adds are FUSED.** `fmadd` and `fnmsub` round once; `a*b + c`
+rounds twice. The difference survives truncation to single often enough to look
+right and not always — `op2` was left with 28 float32 values one ulp high after
+every store had been accounted for, every one from an `fmadd`. The core mix
+`0x100007c4`, the convolution accumulator, `op2` and `op8`'s shaded colour,
+`op9`'s seed and the contrast step `0x10000820` all fuse.
+
+**Rounding twice at one store is the same bug in port form.** Writing a computed
+value into a `Float32Array` and clamping it afterwards rounds on the way in and
+truncates on the way out. `op9`'s seed did that, and it put the whole noise
+surface a couple of ulps high — invisible in the per-opcode suite, whose `op9`
+case happens to land below every rounding boundary. Values have to reach a store
+as doubles so the one conversion happens where the hardware puts it.
+
+Two more read-not-guessed corrections came out of the same pass:
+
+* the convolution normalises by **`fres(kernel sum)`** at `0x10000ff0`, not a
+  divide — exact only when the sum is a power of two, which is why `0x50`
+  (sum 8) and `0x5b` (sum −2) passed while `0x51` and `0x59` (sum 6) did not.
+  It also skips a zero weight outright rather than adding zero;
+* the copy-back at `0x10000568` is in `_generate`'s loop, not in any handler, so
+  the draw rectangle clips **every** opcode, the convolution family included.
+  `p1_23` and `p1_33` both end `op18(0,15,128,30)` then `0x57`; letting the
+  convolution skip the clip blurred the whole surface where the original blurs
+  fifteen rows.
+
+### The output conversion is not a conversion of the surface
+
+`_generate`'s epilogue at `0x10000618` walks 65,536 bytes and converts the
+surface float for every one of them — and then, on each iteration where the
+counter is divisible by four, throws that result away and stores `255 − mask`
+instead. **Channel 0 of the current surface never reaches the texture.** The
+alpha byte is the mask, inverted, one float per pixel.
+
+The 69 PNG references are RGB, so no whole-program diff could have seen this. It
+surfaced only when the per-opcode suite started comparing all four channels
+against the ARGB references and every reference alpha read 255 against a
+computed 0.
+
+The colour bytes are `stbu` after a bare `fctiw`, so they **truncate to the low
+byte**: a surface value of 300 lands as 44 and −5 lands as 251. Clamping there
+would be the sane choice and the wrong one, again. The `fctiw` itself is
+round-to-nearest-ties-to-even, confirmed directly — an `op1` ramp built to land
+on exact halves gives 0.5 → 0, 1.5 → 2, 2.5 → 2.
+
+### Standing
+
+**69 of 69 texture programs byte-exact** — all 44 non-trivial references plus
+the 25 uniform ones, which remain free passes and are still counted separately.
+**30 of 30 opcodes byte-exact in isolation.**
+
+`work/re/texbisect.py` is what to reach for when that regresses: it runs every
+prefix of a program through the original and compares surfaces prefix by prefix,
+so a divergence is reported at the opcode that introduced it rather than at the
+one that finally pushed it across a rounding boundary.
