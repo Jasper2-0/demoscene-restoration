@@ -135,6 +135,23 @@ It also **rules out** one explanation for the six part-one scenes that record
 nothing (§8 of `NOTES.md`): the counter resetting per scene means a late scene's
 cameras still start at 0, so a drifting index is not the cause.
 
+**Scene op 3 — the workhorse — packs flags into its parameters.** It is the
+node behind render type 3, which part one uses 43 times and part three 109. Its
+stream parameters are 16-bit words whose top bits are flags rather than value:
+
+```
+  p0  u16   bit 15 and bit 14 are flags; value = word & 0x3fff
+  p1  u16   bit 15 and bit 14 are flags; value = word & 0x3fff
+  p2, p3    read through 0x10002738 (no flag extraction)
+  p4  u16   bit 15 -> node+0x68; value = word & 0x7fff
+  p5  u16
+```
+
+**`node+0x68` is the primitive selector** — the halfword `_show_scene` tests to
+choose a triangle fan or a line strip (§4). So whether a type-3 node draws a fan
+or a strip is the top bit of its fifth parameter, not a separate opcode. The
+body of the handler beyond this decode is not yet read.
+
 ### 4b. Geometry is built once — only one opcode evaluates per frame
 
 The geometry eval table at `0x1000a9c4` has five slots, and the slots for
