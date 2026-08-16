@@ -40,7 +40,16 @@ import ppcrun as H
 
 NIL = 0xFFFFFFFF
 KEYSZ = 0x104
-CHANNELS = 16          # coefficient blocks that fit between +0x0c and +0xfc
+# FIFTEEN, not sixteen, and not the 24 channels the animation object holds.
+# The keyframe is 0x104 bytes with `next` at +0xfc, so the coefficient blocks run
+# +0x0c..+0xfc — exactly 15 of them at 16 bytes each, with nothing left over.
+# The animation object's channel block is +0x0c..+0x6c, which is 24 floats. So
+# the blocks do NOT index the channels one for one, and the published
+# cx/cy/scale at channels 21..23 are not a straight copy of three evaluated
+# blocks: the first pass calls the evaluator in groups of three and then runs
+# 0x10005a08, which indexes the SINE table (`lfsx f21, r28, r3`) — it is
+# building a rotation, not copying. Reading that is what section 3c still needs.
+BLOCKS = 15
 
 
 def _at(snap, off, fmt):
@@ -75,7 +84,7 @@ def read_track(snap, head, arena, limit=512):
             break
         tick, flags = _at(snap, o, '>HH')
         t0, inv = _at(snap, o + 4, '>ff')
-        blocks = [list(_at(snap, o + 0x0c + 16 * k, '>4f')) for k in range(CHANNELS)]
+        blocks = [list(_at(snap, o + 0x0c + 16 * k, '>4f')) for k in range(BLOCKS)]
         nxt, prev = _at(snap, o + 0xfc, '>II')
         out.append({'addr': hex(addr), 'tick': tick, 'flags': flags,
                     't0': t0, 'invSpan': inv, 'blocks': blocks,

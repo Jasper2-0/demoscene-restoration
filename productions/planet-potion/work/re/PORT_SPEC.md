@@ -120,6 +120,28 @@ walk from the draw records rather than the arena base: the graph head lives in a
 global the snapshot does not cover, so walking from the arena finds one node and
 stops.
 
+**Run against it, `work/re/animcheck.mjs` establishes three things on a scene
+whose scale really moves** (226.771 at t=92, 191.112 at t=200, 132.465 at t=400):
+
+* the keyframe search is **the last keyframe whose tick is at or before the local
+  time** — no interpolation between neighbours, no separate index;
+* `u = (t − t0)·invSpan`, both read from the keyframe itself;
+* `c0 + c1·u + c2·u³ − c3·u²` reproduces the published `cx`, `cy` and `scale`
+  exactly, from coefficient blocks **12, 13 and 14**.
+
+**A keyframe carries FIFTEEN coefficient blocks, not one per channel.** The
+keyframe is `0x104` bytes with `next` at `+0xfc`, so the blocks run
+`+0x0c`–`+0xfc`: exactly fifteen, nothing left over. The animation object's
+channel block is `+0x0c`–`+0x6c`, which is twenty-four floats. Ten of the fifteen
+land on `channel = block + 9`; five do not, one pair reading as swapped. That
+mapping is **not yet read** and must not be assumed.
+
+**§3b is visible in the same dump.** The second node of the sampled scene has
+`parent` pointing at the first node's animation object, its own blocks are all
+zero, and its published `cx`, `cy` and `scale` are the first node's exactly. So a
+parented node does not evaluate its own track into those channels — checking it
+as if it did reports a 200-unit error that is really the missing pass.
+
 ## 4. Drawing — `_show_scene`
 
 Walk the node list on `+0x10`. Per node, dispatch on `node+0x08 / 4`:
