@@ -587,17 +587,27 @@ byte.
 rebuilding the scene, against an unpatched `[3, 3, 3, 4, 4]`:
 
 ```
-  +2  0x5b -> 0x5a   CRASH        consumed
-  +3  0xff -> 0xfe   CRASH        consumed
-  +4  0x0f -> 0x0e   unchanged    NOT consumed
-  +5  0x01 -> 0x00   CRASH        consumed
+  +2  0x5b -> 0x5a   CRASH        bit 0 matters
+  +3  0xff -> 0xfe   CRASH        bit 0 matters
+  +4  0x0f -> 0x0e   unchanged    bit 0 does not
+  +5  0x01 -> 0x00   CRASH        bit 0 matters
+  +6  0x80 -> 0x81   unchanged    bit 0 does not
+  +7  0x00 -> 0x01   unchanged    bit 0 does not
 ```
 
-`+4` is the discriminating one. It is identical in all 29 streams *and* inert,
-while `+3` is identical in all 29 *and* load-bearing — so "constant across the
-production" and "part of a header" are different properties, and reading a fixed
-byte as structure was never safe. Whatever `+4` is, nothing in the scene build
-reads it.
+**Read the right-hand column literally.** A flip that changes nothing means that
+BIT does not matter, which is weaker than "the byte is not read" — a byte that is
+masked, compared against a range, or used only in its high bits absorbs a low-bit
+flip silently. `+6` is `0x80` in this scene and its bit 7 is plainly the kind of
+flag this VM uses elsewhere; flipping bit 0 says nothing about that.
+
+What the probes do establish is a lower bound: `+2`, `+3` and `+5` are read and
+matter. That is enough to rule out "skip a fixed header", and not enough to say
+where the header ends.
+
+`+4` is still worth noting: identical in all 29 streams *and* insensitive, where
+`+3` is identical in all 29 *and* sensitive. "Constant across the production" and
+"structural" are independent properties.
 
 So the region after the u16 length is parsed and load-bearing, and two of its
 bytes are constant across the whole production. "Skip a fixed header" is
