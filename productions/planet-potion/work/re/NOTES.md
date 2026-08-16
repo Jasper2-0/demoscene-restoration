@@ -123,30 +123,107 @@ where index 4 is `W3D_CreateContext` at LVO −30, so `LVO = −6·(index+1)`.
 | texture | `AllocTexObj` `UploadTexture` `SetFilter` `FreeTexObj` |
 | draw | **`DrawTriFan`×4, `DrawLineStrip`×2 — nothing else** |
 
-### The render state, recovered
+### The render state, resolved
 
-Every argument to the state calls is an immediate, so the whole configuration is
-static:
+Every argument is an immediate, and every constant is now named against the
+original `warp3d.h` (©1998 Sam Jordan / Hans-Jörg & Thomas Frieden, `$VER 1.0
+20.05.98`), mirrored at github.com/RobDangerous/QuarkTex, plus the Warp3D
+autodocs at wiki.amigaos.net.
+
+`W3D_SetState(ctx, state, action)` — `action` 1 = `W3D_ENABLE`, 2 = `W3D_DISABLE`:
+
+| bit | name | at init | during |
+|---|---|---|---|
+| 4 | `W3D_SYNCHRON` | disabled | |
+| 256 | `W3D_TEXMAPPING` | **enabled** | |
+| 512 | `W3D_PERSPECTIVE` | **enabled** | |
+| 1024 | `W3D_GOURAUD` | **enabled** | |
+| 2048 | `W3D_ZBUFFER` | disabled | toggled per frame by `_show_scene` |
+| 4096 | `W3D_ZBUFFERUPDATE` | disabled | toggled per frame by `_show_scene` |
+| 8192 | `W3D_BLENDING` | **enabled** | |
+| 16384 | `W3D_FOGGING` | disabled | toggled per scene by `_play_part_1` |
 
 ```
-  W3D_Hint            (ctx, 0x0a, 1)
-  W3D_SetZCompareMode (ctx, 3)
-  W3D_SetBlendMode    (ctx, srcfunc=7, dstfunc=8)
-  W3D_SetFogParams    (ctx, &_fog, mode=1)      _fog = {0.0, 0.0, 1.0, black}
+  W3D_SetBlendMode    (ctx, W3D_SRC_ALPHA, W3D_ONE_MINUS_SRC_ALPHA)  -- 7, 8
+  W3D_SetZCompareMode (ctx, W3D_Z_GEQUAL)                            -- 3
+  W3D_SetFogParams    (ctx, &_fog, W3D_FOG_LINEAR)                   -- 1
+  W3D_Hint            (ctx, W3D_H_ZBUFFER, W3D_H_FAST)               -- 10, 1
 ```
 
-`W3D_SetState(ctx, state, action)` is called 17 times over **eight** state bits —
-`4, 256, 512, 1024, 2048, 4096, 8192, 16384` — with action 1 and 2 (enable and
-disable). The context-init cluster enables 256, 512, 1024, 8192 and disables 4,
-2048, 4096, 16384. Three bits are then toggled during the show: `_show_scene`
-flips 2048 and 4096, and `_play_part_1` flips 16384 on and off around two of its
-scenes.
+`W3D_Z_GEQUAL` is not a mistake: Warp3D's depth is **reversed** — the autodocs
+put Z in w-space with **1.0 at the front plane and 0.0 at the back**, so "greater
+or equal" means "nearer". In WebGL2 that is `gl.depthFunc(gl.GEQUAL)` with a
+reversed depth range and clear, or invert the values.
 
-What is *not* recoverable from the binary is what a 2002 Permedia 2 driver did
-with any of it — the filter kernel behind `SetFilter`, the fog curve behind mode
-1, which factors 7 and 8 name, the rasteriser's fill rules and subpixel
-precision, and how format 6 texels were converted. Those are pixel-level
-behaviours, and a reference capture answers them where documentation will not.
+Texture creation: `W3D_ATO_TAGS = TAG_USER+0x201000` = `0x80201000`, so the four
+tags observed are `W3D_ATO_IMAGE`, `W3D_ATO_FORMAT`, `W3D_ATO_WIDTH`,
+`W3D_ATO_HEIGHT`. **Format 6 is `W3D_A8R8G8B8`** — which independently confirms
+the harness output, whose first pixel reads `ff616161`: A=0xff, R=G=B=0x61.
+
+Context creation: `W3D_CC_TAGS = TAG_USER+0x200000` = `0x80200000`; tags 0, 1, 2,
+6, 7 are `W3D_CC_BITMAP`, `W3D_CC_YOFFSET`, `W3D_CC_DRIVERTYPE`,
+`W3D_CC_DOUBLEHEIGHT`, `W3D_CC_FAST`.
+
+### Fog is per-scene data, not a constant — and the struct order matters
+
+`W3D_Fog` is **24 bytes, ordered `start, end, density, colour[3]`** — not
+density-first. That correction came from the header, and the binary then settled
+it independently and corrected *both* earlier readings.
+
+The static bytes at `_fog` (`0x1000a848`) are `{0, 0, 1.0, 0, 0, 0}`, which under
+the true order is `start=0, end=0, density=1.0` — degenerate for linear fog, and
+a clue that they are placeholders. They are: a setter at `0x100016e8` writes the
+struct at run time from a 5-float record —
+
+```c
+void set_fog(float *p) {          /* p = 5 floats */
+    _fog.start = p[0];            /* +0x00 */
+    _fog.end   = p[1];            /* +0x04 */
+    /*  +0x08 = density: NEVER written, stays 1.0, unused by LINEAR fog  */
+    _fog.r     = p[2];            /* +0x0c */
+    _fog.g     = p[3];            /* +0x10 */
+    _fog.b     = p[4];            /* +0x14 */
+    W3D_SetFogParams(ctx, &_fog, W3D_FOG_LINEAR);
+}
+```
+
+**The skipped word is the proof.** The setter writes `+0x00`, `+0x04`, then jumps
+to `+0x0c` — skipping exactly the slot where `density` sits, because
+`W3D_FOG_LINEAR` does not use it. Under the other field order the gap would fall
+in the wrong place.
+
+`_play_part_1` calls it four times with four presets, 20 bytes apart:
+
+| preset | at | start | end | colour |
+|---|---|---|---|---|
+| 0 | `r2+0x25f2` | 0.001111 | 0.0007692 | black |
+| 1 | `r2+0x2606` | 0.001667 | 0.001 | **(0.2, 0.5, 1.0)** — blue |
+| 2 | `r2+0x261a` | 0.0002857 | 0.00025 | black |
+| 3 | `r2+0x262e` | 0.0002857 | 0.00025 | black |
+
+`start > end` in all four, which is what the reversed w-space convention
+requires. Preset 1's blue fog matches the blue-tinted texture set.
+
+### Driver behaviour, for the port
+
+From Permedia 2 / GLINT documentation and the Hyperion Permedia2 driver notes:
+
+- **Bilinear is real.** Permedia 2 has a genuine bilinear filter (unlike the
+  original Permedia, whose "bilinear" was a crossfade fake). `documented`
+- **No mipmapping in this path.** The silicon can mip, slowly, but the Warp3D
+  Permedia2 driver exposed only `W3D_LINEAR`. `documented`
+- **Fog is per-vertex, interpolated across the primitive** — not per-pixel
+  exponential. The driver fakes linear fogging through interpolation. This is the
+  single most port-relevant item here. `documented`
+- **A8R8G8B8 uploads unconverted** to a direct-colour target; dithering only
+  applies when the framebuffer is 15/16-bit. `documented`
+- **`W3D_ReadZPixel` returns a `W3D_Double` normalised to [0..1]**, requires the
+  hardware to be locked, and the autodoc says outright it "is slow and should
+  normally not be called" — a synchronous stall, as suspected. `documented`
+
+Still `unknown`, and only a capture will settle them: the triangle fill /
+top-left tie-break rule, whether the blender clamps or wraps on overflow, and the
+raw Z read-back encoding before the driver normalises it.
 
 No `SetTexEnv`, no `SetWrapMode`: both left at defaults. Every polygon is a
 triangle fan. `ReadZPixel` appears once, in render slot 4's handler, after a
