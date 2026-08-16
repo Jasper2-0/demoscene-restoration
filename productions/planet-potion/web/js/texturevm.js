@@ -354,7 +354,11 @@ export function op9(s, ops) {
  * not been traced, so `ch0` is passed in rather than invented here.
  */
 export function op0(s, ops, ch0 = 0) {
-  const src = [ch0, ops[0], ops[1], ops[2]];
+  // The pre-loop `bnel` adds the constant block at r2+0x24d2 — four −128.0
+  // floats — into op0's own parameter block before the loop. So op0 adds a
+  // SIGNED offset, `operand − 128`, which is why it can darken as well as
+  // brighten. op17 skips that call and fills with the raw operands.
+  const src = [ch0 - 128, ops[0] - 128, ops[1] - 128, ops[2] - 128];
   for (let i = 0; i < PIXELS; i++) {
     const o = i * 4;
     for (let c = 0; c < 4; c++) s.current[o + c] += src[c];
