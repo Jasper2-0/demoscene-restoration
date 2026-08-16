@@ -52,14 +52,27 @@ def byte_at(segs, addr):
 
 
 def decode(segs, addr, limit=4096):
-    """-> (list of opcodes, note). Stops at the first byte that is not 0..6."""
-    ops, p = [], addr
-    while len(ops) < limit:
+    """-> (list of node types, note).
+
+    THE STREAM OPENS WITH A u16 LENGTH. `_generate_scene` does `lhz r29, 0(r31)`
+    then `addi r31, r31, 2` and sets `r30 = r31 + r29` as the end — so the walk
+    is bounded by a byte count, not by a terminator, and decoding from the
+    recorded address without skipping those two bytes reads the length's high
+    byte as an opcode. That is exactly how this tool failed on all 29 streams.
+
+    AND THE LEADING TYPE 7 IS SYNTHESISED. `li r29, 7` before the loop makes the
+    root node unconditionally; it is not in the stream. Which is why every
+    exported list starts with a 7 that is not a scene opcode.
+    """
+    n = (byte_at(segs, addr) << 8) | byte_at(segs, addr + 1)
+    p, end = addr + 2, addr + 2 + n
+    ops = [7]
+    while p < end and len(ops) < limit:
         op = byte_at(segs, p)
         if op is None:
             return ops, 'ran off the end of the image'
         if op > 6:
-            return ops, f'terminator {op:#04x} at {p:#010x}'
+            return ops, f'byte {op:#04x} at {p:#010x} is not an opcode'
         p += 1
         if op == 4:
             n = byte_at(segs, p)
@@ -67,7 +80,7 @@ def decode(segs, addr, limit=4096):
         else:
             p += sum(WIDTHS[op])
         ops.append(op)
-    return ops, 'hit the limit'
+    return ops, f'consumed {p - addr - 2} of {n} bytes'
 
 
 def main():

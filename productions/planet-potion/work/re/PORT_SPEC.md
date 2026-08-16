@@ -423,19 +423,25 @@ That is the grammar as read from the handlers:
   op 6         one u8
 ```
 
-**AND IT DOES NOT WALK THE SHIPPED STREAMS.** `work/re/scenegram.py` applies it
-to all 29 scene streams at the addresses `scenes.json` records and every one
-terminates within an opcode or two on a byte above 6. So at least one claim above
-is wrong, or the `stream` address is not where the opcode walk begins — a header,
-an indirection, or `r31` being set up somewhere this reading has not found.
+**Two things the handlers alone do not tell you**, both from `_generate_scene`'s
+own prologue at `0x100021bc`:
 
-That is worth more than the grammar was. Each operand width here was read from a
-handler and is individually defensible; the composition is not, and only running
-it said so. **Do not port a decoder from this table until `scenegram.py` passes.**
+* **the stream opens with a u16 length.** `lhz r29, 0(r31)`, `addi r31, r31, 2`,
+  `r30 = r31 + r29` — the walk is bounded by a byte count, not by a terminator;
+* **the leading type-7 node is synthesised.** `li r29, 7` before the loop makes
+  the root unconditionally. It is not in the stream, which is why every list
+  `scenes.json` records starts with a 7 that is not a scene opcode.
 
-Two candidates to check first: what sets `r31` before the first handler runs, and
-whether `scenes.json`'s `stream` is that pointer or the address it was loaded
-from.
+**And the opcode bytes still do not decode.** `work/re/scenegram.py` walks all 29
+streams with the length prefix honoured and the first byte after it is `0x5b`,
+`0x9b`, and similar — nowhere near `0..6`. So the dispatch at `0x100021f4` is not
+a bare byte indexing seven handlers, and the remaining unknown is how that byte
+becomes an opcode: a mask, a bias, a wider table than the seven at `0x1000a8a8`,
+or the handler table not being the thing it indexes at all.
+
+**Do not port a decoder from this table until `scenegram.py` passes.** Everything
+above is read from instructions and individually defensible; the composition is
+not, and only running it said so.
 
 **Cameras (scene op 6) are numbered per scene, from zero**, and `0x10002f24`
 is that claim in four instructions: `lbz r3, 0x29af(r2)`, `stw r3, 0x34(r27)`,
