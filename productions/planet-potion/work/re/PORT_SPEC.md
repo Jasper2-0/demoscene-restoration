@@ -527,17 +527,21 @@ provably begins at `stream+2`, the pointer provably matches `scenes.json`, and
 the export provably produces sensible node lists from it. Three measurements
 that cannot all be true alongside a `0x5b` at that offset.
 
-Which makes the byte dump the remaining suspect, and it is the one thing in the
-chain that was NOT measured through the harness: it came from a segment loader
-written for this check, reading `layout.txt` and indexing the flat files
-directly. If those bytes are read back through `ppcrun` instead — the same path
-the original's own run uses, relocations and all — and they differ, the whole
-contradiction dissolves and nothing above needs a new explanation.
+The byte dump was the last suspect and it is cleared: reading the same addresses
+back through `ppcrun.segments` — the path the original's own runs use — gives
+`029b5bff0f...` and `06535bff0f...`, identical to the private loader.
 
-**That is the next action, and it is the action that should have been first.**
-Everything in this section that was checked against the running program has held;
-everything derived from a private re-implementation of how to read the binary has
-not.
+**So the contradiction is real and this section ends inside it.** Every link is
+measured: the pointer, the `mr r31, r4`, the two-byte skip, the eight-entry
+opcode space, the bytes themselves, and an export that demonstrably produces
+`[7, 3, 3, …]` from exactly this input. They cannot all be true, and no amount of
+further reading has narrowed which one is not.
+
+What is left is the one thing never tried: **print `r29` and `r31` from inside
+the loop at `0x100021f4`**. Every claim above is about what the code should read;
+that would show what it does read, on the first iteration, in one run. It needs a
+probe in the harness rather than another disassembly, which is why it kept being
+deferred, and it is the only step with any prospect of settling this.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
