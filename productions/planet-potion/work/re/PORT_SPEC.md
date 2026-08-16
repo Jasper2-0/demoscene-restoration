@@ -402,8 +402,23 @@ references to `r31`**, the stream cursor. Whatever it builds, it builds from
 `node+0x04` and the `0x6c`-byte records it allocates, not from the stream.
 
 So four of the seven ops (0, 1, 2, 5) are a bare opcode byte, and only 3, 4 and
-6 carry operands. **That is the whole stream grammar a decoder needs**, except
-for how op 4 reads its string.
+6 carry operands.
+
+**Op 4 consumes `1 + N` bytes.** Its only two reads are `bl 0x10002738` — the u8
+reader — one at `0x10002e28`, whose value goes to `node+0x28`, and one at
+`0x10002e44` inside the per-character loop. So the first byte precedes the
+string and one byte follows per character. That `node+0x28` is the character
+COUNT is consistent with the shape and **not proven here**; the loop's bound was
+not read.
+
+That is the whole stream grammar:
+
+```
+  op 0,1,2,5   opcode byte only
+  op 3         u16 u16 u8 u8 u16 u16      (flags in the u16s)
+  op 4         u8, then one u8 per character
+  op 6         opcode byte, then one u8
+```
 
 **Cameras (scene op 6) are numbered per scene, from zero**, and `0x10002f24`
 is that claim in four instructions: `lbz r3, 0x29af(r2)`, `stw r3, 0x34(r27)`,
