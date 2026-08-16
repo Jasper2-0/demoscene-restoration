@@ -11,6 +11,7 @@
 //   ?inspect=1       install window.__demo and draw nothing on its own
 
 import { Warp3D, SCREEN_W, SCREEN_H } from './warp3d.js';
+import { buildTextures } from './textures.js';
 
 const canvas = document.getElementById('screen');
 const statusEl = document.getElementById('status');
@@ -25,20 +26,29 @@ async function loadJSON(path) {
   return r.json();
 }
 
-/** Textures are exported as PNGs by work/re/export.py; index by table order. */
-async function loadTextures(w3d, manifest) {
-  const bitmaps = await Promise.all(manifest.map(async (name) => {
-    const blob = await (await fetch(`./data/textures/${name}`)).blob();
-    return createImageBitmap(blob);
-  }));
-  const c = new OffscreenCanvas(128, 128);
-  const ctx = c.getContext('2d');
-  bitmaps.forEach((bm, i) => {
-    ctx.clearRect(0, 0, 128, 128);
-    ctx.drawImage(bm, 0, 0);
-    w3d.uploadTexture(i, new Uint8Array(ctx.getImageData(0, 0, 128, 128).data.buffer));
-  });
-  return bitmaps.length;
+/**
+ * Textures are GENERATED, not loaded: the VM in texturevm.js runs the intro's
+ * own bytecode and reproduces all 69 shipped programs byte for byte. The PNGs
+ * under data/textures/ are the oracle those were checked against, not an input.
+ *
+ * A draw's `texture` field is an index into the order W3D_AllocTexObj was
+ * called, and _calculate_txt walks ONE part's table — so the two parts have
+ * different sets under the same indices, and the live set has to be swapped
+ * when the part changes. Uploading is cheap; regenerating is not, so the pixels
+ * are built once and kept.
+ */
+function textureBinder(w3d, programs, kernels) {
+  const { byPart, failures } = buildTextures(programs, kernels);
+  let live = null;
+  return {
+    failures,
+    counts: Object.fromEntries(Object.entries(byPart).map(([k, v]) => [k, v.length])),
+    use(part) {
+      if (part === live || !byPart[part]) return;
+      byPart[part].forEach((rgba, i) => { if (rgba) w3d.uploadTexture(i, rgba); });
+      live = part;
+    },
+  };
 }
 
 async function main() {
@@ -50,15 +60,25 @@ async function main() {
     return;
   }
   w3d.clear([0, 0, 0]);
+  // ?texenv=0|1|2 — replace, modulate, decal. Undecided; see warp3d.js.
+  if (params.has('texenv')) w3d.texEnv = Number(params.get('texenv'));
 
   let dataset = null;
+  let textures = null;
   try {
     dataset = await loadJSON('./data/draws.json');
-    if (dataset.textures) await loadTextures(w3d, dataset.textures);
   } catch {
     // The dataset is regenerable, not committed — see work/re/export.py.
     say('Warp3D shim ready. No recorded stream present: '
       + 'run work/re/export.py and copy out/ to web/data/.');
+  }
+  try {
+    const [programs, kernels] = await Promise.all([
+      loadJSON('./data/tex_programs.json'), loadJSON('./data/tex_kernels.json')]);
+    textures = textureBinder(w3d, programs, kernels);
+  } catch {
+    // Without the bytecode there is nothing to generate FROM. The draw stream
+    // still replays, untextured, which is worth saying rather than showing.
   }
 
   /** Draw one recorded frame. Deterministic and order-independent by design. */
@@ -67,6 +87,7 @@ async function main() {
     const scene = dataset.scenes[sceneIndex];
     if (!scene?.frames?.length) return null;
     const frame = scene.frames[Math.min(frameIndex, scene.frames.length - 1)];
+    textures?.use(scene.part);
     w3d.setZBuffer(false, false);
     w3d.clear([0, 0, 0]);
     const info = w3d.drawFrame(frame);
@@ -87,7 +108,12 @@ async function main() {
           captureTime: ((s.startTick ?? 0) + f.t) / 50, _scene: i, _frame: k,
         }))),
       render: async (e) => renderRecorded(e._scene ?? 0, e._frame ?? 0),
-      state: () => ({ source: 'recorded draw stream, not a reimplementation' }),
+      state: () => ({
+        draws: 'recorded',
+        textures: textures
+          ? `generated from bytecode (${JSON.stringify(textures.counts)})`
+          : 'absent',
+      }),
     };
     window.__demoReady = true;
     say('inspect mode — recorded stream only');
@@ -106,7 +132,12 @@ async function main() {
   }
 
   if (startEl) startEl.hidden = true;
-  say(`Warp3D shim ready (${SCREEN_W}x${SCREEN_H}). `
+  const tex = textures
+    ? `textures generated from bytecode (${Object.entries(textures.counts)
+      .map(([k, v]) => `${k}:${v}`).join(', ')}${textures.failures.length
+      ? `, ${textures.failures.length} failed` : ''})`
+    : 'no texture bytecode present';
+  say(`Warp3D shim ready (${SCREEN_W}x${SCREEN_H}); ${tex}. `
     + 'No engine yet — add ?oracle=1 to replay the original’s recorded stream.');
 }
 

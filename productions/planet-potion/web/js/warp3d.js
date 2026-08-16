@@ -65,18 +65,40 @@ in float vFog;
 uniform sampler2D uTex;
 uniform vec3  uFogColor;
 uniform float uTextured;
+uniform float uTexEnv;      // 0 replace, 1 modulate, 2 decal — see main()
 
 out vec4 oColor;
 
 void main() {
-  // No W3D_SetTexEnv call appears anywhere in the program, so the default
-  // applies. The recorded stream settles which default that is: vertex RGB is
-  // 0.0 on every vertex of every primitive while the picture is plainly not
-  // black, so colour cannot be modulating the texture. Alpha does vary and does
-  // drive the fades, so alpha modulates and RGB is replaced.
+  // THE TEXTURE ENVIRONMENT IS THE BIGGEST OPEN QUESTION IN THIS FILE, and an
+  // earlier version of this comment settled it on a false premise. It claimed
+  // vertex RGB was 0.0 on every vertex of every primitive; counting the
+  // recorded stream says otherwise — 5,702 distinct vertex colours, (1,1,1) on
+  // 37,051 vertices and (0,0,0) on 76,057, and per primitive 20,737 trifans all
+  // black, 9,697 all white and 9,976 genuinely varied. So the stream does not
+  // decide this, and no W3D_SetTexEnv call exists to decide it either.
+  //
+  // uTexEnv selects, and the default is REPLACE:
+  //   0 REPLACE   rgb = texel                       — the whole intro is grey
+  //   1 MODULATE  rgb = texel * vColor              — half the geometry is black
+  //   2 DECAL     rgb = mix(vColor, texel, texel.a) — needs the alpha channel,
+  //                                                   and 34 of 69 textures have
+  //                                                   a varying one
+  // REPLACE is the default because it is the only one of the three under which
+  // the 20,737 all-black primitives are visible at all, and because Warp3D's
+  // W3D_AllocTexObj zeroes the texture object's environment fields (LVO -96 in
+  // Warp3DPPC.library, at 0x100194b4 once flattened), so whatever the default
+  // is, it is the zero value of the enum. What that constant IS lives in the
+  // driver or the 68K library, neither of which is read yet — see PORT_SPEC §6.
   vec4 texel = uTextured > 0.5 ? texture(uTex, vUV) : vec4(1.0);
-  vec3 rgb   = uTextured > 0.5 ? texel.rgb : vColor.rgb;
-  float a    = texel.a * vColor.a;
+  vec3 rgb   = vColor.rgb;
+  if (uTextured > 0.5) {
+    rgb = uTexEnv < 0.5 ? texel.rgb
+        : (uTexEnv < 1.5 ? texel.rgb * vColor.rgb
+                         : mix(vColor.rgb, texel.rgb, texel.a));
+  }
+  // Alpha modulates in every mode, and it is what drives the fades.
+  float a = texel.a * vColor.a;
 
   oColor = vec4(mix(rgb, uFogColor, vFog), a);
 }`;
@@ -110,7 +132,12 @@ export class Warp3D {
     }
     this.prog = prog;
     this.u = Object.fromEntries(['uViewport', 'uTexelScale', 'uFog', 'uFogColor',
-      'uTex', 'uTextured'].map((n) => [n, gl.getUniformLocation(prog, n)]));
+      'uTex', 'uTextured', 'uTexEnv'].map((n) => [n, gl.getUniformLocation(prog, n)]));
+
+    // 0 replace, 1 modulate, 2 decal. See the fragment shader: the recorded
+    // stream does not decide this, so it is a knob rather than a measurement,
+    // and the default is the one the stream is at least consistent with.
+    this.texEnv = 0;
 
     this.vao = gl.createVertexArray();
     this.vbo = gl.createBuffer();
@@ -202,6 +229,7 @@ export class Warp3D {
     gl.bindTexture(gl.TEXTURE_2D, tex ?? null);
     gl.uniform1i(this.u.uTex, 0);
     gl.uniform1f(this.u.uTextured, tex ? 1 : 0);
+    gl.uniform1f(this.u.uTexEnv, this.texEnv);
     gl.uniform2f(this.u.uViewport, SCREEN_W, SCREEN_H);
     gl.uniform1f(this.u.uTexelScale, 1 / TEX_SIZE);
     gl.uniform3f(this.u.uFog, this.fog.start, this.fog.end, this.fog.enabled ? 1 : 0);

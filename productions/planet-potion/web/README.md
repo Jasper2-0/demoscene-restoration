@@ -1,6 +1,8 @@
 # Planet Potion — browser restoration
 
-Work in progress. **The Warp3D shim exists and is verified; the engine does not.**
+Work in progress. **The textures and the Warp3D shim are computed; the engine is
+not.** Everything between them — scene build, animation, draw emission — still
+comes from the original's recorded stream.
 
 ## What is here
 
@@ -16,6 +18,20 @@ so the recorded draw stream plays through it directly. That is the first
 milestone on purpose: it tests the WebGL2 translation **alone**, with no
 reimplemented engine present to confuse a difference with.
 
+`js/texturevm.js` is the intro's procedural texture language, and it is
+**byte-exact**: all 69 shipped programs and all 30 opcodes reproduce the
+original's own output exactly, checked with `work/re/texvmdiff.mjs` and
+`work/re/texopdiff.mjs`. `js/textures.js` runs it at load time and binds the
+result, so the textures on screen are generated from the intro's bytecode rather
+than loaded from the exported PNGs — those are now only the oracle.
+
+One thing the shim cannot settle on its own is the **texture environment**. No
+`W3D_SetTexEnv` call exists, so the Warp3D default applies, and the recorded
+stream does not pin it down: vertex colours are neither uniformly black nor
+uniformly white (20,737 all-black primitives, 9,697 all-white, 9,976 varied).
+`?texenv=0|1|2` switches between replace, modulate and decal; replace is the
+default and the reasoning is in `js/warp3d.js` and `PORT_SPEC.md` §6.
+
 ## Run
 
 Serve the repository with any static HTTP server and open `productions/planet-potion/web/`.
@@ -24,6 +40,7 @@ No build step, no runtime dependencies.
 - `?oracle=1` — replay a recorded frame
 - `?scene=N&t=M` — one recorded frame, deterministically
 - `?inspect=1` — install the shared `window.__demo` adapter and draw nothing on its own
+- `?texenv=0|1|2` — texture environment: replace (default), modulate, decal
 
 The recorded stream and textures are **not committed**; they are regenerable:
 
@@ -38,7 +55,7 @@ between recorded and computed per stage, and only the last one is computed today
 
 | stage | state |
 |---|---|
-| textures | recorded (PNG) — the 20-opcode VM is read but not written |
+| textures | **computed — byte-exact, all 69 programs** |
 | scene build | recorded |
 | per-frame animation | recorded |
 | draw emission | recorded |

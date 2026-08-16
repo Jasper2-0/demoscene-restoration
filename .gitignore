@@ -15,6 +15,12 @@ originals/*
 !originals/README.md
 
 # -- per-production exclusions ---------------------------------------------
+# Planet Potion's web/data/ is the export of the original's own output — the
+# draw stream, the texture bytecode, the reference PNGs. Regenerate it with
+# `cd productions/planet-potion/work/re && python3 export.py flat/ out/`
+# and copy out/ across. Derived from the binary, so it does not live here.
+productions/planet-potion/web/data/
+
 # Ghidra project databases embed the analyzed original binary.
 productions/*/work/ghidra/
 productions/*/work/ghidra-project/
