@@ -481,12 +481,50 @@ export function op2(s, ops) {
   }
 }
 
+/**
+ * op8 — the two-band sibling of op2: a piecewise gradient with three colours and
+ * a shared knee. 18 operands, and they account for themselves exactly:
+ *
+ *   0..3   colour A      12, 13  field centre
+ *   4..7   colour B      14      inner range start
+ *   8..11  colour C      15      the KNEE — both the band test and a range edge
+ *                        16      outer range end
+ *                        17      mode byte (distance mode + curve)
+ *
+ * Below the knee the pixel ramps A -> B over [op14, op15]; above it, B -> C over
+ * [op15, op16]. The handler precomputes both deltas before the loop, one into a
+ * scratch slot at +0x54 past the operands.
+ */
+export function op8(s, ops) {
+  const A = ops.slice(0, 4);
+  const B = ops.slice(4, 8);
+  const dAB = [0, 1, 2, 3].map((i) => B[i] - A[i]);
+  const dBC = [0, 1, 2, 3].map((i) => ops[8 + i] - B[i]);
+  const [cx, cy] = [ops[12], ops[13]];
+  const inner = ops[14], knee = ops[15], outer = ops[16];
+  const mode = ops[17];
+  const shaded = new Float32Array(4);
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const d = distance(x - cx, y - cy, mode);
+      const far = d > knee;
+      const base = far ? B : A;
+      const delta = far ? dBC : dAB;
+      const t = falloff(d, far ? knee : inner,
+        (far ? outer - knee : knee - inner) || 1, mode);
+      for (let c = 0; c < 4; c++) shaded[c] = base[c] + delta[c] * t;
+      clamp4(shaded, 0);
+      blend(s.current, (y * SIZE + x) * 4, shaded, 0);
+    }
+  }
+}
+
 /** op18 — set the draw rectangle. op19 — reset it to the full surface. */
 export const op18 = (s, o) => { s.rect = [o[0], o[1], o[2], o[3]]; };
 export const op19 = (s) => { s.rect = [0, 0, 128, 128]; };
 
 /** Opcodes whose bodies are specified but not yet written here. */
-export const UNIMPLEMENTED = new Set([1, 6, 8]);
+export const UNIMPLEMENTED = new Set([1, 6]);
 
 /** Convert to A8R8G8B8 bytes, as W3D_AllocTexObj receives them. */
 export function toARGB(surf) {
