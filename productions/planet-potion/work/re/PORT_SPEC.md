@@ -415,9 +415,20 @@ width. So the flags turn a plain rectangle into a bevelled one, at three inset
 sizes in a halving series — which is how one opcode serves 152 nodes with
 visibly different outlines.
 
-The handler runs on to `0x10002e10` and the tail is **still unread**; what is
-read is the emission pattern and the geometry it produces, not the vertex order
-`0x100023a8` writes.
+**`0x100023a8` is not a vertex emitter.** Each call ALLOCATES A NODE: `0x78`
+bytes for an animation object, then `0x104` for one keyframe stored as its track
+head at `+0x08`. So a type-3 handler does not write geometry — it builds several
+animated sub-objects, one per corner, and §3 animates them into the fan that
+`_show_scene` eventually draws. The two subsystems meet here.
+
+It is also an independent confirmation of §3a's structure, arrived at from the
+allocator rather than from the reader: `0x78` and `0x104` are the two sizes,
+`+0x08` is the track head, and `+0x6c` takes the current tick from `r2+0x2862` as
+the time origin. The defaults it writes into the channel block are
+`cx = cy = 320.0` at `+0x54`/`+0x5c` and `240.0` at `+0x58` — the screen centre
+for a 640x480 target — and `flags2 = 0x40`, which is **loop mode 2, clamp**.
+
+The handler runs on to `0x10002e10` and its tail is still unread.
 
 ### 4b. Geometry is built once — only one opcode evaluates per frame
 
