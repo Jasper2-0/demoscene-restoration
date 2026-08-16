@@ -326,27 +326,61 @@ The reference implementation to port from is libopenmpt's `Load_dbm.cpp` plus it
 DigiBooster Pro Echo plugin (BSD). UADE running the real `dbplayer` is the
 byte-exact ground truth if an A/B is ever needed.
 
-### OPEN RISK — the LVO table is still single-sourced
+### The LVO table — CONFIRMED against the shipped library
 
-Round two could not obtain an independent numeric offset→name table, and
-correctly declined to reconstruct one from the alphabetical autodoc. So **every
-Warp3D function name in this document is provisional**, resting on
-ReWarp3DPPC's `VecTable68K[]` alone. The internal consistency (6-byte spacing,
-all offsets ≡ 0 mod 6 from −30) is not confirmation — a scrambled ordering would
-look identical.
+This was the project's last single-sourced dependency: every Warp3D name here
+rested on ReWarp3DPPC's `VecTable68K[]`, and a scrambled ordering would not have
+surfaced until very late. Two rounds of research could not find an independent
+numeric table. The Aminet Warp3D **user distributions** settle it instead — not
+via a header, but from the real `Warp3DPPC.library` itself, which is the exact
+library Planet Potion links against.
 
-To settle it, read `workbench/libs/warp3d/warp3d.conf` from
-`github.com/aros-development-team/AROS` (the `##begin functionlist` block is in
-canonical vector order, first entry −30, −6 per entry), or an NDK
-`warp3d_lib.fd`. Check these seven; all must match:
+`lvo.py` recovers it. An `RTF_AUTOINIT` library carries a Resident whose
+`rt_Init` points at `{dSize, vectors, structure, initFunc}`; `vectors` is the
+table `MakeLibrary` turns into the jump table, in canonical order from LVO −6.
 
 ```
-  -30 CreateContext   -36 DestroyContext   -48 SetState      -60 LockHardware
-  -66 UnLockHardware  -168 DrawTriFan      -450 ClearDrawRegion
+Warp3DPPC.library 4.2 (13-Jul-01)   ROMTag @ +0x04, RTF_AUTOINIT   88 vectors
+Warp3D.library    4.2               88 vectors
+Warp3DPPC.library 4.0 (01-Apr-01)   88 vectors
+Warp3D.library    4.0               88 vectors
 ```
 
-If **any** row disagrees, every call-site name here must be re-derived before the
-renderer analysis is trusted.
+**88 across all four builds**, and ReWarp3DPPC's table is 88 entries plus a
+`(CONST_APTR)-1` sentinel. The counts agree.
+
+The ordering is confirmed behaviourally, which is stronger. The library has no
+symbols and embeds no function-name strings, so names cannot be read out —
+but Warp3D has **exactly four functions that take TagItem lists**
+(`CreateContext`, `AllocTexObj`, `RequestMode`, `BestModeID`), and scanning all
+88 vectors for `lis rX, 0x8020` — how PPC materialises the `TAG_USER+0x20xxxx`
+tag bases — hits **exactly four**:
+
+| idx | LVO | ReWarp3DPPC's name | takes tags |
+|---|---|---|---|
+| 4 | −30 | `W3D_CreateContext` | `W3D_CC_*` |
+| 15 | −96 | `W3D_AllocTexObj` | `W3D_ATO_*` |
+| 69 | −420 | `W3D_RequestMode` | `W3D_SMR_*` |
+| 80 | −486 | `W3D_BestModeID` | `W3D_BMI_*` |
+
+Four for four, from indices near the start, the middle and the end of the table,
+derived from the real binary with no reference to the reimplementation. A
+scrambled ordering that happened to place all four tag-taking functions on
+exactly the four tag-using vectors is not a plausible coincidence.
+
+Together with the count match and the intro's own coherence — the author's thunk
+names *setstate*/*lock*/*unlock* landing on `SetState`/`LockHardware`/
+`UnLockHardware`, and the texture calls clustering in `_alloc_txt` — **the seven
+spot-check offsets and the table they come from are confirmed.** The 22 renderer
+names in this document are no longer provisional.
+
+The Warp3D archives are copyrighted redistributables and stay out of this
+repository; only `lvo.py` and this note are committed. Their hashes:
+
+```
+Warp3D-4.0.lha   a1da7fd863dd69c667f7d1f1bd07a4c80df985f600741acb505732cb30183df7
+Warp3D-4.2a.lha  68a18bc7b20f0b47b1401855c0e0021604e0be18a4cbf9b86780fbf9d692ff77
+```
 
 ## Texture opcodes — first pass
 
