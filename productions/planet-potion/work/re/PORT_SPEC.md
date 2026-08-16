@@ -581,10 +581,20 @@ byte; type 7 skips both.
 
 Every width table in this section counted one byte per node too few — and adding
 it **still does not make `scenegram.py` walk a stream**: 0/29, dying at the same
-byte. So the resource byte is real and is not the whole gap. The root evidently
-consumes something too, or the length is not at offset 0, or `_generate_scene` is
-entered somewhere other than its symbol. All three are measurable and none of
-them are worth another round of reading first.
+byte.
+
+**Bit-flip probes say the bytes after the length are consumed, not skipped.**
+Flipping one bit of `stream+2` (`0x5b`) crashes the run; flipping one bit of
+`stream+3` — the `0xff` that is identical in all 29 streams — crashes it too.
+Unpatched, the same scene builds `[3, 3, 3, 4, 4]`.
+
+So the region after the u16 length is parsed and load-bearing, and two of its
+bytes are constant across the whole production. "Skip a fixed header" is
+therefore the wrong shape of fix; something consumes those bytes as operands, and
+the only candidate before the first stream opcode is the synthesised type-7 root.
+
+Each probe is one qemu run through `animdump.py`, so mapping the rest of the
+header is a handful of minutes rather than an investigation.
 
 **Do not port a decoder from this table until `scenegram.py` passes.** Everything
 above is read from instructions and individually defensible; the composition is
