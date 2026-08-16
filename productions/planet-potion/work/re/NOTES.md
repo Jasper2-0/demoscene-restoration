@@ -398,11 +398,21 @@ matches the handlers read above: two are region state, three are the mask
 pipeline. The probe and the reading agree, which is the first time in this
 section they have.
 
-**`op3` hangs on two of its operands.** Operands 10 and 11 at `0x00` or `0x80`
-send it into a loop that does not terminate in 25 seconds. That is a second
-runaway in the original after the glyph scan, and a port must bound it — which
-is only visible because the probe treats a timeout as an answer rather than an
-exception.
+**`op3` hangs on two of its operands, and only at zero.** Narrowing it: operands
+10 and 11 do not terminate at `0x00` and terminate at every other value tried —
+`0x01`, `0x02`, `0x04`, `0x08`, and on up through `0xff`. One is enough, zero is
+fatal.
+
+That is the signature of a **loop step or divisor**, and it makes this a second
+runaway in the original after the glyph scan — with the same character. Both are
+degenerate inputs the shipped data never supplies, so neither ever fires in the
+demo, and both would hang a port that translated the loop literally.
+
+It is also only visible because the probe treats a timeout as an answer rather
+than an exception. The first run of `texprobe.py` died on this operand with a
+`TimeoutExpired` traceback and produced nothing for the remaining seventeen
+opcodes; making `texconv.run` return `None` on expiry turned the crash into the
+most interesting row in the table.
 
 This is the second interpretation in this session that a test destroyed — the
 first being the six silent scenes — and in both cases the test was worth more
