@@ -396,10 +396,28 @@ constant at `r2+0x2bd6` — the same one §3c's text path uses for glyphs:
   f13 = −(p0·k)        f12 = −(p1·k)          /* fnmadd — the negative extents */
 ```
 
-So a type-3 node and a glyph are the same construction with different sources,
-which is consistent with both ending up as one fan. The handler continues to
-`0x10002e10` and **the rest is still unread**; three more constants it loads —
-`r2+0x2e46`, `0x2e4a`, `0x2e4e` — are unidentified.
+`k` is `0.5`, read from the binary — so `p0` and `p1` are **full widths**, not
+half-extents, and the same 0.5 is what §3c's text path applies to a glyph. A
+type-3 node and a glyph are the same construction with different sources, which
+is consistent with both ending up as one fan; they want one routine in a port,
+not two.
+
+**The two flag bits cut the corners.** `p0`'s `0x4000` and `p1`'s `0x8000` gate
+extra emission blocks — each computes four values and calls `0x100023a8` — and
+the constants they use are an inset series:
+
+```
+  r2+0x2e46 = 0.032    r2+0x2e4a = 0.016    r2+0x2e4e = 0.008
+```
+
+used as `p0·0.016 − p0·0.5`, i.e. a corner pulled in from `0.5` to `0.484` of the
+width. So the flags turn a plain rectangle into a bevelled one, at three inset
+sizes in a halving series — which is how one opcode serves 152 nodes with
+visibly different outlines.
+
+The handler runs on to `0x10002e10` and the tail is **still unread**; what is
+read is the emission pattern and the geometry it produces, not the vertex order
+`0x100023a8` writes.
 
 ### 4b. Geometry is built once — only one opcode evaluates per frame
 
