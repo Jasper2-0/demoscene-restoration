@@ -557,9 +557,30 @@ a doubly-linked list, which settles the two-pointer question: the search walks
 
 `+4` duplicating `+0` as a float is what the evaluator needs (`f15 = localtime -
 key[4]`), and `+8` being `0.01` against a 100-tick span shows the cubic parameter
-is **normalised segment time**: `u = (t − t₀)/span`, then `u`, `u²`, `u³` into the
-helper at `0x10005944`. The interpolation is cubic, not linear. Results land at
-`anim+0x3c` and up.
+is **normalised segment time**: `u = (t − t₀)/span`. Results land at `anim+0x3c`
+and up.
+
+**The polynomial, exactly.** `0x10005944` takes one 16-byte block as
+`[c0, c1, c2, c3]` and `u`, `u²`, `u³`:
+
+```c
+  value = c0 + c1·u + c2·u³ − c3·u²;        /* keyframe flags == 0 */
+  value = c0 − c3·u;                        /* keyframe flags != 0 — linear */
+```
+
+Note the ordering: `c2` multiplies **u³** and `c3` multiplies **u²**, and the
+squared term is *subtracted* (`fnmsub`). A per-keyframe flag selects the linear
+form, which reuses `c3` as the slope. There is a second entry point at
+`0x10005970` that evaluates the same two forms and then **clamps to [0, 1]** with
+a pair of `fsel` — the channel kind decides which is called, and [0,1] is what
+colour and alpha need.
+
+Angles go through `0x100059b4`: `float2int`, mask **`0x7ffc`**, then `lfsx` from
+`_sinus` and from `_sinus + 0x2000`. So there is one **8,192-entry table with a
+turn of 8,192 units**, and cosine is the same table read a quarter period along.
+`_sinus` points into seg 5, which is BSS — the table is built at run time, and by
+something not yet found: calling `_init_txtgen` and dumping the region gives
+zeros, so it is not that.
 
 **The music trigger is the interesting part.** The evaluator reads
 `lhz r3, 0x23bc(r2)` — the value the 68K frame routine stores from
@@ -766,6 +787,45 @@ The running order recorded above also needs a correction. `_play_part_1` loads
 once into its own arena (`r2+0x2836`) and drawn on top of every scene, not the
 first scene. The first scene *played* is `r2+0x25aa`, and `drawlog.py` takes an
 `overlay=` argument so the recorded stream matches what the screen showed.
+
+### `_main`, and why part three is conditional
+
+```
+  _main:  bl 0x10001c4c        ; init
+          bl _play_part_1
+          lwz r3, 0x28a6(r2)
+          cmpwi r3, 1
+          beq  skip            ; <-- part three only if this is NOT 1
+          bl _play_part_3
+          bl 0x10001d50        ; teardown
+```
+
+`_play_part_1` writes **1** to `r2+0x28a6` on entry and **0** only after its last
+scene returns normally. So the flag means *aborted*, and **part three plays only
+when part one runs to the end** — press the right mouse button anywhere in part
+one and the intro stops there. Uninterrupted, the show is 288.4 s + 149.9 s =
+**7 minutes 18 seconds**.
+
+The init at `0x10001c4c` also confirms the render-state table above from the
+other direction: `_init_txtgen`, `_init_scene_show`, `_init_scene_generate`, then
+`W3D_CreateContext` with the tag list at `_W3D_ContextTag` (`r2-0x7ca2` =
+`0x1000035c`), `W3D_SetDrawRegion`, and then exactly the enable/disable sequence
+recorded there — `0x100`, `0x200`, `0x400` on; `0x800`, `0x1000`, `4` off;
+`0x2000` on; `0x4000` off; `W3D_Hint(0xa, 1)`.
+
+### `_init_txtgen` is a 1-bit bitmap expander, not a generator
+
+The name suggested a texture generator; the code is 15 instructions and does one
+thing. Source at `[r2+0x247a]`, destination at `[r2+0x24ce]`, 128 outer × 16
+middle × 8 bit iterations = **128 × 128 pixels**, writing one 32-bit word per set
+bit and leaving cleared bits untouched. That is the font mask: 2,048 bytes of
+1bpp expanded to a 128×128 32-bit image, matching the 128×113 glyph atlas the
+font table indexes.
+
+The word it writes is **`0x00FFFFFF`** — in `W3D_A8R8G8B8` that is alpha 0 with
+white RGB, which under a replacing texture environment would be invisible. Since
+the intro never calls `W3D_SetTexEnv`, what the default does with alpha is the
+open question this raises, and it is worth resolving before a port draws text.
 
 ## Fully decoded
 
