@@ -254,10 +254,40 @@ one instead, the operands visibly matter: `op12` with operand `0x20` lifts
 strong fall to 31.62 and 8.18. Three surfaces, each with a role, and no rotation
 at all.
 
-(The exact curve `op12` applies is not established — the outputs converge toward
-a level, which suggests a contrast or gamma form, and the intro does carry a
-`2^x` table. Reading the handler, not fitting the numbers, is the way to settle
-it.)
+#### Reading the handlers beats the behavioural pass
+
+The 20 slots hold **17 distinct handlers** — ops 11 and 12 share `0x10000cfc`,
+14 and 15 share `0x10001324`, 0 and 17 share `0x10000acc`. Reading three of
+them replaces three guesses from the earlier differential pass.
+
+**`op12` is contrast about 128**, and the handler gives it in closed form:
+
+```c
+  k = operand - 128.0;
+  if (operand > 128) k += k;          /* the fadd f16, f16, f16 */
+  if (operand != 128) k /= 128.0;
+  out = in + (in - 128.0) * k;        /* about the midpoint */
+```
+
+Nine measured values across three operands, predicted to the last digit:
+`63.749 → 111.937` against a measured `111.94`, `48.118 → 8.177` against
+`8.18`, and seven more. Derived by reading, then checked against the probe —
+not fitted to it.
+
+**`op11` shares the handler** and takes the other branch: `|operand − 128|`,
+subtracted from 128, through `frsqrte`, negated when the operand is below 128 —
+a reciprocal-square-root curve rather than a linear one.
+
+**`op10` is a channel permutation, not a "darken".** Its operand byte holds four
+2-bit fields, unpacked with `rlwinm` into byte offsets, and passed in pairs to
+`0x100007f8` — which is five instructions that **exchange two channels** of the
+pixel. So op10 applies two transpositions to the RGBA channels. The behavioural
+pass had recorded it as darkening, which is what a channel swap looks like on a
+coloured noise field when you are only measuring mean luminance.
+
+That is the lesson the differential pass could not have reached on its own:
+"what does this do to a test image" and "what does this do" are different
+questions, and the first only approximates the second.
 
 **And `0x100008e4` is the noise source.** Shifts, `xor`s and adds over `r14`,
 `r11` and `r12`, then `rlwinm` to take a byte and `int2float` — a small
