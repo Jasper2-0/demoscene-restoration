@@ -1141,7 +1141,7 @@ Everything below that does not need the outside world has been built and is in
   the seven hunks at their linked addresses and calls any function through CTR.
   Needs `qemu-user-static` and nothing else.
 - **All 69 texture programs rendered**, byte-exactly, 128×128 ARGB. 66 carry
-  varied content, 3 are uniform. The size and format come from the
+  varied content, 25 are uniform. The size and format come from the
   `W3D_AllocTexObj` tag list `_calculate_txt` builds, not from assumption.
 - **38 of the 39 geometry programs decoded** — by running `_generate_obj` with
   `_Warp3DBase` pointed at no-op vectors and reading back the linked list it

@@ -1502,7 +1502,8 @@ port must reproduce: `'0'` appears **twice**, and `'v'` shares `'w'`'s exact
 rectangle, so `v` renders as `w`.
 
 **All 69 textures**, byte-exactly, via `ppcrun.py` + `rendertex.py`. 66 carry
-varied content; 3 are a single uniform colour.
+varied content; **25 are a single uniform colour** — measured, and identical
+across three independent exports. An earlier note here said 3, which was wrong.
 
 **All 38 decodable geometry programs**, via `rungeo.py`.
 

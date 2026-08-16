@@ -588,3 +588,47 @@ export function toARGB(surf) {
   }
   return out;
 }
+
+
+/**
+ * Run a decoded program. `kernels` maps 0x50..0x78 to nine weights.
+ *
+ * Convolutions read `source` and write `work`, everything else works on
+ * `current`, and each operation ends with the symmetry blit — which is why the
+ * blit is here rather than inside each opcode.
+ */
+export function run(ops, kernels, opts = {}) {
+  const s = new Surfaces();
+  for (const { op, operands } of ops) {
+    if (op >= 0x50 && op <= 0x78) {
+      const k = kernels[op];
+      if (!k) throw new Error(`no kernel for ${op.toString(16)}`);
+      s.source.set(s.current);
+      convolve(s.source, s.work, k);
+      s.current.set(s.work);
+      continue;
+    }
+    switch (op) {
+      case 0:  op0(s, operands, opts.ch0 ?? 0); break;
+      case 1:  op1(s, operands); break;
+      case 2:  op2(s, operands); break;
+      case 3:  op3(s, operands); break;
+      case 4:  op4(s, operands); break;
+      case 5:  op5(s, operands); break;
+      case 6:  op6(s, operands); break;
+      case 8:  op8(s, operands); break;
+      case 9:  op9(s, operands); break;
+      case 11: op11(s, operands); break;
+      case 12: op12(s, operands); break;
+      case 13: op13(s, operands); break;
+      case 14: op14(s, operands); break;
+      case 15: op15(s, operands); break;
+      case 16: op16(s, operands, opts.literal ?? null); break;
+      case 17: op17(s, operands, opts.ch0 ?? 0); break;
+      case 18: op18(s, operands); break;
+      case 19: op19(s); break;
+      default: throw new Error(`unhandled opcode ${op}`);
+    }
+  }
+  return s;
+}
