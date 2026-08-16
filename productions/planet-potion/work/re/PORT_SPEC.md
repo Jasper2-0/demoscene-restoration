@@ -108,7 +108,17 @@ component-wise multiply four channels by the parent's, gated by flag bit `0x40`.
 Multiplication, not matrix concatenation.
 
 **3c. Publish.** `anim+0x60/0x64/0x68` become the render node's `cx`, `cy`,
-`scale`.
+`scale` — channels 21, 22 and 23 of the block at `+0x0c`. **Confirmed against
+the running program**: `work/re/animdump.py` dumps the scene graph per frame and
+those three channels equal the `cx`/`cy`/`scale` the emitter used, to the last
+digit, at every time sampled.
+
+`animdump.py` is what a port of this section gets checked against. It writes each
+node's animation object, its keyframe track with all coefficients, and the
+evaluated channels — inputs and answers from the same snapshot. Seed the node
+walk from the draw records rather than the arena base: the graph head lives in a
+global the snapshot does not cover, so walking from the arena finds one node and
+stops.
 
 ## 4. Drawing — `_show_scene`
 
