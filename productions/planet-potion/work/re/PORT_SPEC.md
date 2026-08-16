@@ -383,8 +383,23 @@ stream parameters are 16-bit words whose top bits are flags rather than value:
 
 **`node+0x68` is the primitive selector** — the halfword `_show_scene` tests to
 choose a triangle fan or a line strip (§4). So whether a type-3 node draws a fan
-or a strip is the top bit of its fifth parameter, not a separate opcode. The
-body of the handler beyond this decode is not yet read.
+or a strip is the top bit of its fifth parameter, not a separate opcode: the
+handler does `srwi r25, r26, 0xf; sth r25, 0x68(r27)` at `0x10002b60`, which is
+that claim in two instructions.
+
+**The body, as far as `0x10002ba4`, builds a quad from a centre and half-extents.**
+`p2` and `p3` are the centre and `p0`/`p1` the extents, all four scaled by the
+constant at `r2+0x2bd6` — the same one §3c's text path uses for glyphs:
+
+```
+  f22 = p2 + p4·k      f21 = p3 + p5·k        /* fmadd — centre, offset by p4,p5 */
+  f13 = −(p0·k)        f12 = −(p1·k)          /* fnmadd — the negative extents */
+```
+
+So a type-3 node and a glyph are the same construction with different sources,
+which is consistent with both ending up as one fan. The handler continues to
+`0x10002e10` and **the rest is still unread**; three more constants it loads —
+`r2+0x2e46`, `0x2e4a`, `0x2e4e` — are unidentified.
 
 ### 4b. Geometry is built once — only one opcode evaluates per frame
 
