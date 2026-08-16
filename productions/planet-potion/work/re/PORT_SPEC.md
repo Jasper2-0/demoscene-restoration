@@ -647,10 +647,28 @@ now disproved rather than doubted. The length is at `+0..+1` and bounds the walk
 the first opcode is somewhere after `+2`; and `+2`, `+3` and `+5` are header
 fields whose exact values matter.
 
+**`ff 0f` is not a header marker — it RECURS.** Dumping forty bytes instead of
+twelve:
+
+```
+  p3_10  029b 5bff0f018000 ffffff80 32215 15d 03 001a ff0f 8601 8000...
+  p3_9   0653 5bff0f008000 51800083 004e ff0f 0180 0000...
+```
+
+The `ff 0f` that appears at `+3..+4` appears again further in, in both streams.
+So it is a field of a repeating RECORD, not a one-time header, and the whole
+framing this section has used — "a header, then an opcode stream" — is the wrong
+shape. That also explains why `+4` is insensitive while `+3` beside it is not:
+they are two halves of a per-record field, only one of which is read.
+
+The first byte whose low seven bits are 3 sits at `+16` in `p3_10` and `+11` in
+`p3_9`, and both are followed by another `ff 0f` a few bytes later — consistent
+with records of a few bytes each rather than a long preamble.
+
 Every individual claim here is measured. They still do not compose into a working
-decoder, and the remaining question is narrow and well-posed: **where does the
-first opcode actually sit, and what are `+2`, `+3` and `+5`?** Twelve probes got
-it from "the grammar does not work" to that.
+decoder, and the question is now the right one: **what is the record layout?**
+Twelve probes and a forty-byte dump got it from "the grammar does not work" to
+that, and the framing correction is worth more than any single probe.
 
 `+4` is still worth noting: identical in all 29 streams *and* insensitive, where
 `+3` is identical in all 29 *and* sensitive. "Constant across the production" and
