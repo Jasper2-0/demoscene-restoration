@@ -290,14 +290,44 @@ def export_draws(flat, d0, r2, out, mods=()):
                              'cx': round(d['cx'], 4), 'cy': round(d['cy'], 4),
                              'scale': round(d['scale'], 4), 'clip': d['clip'],
                              # flat per-vertex records: x y z w u v r g b a
-                             'v': [round(c, 5) for vx in d['vertices'] for c in
-                                   (vx['x'], vx['y'], vx['z'], vx['w'], vx['u'],
-                                    vx['v'], *vx['rgba'])]}
+                             #
+                             # ROUNDING IS PER FIELD, because `w` is a
+                             # reciprocal. Five decimals is ample for a screen
+                             # coordinate and ruinous for `w`: the eye depth a
+                             # consumer recovers as `1/w` degrades quadratically
+                             # with distance, and at five places it is worth
+                             # about 5 units at an eye depth of 1,000 and 12,500
+                             # beyond 10,000 — measured over the whole stream by
+                             # projcheck.mjs. So `w`, and the depth `4w` derived
+                             # from it, keep their full float32 precision and
+                             # everything else stays readable.
+                             'v': [c if k in (2, 3) else round(c, 5)
+                                   for vx in d['vertices']
+                                   for k, c in enumerate(
+                                       (vx['x'], vx['y'], vx['z'], vx['w'],
+                                        vx['u'], vx['v'], *vx['rgba']))]}
                             for d in f['draws']]} for f in frames]})
+
+    # FAIL LOUDLY ON A BAD RUN. `json.dump` writes bare NaN and Infinity, which
+    # no other JSON parser accepts — a browser reading the result gets a syntax
+    # error a long way from here, and a Python consumer gets a float that
+    # silently poisons every comparison it touches. A re-export that recorded a
+    # quarter of the usual draws produced exactly that, so check before writing
+    # rather than after someone else's parser complains.
+    nonfinite = sum(1 for s in res for f in (s.get('frames') or [])
+                    for d in f['draws'] for c in d['v'] if c != c or c in (float('inf'), float('-inf')))
+    if nonfinite:
+        raise SystemExit(f'export: {nonfinite} non-finite vertex coordinates — '
+                         'the recording is bad, not the encoding. Re-run rather '
+                         'than writing invalid JSON.')
     json.dump({'screen': [640, 480], 'tick_hz': 50,
                'vertex_fields': ['x', 'y', 'z', 'w', 'u', 'v', 'r', 'g', 'b', 'a'],
-               'projection': 'sx = x*scale/z + cx, sy = y*scale/z + cy; '
-                             'invert with x = (sx-cx)/(scale*w), z = 1/w',
+               # NOTE THE TWO z's. The `z` FIELD in a vertex record is the
+               # depth value the emitter writes, 4/z_eye. Eye-space depth is
+               # 1/w. See PORT_SPEC section 4e.
+               'projection': 'sx = x*scale/z_eye + cx, sy = y*scale/z_eye + cy; '
+                             'the z field is 4/z_eye and w is 1/z_eye; '
+                             'invert with x = (sx-cx)/(scale*w), z_eye = 1/w',
                'uv_space': 'texels (0..128), wrapped — not normalised',
                'z': '4/z as a W3D_Double; w = 1/z; both from a PPC fres estimate',
                'tick': 'frame index at 50Hz, local to the scene',

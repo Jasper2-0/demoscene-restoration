@@ -251,9 +251,20 @@ coordinate to five decimals, and `w` is a reciprocal, so the recovered eye depth
 ```
 
 So a reimplemented `_calc_matrix` can be held to the screen positions tightly and
-to depth only for the near field. Checking it against the far field needs the
-stream re-exported at full precision, which is a change to `export.py` rather
-than a limit of the method.
+to depth only for the near field.
+
+`export.py` now keeps `z` and `w` at full precision and rounds only the fields
+where five decimals are ample, so a fresh export does not have this limit. **The
+dataset in `web/data/` predates that change** and still carries the rounded `w`;
+the figures above describe it, not the exporter.
+
+Re-exporting is not yet a matter of pressing the button. A rerun here recorded
+9,266 draws where the shipped stream has 45,332, with 33,792 non-finite
+coordinates — a defective recording rather than an encoding problem, and its
+cause is not yet found. `export_draws` now refuses to write a stream containing
+them: `json.dump` emits bare `NaN`, which no other JSON parser accepts, so the
+failure would otherwise surface as a syntax error in a browser a long way from
+its cause.
 
 ## 5. Render state
 
