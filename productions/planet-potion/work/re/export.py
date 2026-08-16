@@ -147,7 +147,11 @@ NSAMPLES = 5                              # per scene, spread inside its own spa
 
 def spans(sched):
     """A scene graph stays on screen across the `new_camera` / `dalej` calls that
-    follow it, so its span runs to the next call that builds a new one."""
+    follow it, so its span runs to the next call that builds a new one.
+
+    Yields the r2 DISPLACEMENT, not the stream pointer — the caller resolves it
+    through the small-data base.
+    """
     out = []
     for i, c in enumerate(sched):
         if not c['slot']:
@@ -172,20 +176,20 @@ def export_draws(flat, d0, r2, out, mods=()):
     res, fails = [], 0
     jobs = [('p1', P1_OVERLAY, 0x2642, 0x2706), ('p3', None, 0x27a6, 0x27fe)]
     for part, over, txt, obj in jobs:
-        for order, (strm, start, dur) in enumerate(spans(sch[part]['schedule'])):
+        for order, (disp, start, dur) in enumerate(spans(sch[part]['schedule'])):
             samples = tuple(round(dur * (k + 0.5) / NSAMPLES) for k in range(NSAMPLES))
-            disp = strm
+            strm = g(d0, r2, disp)
             o, _ = drawlog.run(strm, frames=samples, txt_tab=txt, obj_tab=obj,
                                overlay=g(d0, r2, over) if over else None)
             frames = drawlog.parse(o)
             if not frames:
                 fails += 1
                 res.append({'part': part, 'order': order, 'stream': hex(strm),
-                            'startTick': start, 'durTicks': dur, 'frames': None,
+                            'slot': hex(disp), 'startTick': start, 'durTicks': dur, 'frames': None,
                             'note': 'text scene; harness hits the unbounded glyph scan'})
                 continue
             res.append({'part': part, 'order': order, 'stream': hex(strm),
-                        'startTick': start, 'durTicks': dur,
+                        'slot': hex(disp), 'startTick': start, 'durTicks': dur,
                         'overlay': hex(over) if over else None,
                         'frames': [{'t': f['time'], 'draws': [
                             {'prim': d['prim'], 'texture': d['texture'],
