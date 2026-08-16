@@ -252,6 +252,19 @@ The units explain themselves once you notice the surfaces are float RGBA:
 an initial nibble of 0 gives a step of 8 — finer than a pixel — which skips
 refinement entirely.
 
+**`op8` is a per-pixel two-band fill.** It walks the whole surface with both
+axes *descending* from `0x7f0` in `0x10` steps — one pixel — and for each pixel
+computes a value from the parameters at `+0x30`/`+0x34`, compares it against
+`+0x3c`, and selects one of two parameter pairs on the result: either `+0x40`
+with source blocks `+0x10`/`+0x20`, or `+0x38`/`+0x3c` with blocks `+0x00`/`+0x54`.
+One float (`f18`) steps once per row, so the field varies down the image. The
+last operand byte (`+0x11`) feeds a setup call before the loop.
+
+It is the only handler that reaches `+0x54`, so its parameter block is at least
+`0x58` bytes — the widest in the set, matching its 18 operands. Like `op9` it
+contains an `fcmpo`, so it was unreadable before the resync fix; the comparison
+that selects the band is precisely the instruction capstone could not decode.
+
 Read so far:
 `op10` permutes channels by two swaps, `op11` applies an `frsqrte` curve about
 128, `op12` is `out = in + (in − 128)·k` with `k = (operand − 128)/128` doubled
