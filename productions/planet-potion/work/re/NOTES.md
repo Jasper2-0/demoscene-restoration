@@ -719,9 +719,29 @@ only against this stream.
 That is a limitation of the oracle, not of the intro, and it is worth stating
 plainly because an earlier note here claimed the approximation was visible in
 what was recorded. It is not. The same applies to the `frsqrte` in the geometry
-evaluate pass. Whether the difference matters at 640×480 into a 16-bit
-framebuffer is a question only a capture can answer — and it is now on the short
-list of things that a capture, and nothing else, can settle.
+evaluate pass.
+
+**How much could it matter?** Bounded from the recorded stream itself. A relative
+error `e` in `w` moves a vertex by `|screen − centre| · e`, so over the export's
+**144,744 vertices**, at the architecture's 1/256:
+
+| | displacement |
+|---|---|
+| median | 0.39 px |
+| 95th percentile | 1.25 px |
+| maximum | 2.50 px |
+| over half a pixel | 57,381 vertices — **39.6%** |
+
+So it is not negligible: two fifths of the geometry could sit more than half a
+pixel from where the harness puts it, and the extremes are two and a half pixels
+out at the screen edges, where `|screen − centre|` is largest.
+
+Two qualifications. This is the **architectural bound**, and real 603e/604e
+implementations are typically well inside it, so the true figure is likely far
+smaller — this is a ceiling, not an estimate. And it is a *displacement* bound,
+not an error: whichever way the hardware rounds, it does so consistently, so the
+effect is a slight systematic warp toward or away from the projection centre
+rather than jitter.
 
 ### The projection is per-node, and that is the camera model
 
