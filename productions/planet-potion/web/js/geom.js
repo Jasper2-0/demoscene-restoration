@@ -33,7 +33,8 @@
 //
 // so an opcode at exactly `r30` is read and then discarded. Stopping one byte
 // later, or testing before the increment, changes which programs terminate.
-import { f32 } from './fp.js';
+import { f32, fma } from './fp.js';
+import { fctiw } from './tables.js';
 
 // `_generate_obj`'s own constants, both read from the small data area:
 // `[r2+0x2dee]` is 255.0 and `[r2+0x2dd2]` is 128.0. It then derives
@@ -393,6 +394,119 @@ export function buildOp0(node, table) {
         z += dz;
       }
       plane(z);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// op3's three transforms, `0x100041b0`, `0x100042cc` and `0x100041ec`.
+//
+// EACH ONE IS A PASS OVER THE WHOLE VERTEX CHAIN, not over one vertex, and that
+// is what makes op3 an array modifier rather than a stack of identical copies.
+// The eval loop clones the source, transforms EVERYTHING accumulated so far,
+// and repeats — so after three rounds the first copy has been transformed three
+// times, the second twice and the third once, and they lie along an arc.
+//
+// They also write back through `stfs` per vertex per pass, so the truncation is
+// real here in a way it is not inside a single expression.
+
+function translateAll(V, t) {
+  for (const v of V) {
+    v[0] = f32(v[0] + t[0]); v[1] = f32(v[1] + t[1]); v[2] = f32(v[2] + t[2]);
+  }
+}
+
+/** `0x100041ec` — the operand is in 0..255 units, the same convention the
+ *  texture VM uses for colour. */
+function scaleAll(V, s) {
+  const a = s[0] / K255, b = s[1] / K255, c = s[2] / K255;
+  for (const v of V) {
+    v[0] = f32(v[0] * a); v[1] = f32(v[1] * b); v[2] = f32(v[2] * c);
+  }
+}
+
+/**
+ * `0x100042cc` — the operand is in DEGREES, as a float.
+ *
+ * It goes through `float2int` before the multiply by 91, so the angle is
+ * rounded to a whole degree first and only then scaled to a table index. The
+ * arithmetic is `fmsub`/`fmadd` — fused — and the axis senses here are exactly
+ * the ones `transformVertex` uses, which is worth knowing: that routine's
+ * matrix was recovered from the geometry rather than read, and this is the
+ * disassembly agreeing with it.
+ */
+function rotateAll(V, deg, table) {
+  const at = (d) => {
+    const i = ((fctiw(d) * 0x5b) & 0x7ffc) >>> 2;
+    return [table[i], table[i + 2048]];
+  };
+  const [sx, cx] = at(deg[0]), [sy, cy] = at(deg[1]), [sz, cz] = at(deg[2]);
+  for (const v of V) {
+    const x = v[0], y = v[1], z = v[2];
+    const y1 = fma(y, cx, -(z * sx));
+    const z1 = fma(y, sx, z * cx);
+    const x2 = fma(z1, sy, x * cy);
+    const z2 = fma(z1, cy, -(x * sy));
+    v[0] = f32(fma(y1, sz, x2 * cz));
+    v[1] = f32(fma(y1, cz, -(x2 * sz)));
+    v[2] = f32(z2);
+  }
+}
+
+/**
+ * op3's generator — `count` progressively transformed copies of an earlier node.
+ *
+ * `0x10003e9c` walks `at18` links from the list head, walks THIS node's chain to
+ * its tail, and appends a copy of every vertex the source owns; the triangles
+ * come with it, with every index rebased by the number of vertices already
+ * here. Then the packed 2-bit selectors in `sel` pick up to four transforms,
+ * each consuming one triple, and each running over everything built so far.
+ *
+ * The selector loop shifts first and tests after, so a `sel` of zero still runs
+ * one round — and an empty group advances the triple slot without reading it,
+ * which is the same rule the build handler used to decide how many triples to
+ * take out of the stream.
+ */
+export function buildOp3(node, source, table) {
+  const V = [];
+  for (let iter = 0; iter < node.count; iter++) {
+    for (const p of source) V.push([p[0], p[1], p[2]]);
+    let sel = node.sel, slot = 0;
+    for (;;) {
+      const kind = sel & 3;
+      const t = node.triples[slot];
+      if (kind === 1) translateAll(V, t);
+      else if (kind === 2) rotateAll(V, t, table);
+      else if (kind === 3) scaleAll(V, t);
+      slot++; sel >>>= 2;
+      if (sel === 0) break;
+    }
+  }
+  return V;
+}
+
+/**
+ * Build every node of a decoded program, in list order.
+ *
+ * Order is not a convenience here: op3 reads an earlier node's FINISHED vertex
+ * chain, so the list has to be built front to back and an op3 whose source is
+ * unbuilt cannot be built either. `vertices` is null for those and for op4,
+ * whose spline sweep is not ported — a caller must check rather than assume.
+ */
+export function buildProgram(decoded, table) {
+  const out = [];
+  for (const node of decoded.nodes) {
+    if (node.op === 0) {
+      out.push({ op: 0, vertices: buildOp0(node, table) });
+    } else if (node.op === 3) {
+      const src = out[node.at18];
+      out.push({
+        op: 3,
+        vertices: src && src.vertices ? buildOp3(node, src.vertices, table) : null,
+      });
+    } else {
+      out.push({ op: node.op, vertices: null });
     }
   }
   return out;

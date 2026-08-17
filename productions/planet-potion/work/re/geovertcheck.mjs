@@ -13,14 +13,21 @@
 // several revisions before it was right at all, and a tolerance anywhere in the
 // 1e-3 to 1e-5 range would have called each of those wrong versions a pass.
 //
-// ONLY op0 IS PORTED. op3 clones an earlier node's chain and op4 sweeps a
-// Catmull-Rom spline; both are counted and named below rather than skipped
-// silently, because between them they hold 9,690 of the 11,723 vertices and a
-// green line covering 2,033 of them should not be mistaken for the set.
+// op0 AND op3 ARE PORTED, op4 IS NOT, and the arithmetic of that is not
+// two-thirds. op4's spline sweep owns 2,188 vertices directly — but op3 CLONES
+// an earlier node, so every op3 whose chain bottoms out at an op4 is unbuildable
+// too, and that is another 4,882. The check counts those two causes separately
+// below, because "op3 is ported" and "every op3 node can be built" are different
+// statements and only the first is true.
+//
+// Nothing here reads a vertex position out of the oracle: `buildProgram` walks
+// the node list front to back and op3 clones what the port itself built. An
+// earlier version fed op3 from `geo.json` to isolate its logic, which was the
+// right way to FIND the model and the wrong way to keep testing it.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decodeProgram, buildOp0 } from '../../web/js/geom.js';
+import { decodeProgram, buildProgram } from '../../web/js/geom.js';
 import { sinus } from '../../web/js/tables.js';
 
 const ABSENT = 77;
@@ -60,13 +67,17 @@ for (const p of doc.programs) {
   const seg = segs.find((s) => addr >= s.base && addr < s.base + s.data.length);
   if (!seg) continue;
   const got = decodeProgram(seg.data, addr - seg.base, null);
+  // Built front to back: op3 clones an EARLIER node's finished chain, so
+  // nothing here reads a vertex out of the oracle.
+  const program = buildProgram(got, table);
 
   p.nodes.forEach((want, i) => {
-    if (want.op !== 0) {
+    const b = program[i];
+    if (!b.vertices) {
       unported.set(want.op, (unported.get(want.op) ?? 0) + want.vertices.length);
       return;
     }
-    const built = buildOp0(got.nodes[i], table);
+    const built = b.vertices;
     if (built.length !== want.vertices.length) {
       countBad++; nodesBad++;
       failures.push(`${p.part}[${p.index}] node ${i}: built ${built.length} `
@@ -107,14 +118,14 @@ const ok = (name, pass, detail = '') => {
   if (!pass) failed++;
 };
 
-console.log(`op0: ${nodesOK + nodesBad} nodes, ${vOK + vBad} vertices\n`);
+console.log(`${nodesOK + nodesBad} nodes built, ${vOK + vBad} vertices\n`);
 
-ok('op0 builds the same number of vertices as the original', countBad === 0,
+ok('every built node has the same vertex count as the original', countBad === 0,
   `${nodesOK + nodesBad} nodes`);
-ok('every op0 vertex position is bit-exact', vBad === 0,
+ok('every built vertex position is bit-exact', vBad === 0,
   `${vOK}/${vOK + vBad}`
   + (worst ? `, worst |diff| ${worst.toExponential(2)} at ${worstAt}` : ''));
-ok('every op0 node matches in full', nodesBad === 0,
+ok('every built node matches in full', nodesBad === 0,
   `${nodesOK}/${nodesOK + nodesBad}`);
 // The transform pipeline is the part that was hardest to get right, so the
 // check states how much of it the data actually reached.
@@ -123,10 +134,16 @@ ok('the record transform is exercised, not just identity records',
   `${seen.rotate} rotate, ${seen.scale} scale, ${seen.translate} translate, `
   + `${seen.plain} plain`);
 
-for (const [op, n] of [...unported].sort()) {
-  console.log(`     op${op} is not ported: ${n} vertices not checked here`);
+const blocked = unported.get(3) ?? 0;
+console.log(`     op4 is not ported: ${unported.get(4) ?? 0} vertices`);
+if (blocked) {
+  console.log(`     and ${blocked} more op3 vertices cannot be built because `
+    + 'their clone chain bottoms out at an op4');
 }
+const total = vOK + vBad + blocked + (unported.get(4) ?? 0);
+console.log(`     ${vOK} of ${total} vertices in the intro are covered here`);
 for (const f of failures) console.log(`     ${f}`);
 
 if (failed) process.exit(1);
-console.log('\nop0\'s box and plane generator reproduces the original exactly');
+console.log('\nop0\'s box and plane and op3\'s array modifier reproduce the '
+  + 'original exactly');
