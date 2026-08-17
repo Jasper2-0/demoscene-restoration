@@ -450,7 +450,18 @@ function applyUVs(triangles, positions, gen, records, atanTable) {
   const rec = records[0];
   if (!rec || !positions.built.length) return;
   const b1 = bounds(positions.source);
-  const b2 = bounds(positions.box ?? positions.built);
+  // THE TRANSFORMED BOX IS SEEDED FROM AN UNTRANSFORMED POINT. `0x10003a98`
+  // copies the first vertex's SOURCE position into both the min and the max of
+  // the second box, and the loop that follows only ever folds in transformed
+  // ones — so the box spans the union of one source corner and the whole
+  // transformed set, and is wildly bigger than the geometry it bounds whenever
+  // the record translates.
+  //
+  // Recovered by inverting two corners rather than by reading it: a node whose
+  // transformed y ran 604.412 to 904.412 produced coordinates implying a box of
+  // lo = -150.588 and extent 1055, and -150.588 is exactly that node's SOURCE
+  // minimum. Six instructions later the disassembly says the same thing.
+  const b2 = bounds([positions.source[0], ...(positions.box ?? positions.built)]);
   for (const t of triangles) {
     // r3 starts as the record's flag and is clobbered by any atan call.
     const state = { seen: false, u: 0, v: 0, r3: rec.flag };

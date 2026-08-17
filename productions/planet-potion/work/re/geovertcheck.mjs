@@ -229,29 +229,19 @@ ok('the builder leaves every source colour at zero', colourBad === 0,
 // with the node's bounding box as the divisor — and kind 4 then overwrites two
 // of the three pairs with a different formula. Named here with a count so that
 // "the material is exact" is not read as covering the texture coordinates.
-// A RATCHET, not a pass. Five of the seven projection modes reproduce exactly;
-// 0x30 and 0x40 leave 136 triangles, so the number below is what has been
-// earned rather than what is right. Asserted, so a regression in the five that
-// work fails the suite, and split per mode so the two that do not cannot be
-// averaged into looking fine.
-const UV_FLOOR = 18938;
-ok('the UV projection reproduces at least what it did', uvOK >= UV_FLOOR,
-  `${uvOK}/${uvOK + uvBad} triangles, floor ${UV_FLOOR}`);
+// All seven projection modes, exactly — no ratchet. The per-mode split stays
+// because it is what made the two hard ones tractable: an aggregate would have
+// read 95% while 0x30 and 0x40 were entirely broken, and the split said which.
+ok('every texture coordinate is bit-exact', uvBad === 0,
+  `${uvOK}/${uvOK + uvBad} triangles, all seven projection modes`);
 for (const [k, v] of [...uvBySub].sort()) {
   console.log(`     ${k}  ${v.ok} exact${v.bad ? `, ${v.bad} NOT reproduced` : ''}`);
 }
-if (uvBad) {
-  console.log('     what is left in 0x30 and 0x40 is narrow: u matches on '
-    + 'every corner, and so does v except on the ONE corner whose box '
-    + 'coordinate is zero, where the original writes 91.6019 and every '
-    + '(point, box) pairing available gives 0. So v there is not '
-    + 'n.y * span + size at all, and no register carried from the previous '
-    + 'corner accounts for it either');
-}
+
 ok('every vertex in the intro is covered', skipped === 0,
   `${vOK} of ${vOK + vBad + skipped}`);
 for (const f of failures) console.log(`     ${f}`);
 
 if (failed) process.exit(1);
-console.log('\nvertices, triangles, normals and materials are exact; '
-  + `UVs are ${uvOK}/${uvOK + uvBad} and two projection modes are unsolved`);
+console.log('\nthe geometry builder is reproduced in full: vertices, '
+  + 'triangles, normals, materials and texture coordinates');
