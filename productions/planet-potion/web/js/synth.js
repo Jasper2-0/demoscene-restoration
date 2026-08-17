@@ -99,6 +99,7 @@ const fdivs = (a, b) => fs(a / b);
 const fmadds = (a, c, b) => fs(fma(a, c, b));
 const fnmsubs = (a, c, b) => fs(-fma(a, c, -b));
 
+
 /**
  * `0x1000a2d4(value, limit)` — symmetric clamp to [-limit, +limit].
  *
@@ -161,6 +162,8 @@ export function decodeScript(seg0, lo, hi) {
       regs[`r${rD}`] = { load: simm };
     } else if (op === 48 && rA === 2) {               // lfs fD, disp(r2)
       regs[`f${rD}`] = { r2: simm };
+    } else if (op === 63 && ((w >>> 1) & 0x3ff) === 72) {   // fmr fD, fB
+      regs[`f${rD}`] = { fmr: (w >>> 11) & 31 };
     }
   }
   return out;
@@ -211,16 +214,18 @@ export class SynthContext {
     const last = this.w(0x2efe);
     this.mem = new Float32Array((last - this.memBase + 80000) / 4);
 
-    // THE GENERAL REGISTERS ARE MACHINE STATE, not per-call arguments, and
-    // `0x1000742c` is why. Sixteen of its eighteen calls carry no setup at all,
-    // because `r25` is a TAPE CURSOR the routine advances itself and leaves for
-    // the next call — the script sets it once, twenty calls earlier, in the
-    // setup for `0x10007284`. Any model that hands a primitive its arguments
-    // and forgets them produces the first of those samples and then sixteen
-    // wrong ones.
+    // THE REGISTERS ARE MACHINE STATE, not per-call arguments. `r8` is the
+    // clearest case: the script sets it once and several following calls run
+    // under it, and its authors knew — they re-set it after every call that
+    // could clobber it. `r10`, `r19` and the parameter-block pointers behave
+    // the same way.
     //
-    // `r8` is sticky for the same reason, and the script's authors knew it:
-    // they re-set it after every call that could clobber it.
+    // The float registers are here too rather than in `g`, because f0 is a
+    // real argument to `0x10008c9c` and the script sets it two different ways:
+    // `lfs f0, 0x2d5e(r2)` at two call sites and `fmr f0, f30` at the third.
+    // Missing that `fmr` cost an afternoon — decodeScript modelled `lfs` only,
+    // so f0 read as whatever was left over and the sample was wrong from
+    // frame 267.
     this.g = {};
 
     // The PRNG, `0x1000a1f4` (seed) and `0x1000a20c` (step) — a plain LCG on
@@ -354,6 +359,15 @@ export class SynthContext {
    */
   applySetup(setup) {
     for (const [name, v] of Object.entries(setup)) {
+      // An `lfs fN, disp(r2)` in the script loads a FLOAT REGISTER, so it goes
+      // to the register file rather than to `g` — and a later call that does
+      // not reload it does not inherit it either, because everything in
+      // between has used f0 as scratch. `0x10008c9c` is the only primitive
+      // that takes a float argument and the only one this distinction reaches.
+      if (name[0] === 'f') {
+        this[name] = 'r2' in v ? this.k(v.r2) : this[`f${v.fmr}`];
+        continue;
+      }
       if (v && typeof v === 'object') {
         this.g[name] = 'r2' in v ? SEG0 + R2 + v.r2 : this.w(v.load);
       } else {
@@ -387,6 +401,11 @@ export class SynthContext {
    * `do { … } while (c.emit())`.
    */
   emit() {
+    // f0 is left holding the raw fctiw result — the clamp below applies to the
+    // GPR copy, not the register. Its top 32 bits are architecturally
+    // undefined, so its value as a double is not something to rely on, and
+    // nothing does: `0x10008c9c` is the only primitive that reads f0 and the
+    // script sets it before all three of its calls.
     let v = fctiw(this.f29);
     if (v > 127) v = 127;
     else if (v < -128) v = -128;
@@ -659,6 +678,7 @@ export function gen_10009020(c) {
     }
 
     c.f29 = f12 * c.k(0x2d8e) * f16;
+    c.f4 = f4;
     // `cmpw r17, r18; blt` guards a reset of f4 and f19 that CANNOT RUN: the
     // emitter wraps r17 to 0 the instant it reaches r18, so r17 < r18 holds at
     // every visit. Transcribed as dead because it is dead, not omitted — the
@@ -763,6 +783,7 @@ export function gen_10009258(c) {
     f13 = fmadd(f14, f12 * c.k(0x2be6), f13);
     const kOut = c.k(0x2c3e);
     c.f29 = fmsub(f15v, kOut, (c.f30 - kOut) * f29);
+    c.f4 = f4;
   } while (c.emit());
 }
 
@@ -877,6 +898,7 @@ export function gen_10009510(c) {
     f14 = fmadds(f15, f10, f14);
     f13 = fmadds(f14, f10, f13);
     c.f29 = fmuls(fsubs(f29, fadds(f14, f15)), c.k(0x2bd6));
+    c.f4 = f4;
     // As in 0x10009020, `cmpw r17, r18` guards a reset the emitter's wrap makes
     // unreachable. Left out here rather than written as dead code, because it
     // would touch four registers and read as live.
@@ -887,10 +909,12 @@ export function gen_10009510(c) {
  * `0x1000742c` — part three's voice. 18 of its 38 samples, sixteen of them
  * consecutive with no arguments at all.
  *
- * ITS SEED DATA IS A TAPE, NOT A TABLE, and `r25` is a cursor the routine
- * advances and leaves behind for the next call — which is the whole reason
- * sixteen consecutive calls need no setup. The script points `r25` at
- * `r2+0x362a` once, twenty calls earlier, in `0x10007284`'s setup.
+ * ITS SEED DATA IS A TAPE, NOT A TABLE. `r25` is a cursor the routine advances
+ * across its own blocks — but NOT across calls, and §8h has that wrong. It
+ * says the sixteen consecutive calls need no setup because the cursor carries
+ * over; in fact each of the eighteen calls is preceded by its own
+ * `lwz r25, 0x372a+4k(r2)`, a table of eighteen tape pointers. `synthscript.py`
+ * does not record `lwz`, which is why those calls looked bare.
  *
  * The tape reads:
  *
@@ -1517,9 +1541,98 @@ export function gen_10009a8c(c) {
   ladder3Body(c, c.g.r10 ?? 0, SEG0 + R2 + 0x34ca, r24, r24, SEG0 + R2 + 0x314a);
 }
 
+/**
+ * `0x10008c9c` — three calls: 120,000 frames twice and 150,000 once.
+ *
+ * THE ONLY PRIMITIVE THAT TAKES A FLOAT ARGUMENT. The script sets it with
+ * `lfs f0, 0x2d5e(r2)` and the routine keeps it in `f9` as a frequency offset
+ * added to all three oscillators — so this is one voice at a pitch the script
+ * chooses, rather than one with a pitch of its own.
+ *
+ * Three sawtooth-ish oscillators built by hand rather than by phase wrapping:
+ * each accumulates a sine-modulated increment into `f26`/`f25`/`f5` and holds a
+ * sign in `f28`/`f27`/`f6` that goes to -1 when the accumulator passes a
+ * threshold and back to +1 when it wraps. `r10` picks the wrap point, and with
+ * it the octave.
+ *
+ * Their sum runs through two integrators and a resonant pair whose coefficient
+ * `f18` is, for `r10 != 0`, a slow linear ramp — and for `r10 == 0`, a COSINE
+ * sweep, plus a saturating output stage the other variant does not have.
+ */
+export function gen_10008c9c(c) {
+  const r10 = c.g.r10 ?? 0;
+  const r19 = c.g.r19;
+  c.startSample(r19);
+  let f28 = c.f30, f27 = c.f30, f6 = c.f30;
+  let f25 = c.k(0x2df2), f18 = c.k(0x2a9a);
+  const f9 = c.f0;
+  let f5 = c.f5, f26 = c.f26, f24 = c.f24, f22 = c.f22, f19 = c.f19;
+  let f4 = c.f4, f7 = c.f7, f8 = c.f8, f10 = c.f10, f11 = c.f11, f12 = c.f12;
+  let f13 = c.f13, f14 = c.f14, f16 = c.f16, f17 = c.f17;
+  const half = c.k(0x2bd6);
+
+  do {
+    f8 += c.k(0x2a9e);
+    f7 += c.k(0x2aaa);
+    f12 += c.k(0x2aa2);
+    f11 += c.k(0x2aa6);
+
+    let o = c.sin(f12);
+    f26 += fmadd(o, c.k(0x2b1a), f9);
+    f28 = fsel(f26 - fmadd(o, c.k(0x2dd2), c.k(0x2df2)), -c.f30, f28);
+
+    o = c.sin(f11);
+    f25 += fnmsub(o, c.k(0x2b1a), f9);
+    f27 = fsel(f25 - fnmsub(o, c.k(0x2dd2), c.k(0x2df2)), -c.f30, f27);
+
+    f5 += f9;
+    o = c.sin(f8);
+    f6 = fsel(f5 - fmadd(o, c.k(0x2dd6), c.k(0x2df2)), -c.f30, f6);
+
+    const wrap = r10 === 0 ? c.k(0x2e26) : c.k(0x2e0e);
+    if (f26 >= wrap) { f26 -= wrap; f28 = c.f30; }
+    if (f25 >= wrap) { f25 -= wrap; f27 = c.f30; }
+    if (f5 >= wrap) { f5 -= wrap; f6 = c.f30; }
+
+    const mix = f28 - f27 + f6;
+    f17 += mix - fmadd(c.k(0x2c06), f17, f16);
+    f16 = fmadd(f17, half, f16);
+    const f15 = f16 - fmadd(c.k(0x2c2a), f14, f13);
+    f14 += f15;
+    f13 = fmadd(f14, fmadd(c.sin(f7), c.k(0x2b3e), c.k(0x2baa)), f13);
+
+    let a, b;
+    if (r10 !== 0) {
+      f18 += c.k(0x2a7e);
+      a = c.k(0x2b0e); b = c.k(0x2b96);
+    } else {
+      f18 = fnmsub(c.cos(f10), c.k(0x2b1e), c.k(0x2b42));
+      f10 += c.k(0x2a82);
+      a = c.k(0x2b4a); b = half;
+    }
+    let v = fnmsub(a, f22, f16 + f16);
+    v = fnmsub(f24, b, v);
+    f22 = fmadd(v, f18, f22);
+    f24 = fmadd(f22, f18, f24);
+    c.f29 = f22 - f24;
+
+    if (r10 === 0) {
+      const f3 = c.k(0x2d5e) * f24;
+      const f2 = clampSym(f3, c.k(0x2d86));
+      const k = c.k(0x2b06);
+      f19 = fmadd(f2 - f19 - f4, k, f19);
+      f4 = fmadd(f19, k, f4);
+      const wet = c.k(0x2bae);
+      c.f29 = fmadd(c.f30 - wet, f3, c.k(0x2d7e) * f4 * wet);
+    }
+    c.f4 = f4;
+  } while (c.emit());
+}
+
 /** Address -> implementation. Everything absent is filled from the oracle. */
 export const PRIMITIVES = {
   0x10008430: gen_10008430,
+  0x10008c9c: gen_10008c9c,
   0x10009a68: gen_10009a68,
   0x10009a8c: gen_10009a8c,
   0x10008ac4: gen_10008ac4,
