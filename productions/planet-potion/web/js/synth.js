@@ -1139,8 +1139,183 @@ export function gen_10008e8c(c) {
   } while (c.emit());
 }
 
+/**
+ * `0x100087b0` — 32,768 frames, one call in part one.
+ *
+ * A single sine whose argument runs away (`f27 *= k` every frame, read
+ * negated) into a two-pole filter, then through the reverb inverted — `fneg f1,
+ * f16` — and mixed back against the dry signal. Two decays again, `f12` and
+ * `f11`, with `f11` stopping at frame 0x2a30 and `f12` changing rate there.
+ *
+ * `f19` is the attack, rising and clamped at 1.0.
+ */
+export function gen_100087b0(c) {
+  reverbInit(c, 0x10009f40);
+  c.startSample(0x8000);
+  let f12 = c.f30, f11 = c.f30;
+  let f19 = c.k(0x2afa), f27 = c.k(0x2dba);
+  let f16 = c.f16, f17 = c.f17;
+  do {
+    const f28 = c.sin(-f27);
+    f19 = f19 * c.k(0x2d0e);
+    f19 = fsel(f19 - c.f30, c.f30, f19);
+    const f9 = f28 * c.k(0x2d72) * f19 * (f12 * f11);
+    const k = c.k(0x2afa);
+    const drive = f9 - f16 - f17;
+    f17 = fmadd(drive, k, f17);
+    f16 = fmadd(f17, k, f16);
+    let v = reverb(c, -f16, c.k(0x2c5e)) * c.k(0x2bba);
+    v = fmadd(f9, c.k(0x2bea), v) * c.k(0x2bb6);
+    c.f29 = v * c.k(0x2e0e);
+    f27 = f27 * c.k(0x2c8e);
+    if (c.r20 < 0x2a30) {
+      f12 = f12 * c.k(0x2cae);
+      f11 = fnmsub(f11, c.k(0x2a8e), f11);
+    } else {
+      f12 = f12 * c.k(0x2ca6);
+    }
+  } while (c.emit());
+}
+
+/**
+ * `0x10008430` — 201,600 frames in 32 steps of 6,300, one call in part one.
+ *
+ * Noise into a resonant filter whose cutoff comes from a per-step byte table at
+ * `r2+0x34e2`, scaled by `f6`. Reverberated and mixed.
+ *
+ * THE THREE-STATE ENVELOPE IS DRIVEN BY THE STEP TABLE'S FLAG HERE, not by a
+ * note: `r2+0x350a` says whether this step releases late (0xd89) or early
+ * (0x3b1), and `r17 == 0xa` re-attacks ten frames into every step. So the
+ * pattern is entirely in the two byte tables and the routine takes no
+ * arguments at all.
+ */
+export function gen_10008430(c) {
+  reverbInit(c, 0x10009f68);
+  c.r18 = 0x189c;
+  c.startSample(0x31380);
+  c.srand();
+  const r24 = SEG0 + R2 + 0x350a, r25 = SEG0 + R2 + 0x34e2;
+  c.r15 = 0;
+  let f12 = c.f30, f6 = c.k(0x2d3a);
+  let f16 = c.f16, f17 = c.f17;
+  do {
+    const noise = c.rand() * c.k(0x2dd2);
+    let f2 = noise * c.k(0x2a6e);
+    let f0 = c.u8(r25 + c.r16) / c.k(0x2dc2);
+    f0 = f0 * f6 * c.k(0x2bc6);
+    f2 = f2 - fmadd(c.k(0x2b2a), f17, f16);
+    f17 = fmadd(f0, f2, f17);
+    f16 = fmadd(f17, f0, f16);
+
+    if (c.r17 === 0xa) c.r15 = 0;
+    if (c.u8(r24 + c.r16) !== 0) {
+      if (c.r17 === 0xd89) c.r15 = 2;
+    } else if (c.r17 === 0x3b1) {
+      c.r15 = 2;
+    }
+
+    if (c.r15 === 0) {
+      f6 = c.k(0x2d3a); f12 = c.f30; c.r15 = 1;
+    } else if (c.r15 === 1) {
+      f12 = f12 * c.k(0x2cce); f6 = f6 * c.k(0x2cd2);
+    } else if (c.r15 === 2) {
+      f12 = f12 * c.k(0x2c86); f6 = f6 * c.k(0x2caa);
+    }
+
+    let f29 = c.k(0x2d52) * f2 * f12;
+    f29 = f29 * (c.u8(r25 + c.r16) / c.k(0x2dd2));
+    const wet = reverb(c, f29, c.k(0x2c1a));
+    c.f29 = fmadd(wet, c.k(0x2baa), f29 * c.k(0x2c06));
+  } while (c.emit());
+}
+
+/**
+ * `0x10008b00` — the body behind THREE entry points, §8e's alternate-entry case.
+ *
+ *     0x10008ac4   82,688 frames, step 2,584   r21 = r2+0x354a, r10 = 1
+ *     0x10008adc   25,200 frames, step 3,150   r21 = r2+0x315a, r10 = 0
+ *     0x10008af4  100,800 frames, step 3,150   r21 and r10 FROM THE SCRIPT
+ *
+ * Six one-pole filters on the same noise source, at six different cutoffs,
+ * SUBTRACTED from each other — `f15 - f14 - f13 - f26 - f25 - f19` — which is a
+ * crude band-pass bank and gives the noise a pitch. Then one resonant filter
+ * whose coefficient is the product of two per-step byte tables.
+ *
+ * `r10` SELECTS THE TABLES AND HOW THEY ARE INDEXED at the same time. At 0 the
+ * step index is masked to 8 (`andi. r9, r16, 7`), so an 8-entry pattern repeats
+ * across all 32 steps; at 1 it is used whole against a different pair of
+ * tables. That is one routine covering both a short loop and a long one.
+ *
+ * `f8` and `f28` are loaded before the loop and never read. Transcribed as
+ * absent rather than as dead assignments, but noted so the next reader checking
+ * this against the disassembly does not go looking for their use.
+ */
+function bandBody(c, r10, r21) {
+  c.srand();
+  let r24 = SEG0 + R2 + 0x3502, r25 = SEG0 + R2 + 0x34da;
+  if (r10 !== 0) { r24 = SEG0 + R2 + 0x36aa; r25 = SEG0 + R2 + 0x368a; }
+  c.r15 = 2;
+  let f12 = c.f30, f6 = c.k(0x2d3a);
+  let f13 = c.f13, f14 = c.f14, f15 = c.f15, f16 = c.f16, f17 = c.f17;
+  let f19 = c.f19, f25 = c.f25, f26 = c.f26;
+  do {
+    const n = c.rand() * c.k(0x2dd2);
+    f15 = fmadd(f15, c.k(0x2c6e), c.k(0x2b02) * n);
+    f14 = fmadd(f14, c.k(0x2c5a), c.k(0x2b0a) * n);
+    f13 = fmadd(f13, c.k(0x2c4e), c.k(0x2b16) * n);
+    f26 = fmadd(f26, c.k(0x2c3e), c.k(0x2b3a) * n);
+    f25 = fmadd(f25, c.k(0x2bee), c.k(0x2b46) * n);
+    f19 = fmadd(f19, c.k(0x2b96), c.k(0x2b9a) * n);
+    const f3 = (f15 - f14 - f13 - f26 - f25 - f19) * c.k(0x2a6e);
+
+    const r9 = r10 !== 0 ? c.r16 : (c.r16 & 7);
+    let f29 = (c.u8(r24 + r9) / c.k(0x2dce)) * f6;
+    f29 = (c.u8(r21 + c.r16) * c.k(0x2afa)) * f29;
+
+    let f18 = fnmsub(f17, c.k(0x2b56), f3);
+    f18 = fnmsub(f16, c.k(0x2bae), f18);
+    f17 = fmadd(f18, f29, f17);
+    f16 = fmadd(f17, f29, f16);
+
+    if (c.r17 === 0xa) c.r15 = 0;
+    if (c.r17 === 0x3b1) c.r15 = 2;
+    if (c.r15 === 0) {
+      f6 = c.k(0x2d3a); f12 = c.f30; c.r15 = 1;
+    } else if (c.r15 === 1) {
+      f12 = f12 * c.k(0x2cce); f6 = f6 * c.k(0x2caa);
+    } else if (c.r15 === 2) {
+      f12 = f12 * c.k(0x2c86); f6 = f6 * c.k(0x2c82);
+    }
+
+    c.f29 = (c.u8(r25 + r9) / c.k(0x2dd2)) * f12 * c.k(0x2d66) * f17;
+  } while (c.emit());
+}
+
+export function gen_10008ac4(c) {
+  c.r18 = 0xa18;
+  c.startSample(0x14300);
+  bandBody(c, 1, SEG0 + R2 + 0x354a);
+}
+
+export function gen_10008adc(c) {
+  c.r18 = 0xc4e;
+  c.startSample(0x6270);
+  bandBody(c, 0, SEG0 + R2 + 0x315a);
+}
+
+export function gen_10008af4(c) {
+  c.r18 = 0xc4e;
+  c.startSample(0x189c0);
+  bandBody(c, c.g.r10 ?? 0, c.g.r21);
+}
+
 /** Address -> implementation. Everything absent is filled from the oracle. */
 export const PRIMITIVES = {
+  0x10008430: gen_10008430,
+  0x10008ac4: gen_10008ac4,
+  0x10008adc: gen_10008adc,
+  0x10008af4: gen_10008af4,
+  0x100087b0: gen_100087b0,
   0x10008e8c: gen_10008e8c,
   0x10008f38: gen_10008f38,
   0x10008f64: gen_10008f64,
