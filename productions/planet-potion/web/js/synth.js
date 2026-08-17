@@ -1629,9 +1629,173 @@ export function gen_10008c9c(c) {
   } while (c.emit());
 }
 
+/**
+ * `0x10008568` — 262,144 frames, one call in each part. The longest sample.
+ *
+ * Three square-gated sines into a four-pole ladder, and the ladder's cutoff is
+ * `f19`, an envelope with THREE separate rules: it rises for the first 65,536
+ * frames, and once it has been clamped at 1.0 it decays — slowly before frame
+ * 183,500 and faster after. So the filter opens, holds and closes over the
+ * length of the sample, which is what four seconds of one note needs.
+ *
+ * Each oscillator's phase increment comes from `pow2(1 - k)`, so the three `k`
+ * constants are the detuning. The gate is the same shape as everywhere else:
+ * the sign goes to -1 between a quarter and three eighths of the way round.
+ *
+ * It configures the reverb and never calls it.
+ */
+export function gen_10008568(c) {
+  reverbInit(c, 0x10009f68);
+  c.startSample(0x40000);
+  let f12 = c.f30, f18 = c.f30, f17 = c.f30, f16 = c.f30;
+  let f19 = c.k(0x2afa);
+  let f20 = c.f20, f25 = c.f25, f27 = c.f27;
+  let f6 = c.f6, f7 = c.f7, f8 = c.f8, f11 = c.f11;
+  let f13 = c.f13, f14 = c.f14, f15 = c.f15, f22 = c.f22;
+  const wrap = c.k(0x2e52), gate = c.k(0x2e56);
+  const upper = fmadd(gate, c.k(0x2bd6), gate);
+
+  /** One oscillator: value, advanced phase, and the new sign. */
+  const step = (phase, sign, kNote) => {
+    const v = sign * c.sin(phase);
+    let p = phase + c.pow2(c.f30 - c.k(kNote)) / wrap / c.k(0x2df2);
+    p = fsel(p - wrap, p - wrap, p);
+    let s = sign;
+    if (p > gate) { if (p < upper) s = -c.f30; } else s = c.f30;
+    return [v, p, s];
+  };
+
+  do {
+    if (c.r20 > 0x2cccc) f12 = f12 * c.k(0x2cd6);
+
+    let f21, f28, f26;
+    [f21, f20, f18] = step(f20, f18, 0x2b5e);
+    [f28, f27, f17] = step(f27, f17, 0x2b86);
+    [f26, f25, f16] = step(f25, f16, 0x2b6e);
+
+    let f3 = c.k(0x2bfa) * (f21 + f28 + f26);
+    const cut = f19 * c.k(0x2c16);
+    const f4 = cut * c.k(0x2d56) - fmadd(cut * cut, c.k(0x2d22), c.f30);
+    const f5 = fmadd(f4, c.k(0x2bd6), c.k(0x2bd6));
+    const f2 = c.exp(fnmsub(f5, c.k(0x2d16), c.k(0x2d16))) * c.k(0x2c4a);
+
+    if (c.r20 < 0x10000) f19 = f19 * c.k(0x2cea);
+    if (f19 > c.f30) f19 = c.f30;
+    else f19 = f19 * (c.r20 > 0x2cccc ? c.k(0x2cc2) : c.k(0x2cda));
+
+    f3 = fnmsub(f2, f6, f3);
+    f8 = fnmsub(f4, f8, fmadd(f15, f5, f3 * f5));
+    f11 = fnmsub(f4, f11, fmadd(f14, f5, f8 * f5));
+    f7 = fnmsub(f4, f7, fmadd(f13, f5, f11 * f5));
+    f6 = fnmsub(f4, f6, fmadd(f22, f5, f7 * f5));
+    f15 = f3; f14 = f8; f13 = f11; f22 = f7;
+    f6 = f6 - (f6 * f6 * f6) / c.k(0x2d72);
+    c.f29 = f6 * f12 * c.k(0x2df2);
+  } while (c.emit());
+}
+
+/**
+ * `0x10008880` — 20,000 frames, three calls in part one at `r10` 0, 1 and 2.
+ *
+ * Two swept sines plus noise through the reverb, and `r10` reconfigures almost
+ * every stage: the two sine rates, whether the filter is read before or after
+ * its second pole, the wet/dry pair, and which of two resonator topologies runs
+ * after it. Three distinct instruments out of one body.
+ *
+ * `r10 == 3` IS IMPLEMENTED AND CANNOT BE CHECKED. It has its own length
+ * (28,000 rather than 20,000), its own coefficients, and a fifth stage the
+ * others skip — and the shipped script never uses it, so no reference sample
+ * exists. Transcribed from the disassembly and marked here rather than left
+ * out, which is the same call PORT_SPEC §3 makes for the two undecidable
+ * animation gates.
+ */
+export function gen_10008880(c) {
+  const r10 = c.g.r10 ?? 0;
+  reverbInit(c, 0x10009f40);
+  c.startSample(r10 === 3 ? 0x4e20 + 0x1f40 : 0x4e20);
+  c.srand();
+  let f12 = c.f30, f11 = c.f30, f28 = c.k(0x2afa);
+  let f24 = c.k(0x2de2), f23 = c.k(0x2dfa);
+  if (r10 !== 0) {
+    f24 = c.k(0x2e1a); f23 = c.k(0x2e1e);
+    if (r10 !== 1) { f24 = c.k(0x2d96); f23 = c.k(0x2dc6); }
+  }
+  let f16 = c.f16, f17 = c.f17, f22 = c.f22, f25 = c.f25, f26 = c.f26, f27 = c.f27;
+  const deep = r10 >= 2;
+
+  do {
+    let f9 = (c.rand() * c.k(0x2dc6)) * c.k(0x2a6e);
+    f28 = f28 * c.k(0x2d0e);
+    f28 = fsel(f28 - c.f30, c.f30, f28);
+    const f6 = f12 * f11;
+    const k = c.k(0x2d72);
+    let f2 = (c.sin(-f24) * f28) * f6;
+    const b = ((c.sin(-f23) * f28) * f6) * k;
+    f2 = fmadd(f2, k, b);
+    f9 = fmadd(f6 * f6, f9, f2) * c.k(0x2bd6);
+
+    const kf = deep ? c.k(0x2b06) : c.k(0x2b26);
+    const prev = deep ? f17 * kf : f17;
+    const drive = f9 - prev - f16;
+    f17 = fmadd(drive, kf, f17);
+    f16 = fmadd(f17, kf, f16);
+
+    const wet = reverb(c, deep ? f17 : f16, c.k(0x2c5e));
+    const wk = deep ? c.k(0x2b76) : c.k(0x2bba);
+    const dk = deep ? c.k(0x2c2a) : c.k(0x2bea);
+    let f0 = fmadd(f9, dk, wet * wk) * c.k(0x2bb6);
+
+    let f5, a, bb, cc, dd, ee;
+    if (deep) {
+      let p1 = c.k(0x2b56), p2 = c.k(0x2b96);
+      if (r10 !== 0) p1 = c.k(0x2bb6);
+      f5 = f0 - fmadd(p2, f27, c.k(0x2b52) * f22);
+      let g1 = c.k(0x2be6), g2 = p2;
+      if (r10 === 3) { g1 = c.k(0x2b56); g2 = c.k(0x2bf6); }
+      f27 = fmadd(fnmsub(f6, f6, c.k(0x2d0e)) * g1, f5, f27);
+      f22 = fmadd(g2 * f6, f27, f22);
+      if (r10 === 3) {
+        let t = fmsub(c.k(0x2e02), f5 - f27, f25);
+        t = fnmsub(f26, c.k(0x2bc6), t);
+        f26 = fmadd(t, c.k(0x2b96), f26);
+        f25 = fmadd(f26, c.k(0x2b3e), f25);
+      }
+      a = c.k(0x2c7e); bb = c.k(0x2c86); cc = c.k(0x2cc6); dd = c.k(0x2cba);
+      ee = c.k(0x2df2);
+      void p1;
+    } else {
+      // f2 and f3 both start as 0x2b56; at r10 != 0 f2 is replaced and f3
+      // scaled by f6 — but r10 < 2 and r10 != 0 means r10 == 1 only.
+      const f2c = r10 !== 0 ? c.k(0x2bb6) : c.k(0x2b56);
+      const f3c = r10 !== 0 ? c.k(0x2b56) * f6 : c.k(0x2b56);
+      f5 = f0 - fmadd(f2c, f27, f22);
+      f27 = fmadd(f3c, f5, f27);
+      f22 = fmadd(f27, f3c, f22);
+      a = c.k(0x2c62); bb = c.k(0x2c6a); cc = c.k(0x2cae); dd = c.k(0x2ca6);
+      ee = c.k(0x2df2);
+    }
+
+    f24 = f24 * a;
+    f23 = f23 * bb;
+    if (c.r20 < 0x3138) {
+      f12 = f12 * cc;
+      f11 = fnmsub(f11, c.k(0x2a8a), f11);
+    } else {
+      f12 = f12 * dd;
+    }
+
+    c.f29 = f27 * ee;
+    if (r10 !== 0) c.f29 = f5 * ee;
+    if (r10 === 2) c.f29 = f5 * c.k(0x2dd2);
+    if (r10 === 3) c.f29 = f26 * c.k(0x2d1a);
+  } while (c.emit());
+}
+
 /** Address -> implementation. Everything absent is filled from the oracle. */
 export const PRIMITIVES = {
   0x10008430: gen_10008430,
+  0x10008568: gen_10008568,
+  0x10008880: gen_10008880,
   0x10008c9c: gen_10008c9c,
   0x10009a68: gen_10009a68,
   0x10009a8c: gen_10009a8c,
