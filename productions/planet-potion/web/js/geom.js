@@ -332,6 +332,58 @@ export function transformVertex(v, rec, table) {
 }
 
 // ---------------------------------------------------------------------------
+// Normals, from the tail of `0x10003868`.
+
+/** `0x10003674` — normalise in place. `frsqrte` and NOTHING ELSE: no Newton
+ *  refinement, no `fres` afterwards. On hardware that is a low-precision
+ *  estimate; under the harness that produced every reference here it is a full
+ *  double reciprocal square root, which is what `fpest.py` settled. */
+function normalise(v) {
+  let s = v[0] * v[0];
+  s = fma(v[1], v[1], s);
+  s = fma(v[2], v[2], s);
+  const k = 1 / Math.sqrt(s);
+  return [v[0] * k, v[1] * k, v[2] * k];
+}
+
+/**
+ * Per-vertex normals: accumulate each face's normal into its three corners,
+ * then normalise. `0x10003ce0`.
+ *
+ * THE FACE NORMAL IS `e2 x e1`, NOT `e1 x e2`. Both edges are taken from the
+ * FIRST index — `e1 = p[c] - p[a]` and `e2 = p[b] - p[a]` — and the cross
+ * product is then written out with its terms in the order that negates it, so
+ * the result points the other way from the obvious reading. Every face is
+ * normalised before it is accumulated, so a large triangle counts for no more
+ * than a small one.
+ *
+ * IT READS +0x00, NOT +0x24 — the positions AFTER the record transform. The
+ * routine's very last loop then copies +0x00 back down to +0x24, which is how
+ * the transform reaches the field everything else reads, and is why normals
+ * turn with their geometry instead of staying in model space.
+ */
+function computeNormals(positions, triangles) {
+  const N = positions.map(() => [0, 0, 0]);
+  for (const t of triangles) {
+    const B = positions[t[0]], A = positions[t[1]], C = positions[t[2]];
+    if (!A || !B || !C) continue;
+    const e1 = [C[0] - B[0], C[1] - B[1], C[2] - B[2]];
+    const e2 = [A[0] - B[0], A[1] - B[1], A[2] - B[2]];
+    const n = normalise([
+      -(fma(e2[2], e1[1], -(e1[2] * e2[1]))),
+      -(fma(e2[0], e1[2], -(e1[0] * e2[2]))),
+      -(fma(e2[1], e1[0], -(e1[1] * e2[0]))),
+    ]);
+    for (const i of t) {
+      N[i][0] = f32(N[i][0] + n[0]);
+      N[i][1] = f32(N[i][1] + n[1]);
+      N[i][2] = f32(N[i][2] + n[2]);
+    }
+  }
+  return N.map((v) => normalise(v).map(f32));
+}
+
+// ---------------------------------------------------------------------------
 // Triangles. Every one of them is emitted by `0x1000335c`, which takes FOUR
 // vertex indices and lays down two triangles — (a,b,c) and (c,d,a) — with the
 // count hardcoded to 3 at both of its emit sites. So a quad arrives as two
@@ -537,7 +589,7 @@ export function buildOp0(node, table) {
         gridFaces(t, 0, node.steps[PAIR[0]], node.steps[PAIR[1]], false);
         return t;
       })());
-  return { vertices: out, triangles };
+  return { vertices: out, triangles, normals: computeNormals(out, triangles) };
 }
 
 // ---------------------------------------------------------------------------
@@ -560,10 +612,17 @@ function translateAll(V, t) {
 
 /** `0x100041ec` — the operand is in 0..255 units, the same convention the
  *  texture VM uses for colour. */
-function scaleAll(V, s) {
+function scaleAll(V, N, s) {
   const a = s[0] / K255, b = s[1] / K255, c = s[2] / K255;
   for (const v of V) {
     v[0] = f32(v[0] * a); v[1] = f32(v[1] * b); v[2] = f32(v[2] * c);
+  }
+  // Scaling a normal is not scaling a position: the routine multiplies and then
+  // RENORMALISES, so a non-uniform scale bends the normal rather than stretching
+  // it. Translation leaves normals alone entirely.
+  for (let i = 0; i < N.length; i++) {
+    const n = normalise([N[i][0] * a, N[i][1] * b, N[i][2] * c]);
+    N[i] = [f32(n[0]), f32(n[1]), f32(n[2])];
   }
 }
 
@@ -577,13 +636,13 @@ function scaleAll(V, s) {
  * matrix was recovered from the geometry rather than read, and this is the
  * disassembly agreeing with it.
  */
-function rotateAll(V, deg, table) {
+function rotateAll(V, N, deg, table) {
   const at = (d) => {
     const i = ((fctiw(d) * 0x5b) & 0x7ffc) >>> 2;
     return [table[i], table[i + 2048]];
   };
   const [sx, cx] = at(deg[0]), [sy, cy] = at(deg[1]), [sz, cz] = at(deg[2]);
-  for (const v of V) {
+  const turn = (v) => {
     const x = v[0], y = v[1], z = v[2];
     const y1 = fma(y, cx, -(z * sx));
     const z1 = fma(y, sx, z * cx);
@@ -592,7 +651,9 @@ function rotateAll(V, deg, table) {
     v[0] = f32(fma(y1, sz, x2 * cz));
     v[1] = f32(fma(y1, cz, -(x2 * sz)));
     v[2] = f32(z2);
-  }
+  };
+  for (const v of V) turn(v);
+  for (const n of N) turn(n);
 }
 
 /**
@@ -612,24 +673,26 @@ function rotateAll(V, deg, table) {
 export function buildOp3(node, source, table) {
   const V = [];
   const T = [];
+  const N = [];
   const n = source.vertices.length;
   for (let iter = 0; iter < node.count; iter++) {
     // `0x10003fe4` adds the destination's CURRENT vertex count to every index,
     // so each copy references its own vertices rather than the first copy's.
     for (const t of source.triangles) T.push(t.map((v) => v + iter * n));
     for (const p of source.vertices) V.push([p[0], p[1], p[2]]);
+    for (const q of source.normals) N.push([q[0], q[1], q[2]]);
     let sel = node.sel, slot = 0;
     for (;;) {
       const kind = sel & 3;
       const t = node.triples[slot];
       if (kind === 1) translateAll(V, t);
-      else if (kind === 2) rotateAll(V, t, table);
-      else if (kind === 3) scaleAll(V, t);
+      else if (kind === 2) rotateAll(V, N, t, table);
+      else if (kind === 3) scaleAll(V, N, t);
       slot++; sel >>>= 2;
       if (sel === 0) break;
     }
   }
-  return { vertices: V, triangles: T };
+  return { vertices: V, triangles: T, normals: N };
 }
 
 // ---------------------------------------------------------------------------
@@ -806,10 +869,9 @@ export function buildOp4(node, table, atanTable) {
   }
 
   const rec = node.records[0];
-  return {
-    vertices: V.map((v) => (rec ? transformVertex(v.p, rec, table) : v.p)),
-    triangles: tubeFaces(sides, rings, closed),
-  };
+  const vertices = V.map((v) => (rec ? transformVertex(v.p, rec, table) : v.p));
+  const triangles = tubeFaces(sides, rings, closed);
+  return { vertices, triangles, normals: computeNormals(vertices, triangles) };
 }
 
 /**
@@ -829,11 +891,11 @@ export function buildProgram(decoded, table) {
       const src = out[node.at18];
       out.push(src && src.vertices
         ? { op: 3, ...buildOp3(node, src, table) }
-        : { op: 3, vertices: null, triangles: null });
+        : { op: 3, vertices: null, triangles: null, normals: null });
     } else if (node.op === 4) {
       out.push({ op: 4, ...buildOp4(node, table, atanTable()) });
     } else {
-      out.push({ op: node.op, vertices: null, triangles: null });
+      out.push({ op: node.op, vertices: null, triangles: null, normals: null });
     }
   }
   return out;

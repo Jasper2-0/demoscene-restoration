@@ -1,4 +1,4 @@
-// geovertcheck.mjs — the geometry generators' vertex positions AND triangles.
+// geovertcheck.mjs — the geometry generators: positions, triangles, normals.
 //
 //   node work/re/geovertcheck.mjs flat/ out/geo.json
 //
@@ -50,6 +50,7 @@ const table = sinus();
 
 let nodesOK = 0, nodesBad = 0, vOK = 0, vBad = 0, countBad = 0;
 let tOK = 0, tBad = 0, tCountBad = 0;
+let nOK = 0, nBad = 0, nNonFinite = 0, colourBad = 0;
 let worst = 0, worstAt = null;
 const unported = new Map();
 const failures = [];
@@ -110,6 +111,28 @@ for (const p of doc.programs) {
       }
     }
 
+    // Normals. A vertex whose accumulated normal came out as the zero vector
+    // normalises to infinities in the original too; geodump writes those as
+    // null and they are counted rather than compared.
+    for (let k = 0; k < built.length; k++) {
+      const wn = want.vertices[k].n;
+      if (wn.some((c) => c === null)) { nNonFinite++; continue; }
+      if (b.normals[k].every((v, c) => v === wn[c])) nOK++;
+      else {
+        nBad++;
+        if (failures.length < 8) {
+          failures.push(`${p.part}[${p.index}] node ${i} normal ${k}: `
+            + `${JSON.stringify(b.normals[k])} vs ${JSON.stringify(wn)}`);
+        }
+      }
+      // The builder never writes a vertex colour. `alloc_mem` zeroes what it
+      // hands out and nothing in _generate_obj touches +0x30, so the source
+      // colour is somebody else's job — asserted rather than assumed, because
+      // "we did not port it" and "there is nothing there to port" are different
+      // states and only measuring tells them apart.
+      if (want.vertices[k].rgba.some((c) => c !== 0)) colourBad++;
+    }
+
     let bad = 0;
     for (let k = 0; k < built.length; k++) {
       const w = want.vertices[k].p;
@@ -165,10 +188,14 @@ for (const [op, n] of [...unported].sort()) {
 ok('every triangle has the same three indices, in order', tBad === 0
   && tCountBad === 0, `${tOK}/${tOK + tBad}`
   + (tCountBad ? `, ${tCountBad} nodes differ in count` : ''));
+ok('every vertex normal is bit-exact', nBad === 0, `${nOK}/${nOK + nBad}`
+  + (nNonFinite ? `, ${nNonFinite} non-finite in the original and not comparable` : ''));
+ok('the builder leaves every source colour at zero', colourBad === 0,
+  `${vOK + vBad} vertices, none carries one`);
 ok('every vertex in the intro is covered', skipped === 0,
   `${vOK} of ${vOK + vBad + skipped}`);
 for (const f of failures) console.log(`     ${f}`);
 
 if (failed) process.exit(1);
 console.log('\nall three geometry generators reproduce the original exactly, '
-  + 'vertices and triangles');
+  + 'vertices, triangles and normals');
