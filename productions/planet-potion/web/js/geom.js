@@ -332,6 +332,40 @@ export function transformVertex(v, rec, table) {
 }
 
 // ---------------------------------------------------------------------------
+// The material fields, `0x10003b8c`. Each triangle is filled in from the node's
+// FIRST material record — `lwz r20, 0(r27)` is reloaded per triangle, so the
+// chain is walked from the top every time rather than carried along.
+//
+// The 0x52 record has TWO forward pointers and they mean different things:
+// +0x4e is the next triangle and +0x4a is another LAYER on the same three
+// vertices, allocated while the record chain continues and the next record's
+// kind is neither 5 nor 6. 1,616 of the 19,074 triangles carry one.
+
+/**
+ * `kind` picks the primitive, and it is the only thing that does: `cmpwi r3, 1`
+ * keeps `W3D_DrawLineStrip` and everything else falls through to
+ * `W3D_DrawTriFan`. The vector is baked into the record as a discriminator and
+ * never called from here.
+ */
+function materialise(indices, records) {
+  const r = records[0];
+  if (!r) return indices.map((idx) => ({ idx }));
+  // A record of kind 5 or 6 ends the layer chain rather than starting one.
+  const next = records[1];
+  const hasLayer = !!next && next.kind !== 5 && next.kind !== 6;
+  return indices.map((idx) => ({
+    idx,
+    kind: r.kind,
+    sub: r.sub,
+    cull: r.cull,
+    prim: r.kind === 1 ? 'linestrip' : 'trifan',
+    rgba: r.rgba,
+    texIndex: r.texIndex,
+    hasLayer,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Normals, from the tail of `0x10003868`.
 
 /** `0x10003674` — normalise in place. `frsqrte` and NOTHING ELSE: no Newton
@@ -364,7 +398,8 @@ function normalise(v) {
  */
 function computeNormals(positions, triangles) {
   const N = positions.map(() => [0, 0, 0]);
-  for (const t of triangles) {
+  for (const raw of triangles) {
+    const t = raw.idx ?? raw;
     const B = positions[t[0]], A = positions[t[1]], C = positions[t[2]];
     if (!A || !B || !C) continue;
     const e1 = [C[0] - B[0], C[1] - B[1], C[2] - B[2]];
@@ -589,7 +624,11 @@ export function buildOp0(node, table) {
         gridFaces(t, 0, node.steps[PAIR[0]], node.steps[PAIR[1]], false);
         return t;
       })());
-  return { vertices: out, triangles, normals: computeNormals(out, triangles) };
+  return {
+    vertices: out,
+    triangles: materialise(triangles, node.records),
+    normals: computeNormals(out, triangles),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -678,7 +717,9 @@ export function buildOp3(node, source, table) {
   for (let iter = 0; iter < node.count; iter++) {
     // `0x10003fe4` adds the destination's CURRENT vertex count to every index,
     // so each copy references its own vertices rather than the first copy's.
-    for (const t of source.triangles) T.push(t.map((v) => v + iter * n));
+    for (const t of source.triangles) {
+      T.push({ ...t, idx: t.idx.map((v) => v + iter * n) });
+    }
     for (const p of source.vertices) V.push([p[0], p[1], p[2]]);
     for (const q of source.normals) N.push([q[0], q[1], q[2]]);
     let sel = node.sel, slot = 0;
@@ -871,7 +912,11 @@ export function buildOp4(node, table, atanTable) {
   const rec = node.records[0];
   const vertices = V.map((v) => (rec ? transformVertex(v.p, rec, table) : v.p));
   const triangles = tubeFaces(sides, rings, closed);
-  return { vertices, triangles, normals: computeNormals(vertices, triangles) };
+  return {
+    vertices,
+    triangles: materialise(triangles, node.records),
+    normals: computeNormals(vertices, triangles),
+  };
 }
 
 /**

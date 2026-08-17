@@ -249,6 +249,23 @@ def read_record(A, a):
     }
 
 
+FAN_LVO, STRIP_LVO = 168, 390
+
+
+def primitive(v):
+    """'trifan' or 'linestrip' for the vector baked into a face record.
+
+    The builder reads one of two Warp3D vectors and stores it as a
+    discriminator; with a single shared stub, as rungeo.py has, every face looks
+    identical and the distinction never reaches the export at all.
+    """
+    if v == stub_addr(FAN_LVO // 6 - 1):
+        return 'trifan'
+    if v == stub_addr(STRIP_LVO // 6 - 1):
+        return 'linestrip'
+    return None
+
+
 def table_index(v):
     """Which texture-table slot a record's +0x18 came from, or None.
 
@@ -281,13 +298,31 @@ def read_triangle(A, a):
     """A 0x52 indexed triangle. The count is ALWAYS 3 — `0x1000335c` hardcodes
     `li r3, 3` on both of its two emit sites, and a quad arrives as two of
     these rather than as one record with four indices."""
+    # EVERY FLOAT IN HERE IS UNALIGNED. The record starts with four halfwords,
+    # so the six UV floats sit at 0x12, 0x16, 0x1a ... and the colour at 0x2a.
+    # PowerPC does not care and neither does struct, but a reader that rounds
+    # these offsets to multiples of four gets six plausible wrong numbers.
     return {
         'addr': hex(a),
         'count': A.u16(a, 0x00),
         'idx': [A.u16(a, 0x02), A.u16(a, 0x04), A.u16(a, 0x06)],
-        # The middle of the record is filled in later, from the 0x58 material
-        # record, by 0x10003868. Kept raw rather than guessed at.
-        'mid': A.raw(a + 0x08, 0x46),
+        # Filled in by 0x10003b8c from the 0x58 material record.
+        'kind': A.u8(a, 0x08),
+        'sub': A.u8(a, 0x09),
+        'cull': A.u16(a, 0x0a),
+        'drawVector': A.u32(a, 0x0e),
+        'prim': primitive(A.u32(a, 0x0e)),
+        'uv': [[_fin(A.f32(a, 0x12 + 8 * i)), _fin(A.f32(a, 0x16 + 8 * i))]
+               for i in range(3)],
+        'rgba': [_fin(A.f32(a, 0x2a + 4 * i)) for i in range(4)],
+        'normal': [_fin(A.f32(a, 0x3a)), _fin(A.f32(a, 0x3e)),
+                   _fin(A.f32(a, 0x42))],
+        'texture': A.u32(a, 0x46),
+        'texIndex': table_index(A.u32(a, 0x46) - 0x100),
+        # +0x4a is another LAYER on the same three vertices — the record chain
+        # continues while the next one's kind is neither 5 nor 6 — and +0x4e is
+        # the next triangle. Two different chains out of one record.
+        'layer': hex(A.u32(a, 0x4a)),
         'next': hex(A.u32(a, 0x4e)),
     }
 

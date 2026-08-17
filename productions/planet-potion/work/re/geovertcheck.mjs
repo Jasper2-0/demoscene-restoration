@@ -51,6 +51,7 @@ const table = sinus();
 let nodesOK = 0, nodesBad = 0, vOK = 0, vBad = 0, countBad = 0;
 let tOK = 0, tBad = 0, tCountBad = 0;
 let nOK = 0, nBad = 0, nNonFinite = 0, colourBad = 0;
+let mOK = 0, mBad = 0;
 let worst = 0, worstAt = null;
 const unported = new Map();
 const failures = [];
@@ -100,12 +101,12 @@ for (const p of doc.programs) {
       }
     } else {
       for (let k = 0; k < wt.length; k++) {
-        if (gt[k].every((v, c) => v === wt[k].idx[c])) tOK++;
+        if (gt[k].idx.every((v, c) => v === wt[k].idx[c])) tOK++;
         else {
           tBad++;
           if (failures.length < 8) {
             failures.push(`${p.part}[${p.index}] node ${i} triangle ${k}: `
-              + `${JSON.stringify(gt[k])} vs ${JSON.stringify(wt[k].idx)}`);
+              + `${JSON.stringify(gt[k].idx)} vs ${JSON.stringify(wt[k].idx)}`);
           }
         }
       }
@@ -131,6 +132,24 @@ for (const p of doc.programs) {
       // "we did not port it" and "there is nothing there to port" are different
       // states and only measuring tells them apart.
       if (want.vertices[k].rgba.some((c) => c !== 0)) colourBad++;
+    }
+
+    // The material fields the builder copies out of the record onto every
+    // triangle. UVs are NOT here: they come from a projection routine that is
+    // not ported, and are reported below rather than quietly compared.
+    for (let k = 0; k < Math.min(wt.length, gt.length); k++) {
+      const diff = ['kind', 'sub', 'cull', 'prim', 'texIndex']
+        .filter((f) => gt[k][f] !== wt[k][f])
+        .concat(gt[k].rgba?.some((v, c) => v !== wt[k].rgba[c]) ? ['rgba'] : [])
+        .concat(gt[k].hasLayer !== (parseInt(wt[k].layer, 16) !== 0) ? ['layer'] : []);
+      if (!diff.length) mOK++;
+      else {
+        mBad++;
+        if (failures.length < 8) {
+          failures.push(`${p.part}[${p.index}] node ${i} tri ${k}: ${diff.map((f) =>
+            `${f} ${JSON.stringify(gt[k][f])} vs ${JSON.stringify(wt[k][f])}`).join('; ')}`);
+        }
+      }
     }
 
     let bad = 0;
@@ -188,10 +207,19 @@ for (const [op, n] of [...unported].sort()) {
 ok('every triangle has the same three indices, in order', tBad === 0
   && tCountBad === 0, `${tOK}/${tOK + tBad}`
   + (tCountBad ? `, ${tCountBad} nodes differ in count` : ''));
+ok('every triangle carries the right material', mBad === 0,
+  `${mOK}/${mOK + mBad} — kind, sub, cull, primitive, texture, colour, layer`);
 ok('every vertex normal is bit-exact', nBad === 0, `${nOK}/${nOK + nBad}`
   + (nNonFinite ? `, ${nNonFinite} non-finite in the original and not comparable` : ''));
 ok('the builder leaves every source colour at zero', colourBad === 0,
   `${vOK + vBad} vertices, none carries one`);
+// The one field of the record that is NOT ported. `0x100036e8` projects each
+// vertex into texture space through one of several modes selected by `sub`,
+// with the node's bounding box as the divisor — and kind 4 then overwrites two
+// of the three pairs with a different formula. Named here with a count so that
+// "the material is exact" is not read as covering the texture coordinates.
+console.log(`     UVs are NOT ported: ${(tOK + tBad) * 2} coordinate pairs `
+  + 'from the projection routine at 0x100036e8 are not compared');
 ok('every vertex in the intro is covered', skipped === 0,
   `${vOK} of ${vOK + vBad + skipped}`);
 for (const f of failures) console.log(`     ${f}`);
