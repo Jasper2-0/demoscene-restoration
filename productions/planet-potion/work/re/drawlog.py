@@ -52,7 +52,12 @@ LOGPW, LOG = 0x20420000, 0x20420010
 MYVBUF, MYVBUFCAP = 0x21000000, 0x1000000
 SCRATCHSZ = 0x02000000
 LOGSZ, REC = 0x80000, 64        # log size, and one record
-ARENADUMP = 0x20000             # per-frame snapshot of the scene graph
+# THE SNAPSHOT MUST OUTRUN THE ARENA, and 0x20000 did not. The highest address
+# a scene actually uses is arena+0x1ff74 — 140 bytes inside the old window — so
+# the last keyframe track of part three's first scene fell off the end and the
+# dump reported a node with a track pointer and no keyframes. Nothing failed;
+# the walk just stopped, which is how a truncated export looks from the inside.
+ARENADUMP = 0x80000             # per-frame snapshot of the scene graph
 T_FAN, T_LINE = 0x29fe, 0x2a0e          # the .v field of each template
 FAKEOBJ = 0x20560000
 

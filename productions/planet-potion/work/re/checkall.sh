@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Twenty-five checks accumulated over the work and there is no point in
-# remembering twenty-five invocations. Each passes or names what drifted; none of them
+# Twenty-six checks accumulated over the work and there is no point in
+# remembering twenty-six invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -182,6 +182,13 @@ run "initcheck — the atlas, the glyph table and the fog schedule" \
 # `./ppcbox.sh python3 animdump.py --all flat/ out/anim_all.json`; 77 = skip.
 run "pass1check — the animation evaluator, all 29 scenes" \
   node "$HERE/pass1check.mjs" "$HERE/out/anim_all.json"
+
+# Passes 1 and 2 together, which is the only way to assert on a node that has a
+# parent: pass 2 rewrites its channels, so pass1check has to skip all 180 of
+# them. Kept separate from pass1check so a compose regression cannot be
+# mistaken for an evaluator one.
+run "pass2check — the compose pass, every node of every scene" \
+  node "$HERE/pass2check.mjs" "$HERE/out/anim_all.json"
 
 # Every Warp3D name in PORT_SPEC rests on this ordering, and it was measured
 # once and written up as prose. Re-derives it from the shipped libraries.

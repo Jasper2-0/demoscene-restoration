@@ -64,6 +64,15 @@ const NIL = 0xffffffff;
 let checked = 0;
 for (let n = 0; n < nodeCount; n++) {
   const node0 = doc.frames[0].nodes[n];
+  // NOTHING TO COMPARE AGAINST IF IT DID NOT DRAW. cx/cy/scale here are what
+  // the EMITTER used, taken from the draw record — so a node that submitted no
+  // primitives has none, and animdump reports null rather than inventing them.
+  // Before it walked the whole node list this could not arise, because the walk
+  // was seeded from the draw records themselves.
+  if (node0 && node0.drew === false) {
+    console.log(`\nnode ${node0.addr}  did not draw — no published values`);
+    continue;
+  }
   const track = node0.track;
   if (!track?.length) continue;
   checked++;

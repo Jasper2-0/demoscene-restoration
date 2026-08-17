@@ -271,10 +271,28 @@ The walk is two nested chains: sub-objects on `+0x74` inside, the node list on
 `+0x10` outside — the same `+0x74` chain `_restore_time` uses, which is why the
 animation and the geometry hang off one structure.
 
+**PASS 2 IS PORTED AND VERIFIED.** `composeHierarchy` in `web/js/anim.js`, run
+by `work/re/pass2check.mjs` over all 29 scenes at three times each together with
+pass 1: **1,094 of 1,094 comparable nodes reproduce all 24 channels exactly**,
+every node agrees on whether it resolved, and the iteration converges in two
+sweeps.
+
+Two corrections to what follows:
+
+* **`0x20` WITHOUT `0x10` composes the matrix and then PUTS THE TRANSLATION
+  BACK.** The three `lfs` before the call to `0x10005b34` and the three `stfs`
+  after it bracket a routine that writes `+0x30…+0x38` itself, so the net effect
+  is to concatenate the rotation and KEEP the node's own translation — the
+  opposite of "transform the triple";
+* **the `0x10` add is no longer undecidable.** With all 29 scenes dumped there
+  are 16 evaluations on that gate alone and 68 more combining it, and they
+  reproduce exactly under addition.
+
 **Which gates the scenes actually use.** Sampling five part-one streams found
-parented nodes with `flags3 & 0xf0` of `0x10`, `0x70` and `0xf0` only — so of the
-five paths, three occur and the `0x20`-without-`0x10` transform through
-`0x10005b34` has no example yet.
+`0x10`, `0x70` and `0xf0` only. All 29 scenes have EIGHT combinations — `0x10`,
+`0x30`, `0x40`, `0x50`, `0x70`, `0x80`, `0xd0` and `0xf0` — so four of the five
+paths occur. Only `0x20`-without-`0x10` still has no example: every `0x20` node
+in the shipped data also sets `0x10`.
 
 Checked so far:
 

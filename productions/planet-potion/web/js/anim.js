@@ -190,9 +190,29 @@ const angleIndex = (a) => (fctiw(a) & 0x7ffc) >>> 2;
 const sinOf = (sinus, a) => sinus[angleIndex(a)];
 const cosOf = (sinus, a) => sinus[angleIndex(a) + 0x800];
 
-/** A 3x4 as the channel block holds it: rows 0-8, translation 9-11. */
-const mat = (m00, m01, m02, m10, m11, m12, m20, m21, m22, tx, ty, tz) =>
-  [m00, m01, m02, m10, m11, m12, m20, m21, m22, tx, ty, tz];
+/**
+ * A 3x4 laid out THE WAY THE CHANNEL BLOCK LAYS IT OUT — and the gap matters.
+ *
+ * The 3x3 is channels 0-8 (byte offsets +0x00, +0x0c, +0x18 by row) and the
+ * translation is channels 12-14 (+0x30). Channels 9-11 sit between them and are
+ * the EULER ANGLES, not part of the matrix at all.
+ *
+ * Packing the translation into 9-11 instead is the obvious thing to do and it
+ * survives the whole of pass 1, because the builders and the concatenation then
+ * agree with each other about a layout neither of them shares with anything
+ * else. It fails the moment pass 2 composes a node against a real parent
+ * CHANNEL BLOCK, where slots 9-11 hold an angle: the child inherited its
+ * parent's rotation angle as a Y translation, which is a number about 3,000
+ * where the right answer was 13.5.
+ */
+const mat = (m00, m01, m02, m10, m11, m12, m20, m21, m22, tx, ty, tz) => {
+  const m = new Float64Array(15);
+  m[0] = m00; m[1] = m01; m[2] = m02;
+  m[3] = m10; m[4] = m11; m[5] = m12;
+  m[6] = m20; m[7] = m21; m[8] = m22;
+  m[12] = tx; m[13] = ty; m[14] = tz;
+  return m;
+};
 
 /** `0x100059b4`, `0x10005a08`, `0x10005a5c`, `0x10005ab0` — the four builders. */
 const rotY = (s, a) => mat(cosOf(s, a), 0, -sinOf(s, a), 0, 1, 0,
@@ -219,7 +239,7 @@ function concat(ch, m) {
     const c0 = fma(c, m[6], fma(b, m[3], a * m[0]));
     const c1 = fma(c, m[7], fma(b, m[4], a * m[1]));
     const c2 = fma(c, m[8], fma(b, m[5], a * m[2]));
-    const t = fma(c, m[11], fma(b, m[10], fma(a, m[9], tw)));
+    const t = fma(c, m[14], fma(b, m[13], fma(a, m[12], tw)));
     ch[r * 3] = f32(c0); ch[r * 3 + 1] = f32(c1); ch[r * 3 + 2] = f32(c2);
     ch[12 + r] = f32(t);
   }
@@ -250,9 +270,9 @@ function leftConcat(ch, m) {
     ch[j] = f32(r0); ch[3 + j] = f32(r1); ch[6 + j] = f32(r2);
   }
   const a = ch[12], b = ch[13], c = ch[14];
-  const t0 = fma(c, m[2], fma(b, m[1], fma(a, m[0], m[9])));
-  const t1 = fma(c, m[5], fma(b, m[4], fma(a, m[3], m[10])));
-  const t2 = fma(c, m[8], fma(b, m[7], fma(a, m[6], m[11])));
+  const t0 = fma(c, m[2], fma(b, m[1], fma(a, m[0], m[12])));
+  const t1 = fma(c, m[5], fma(b, m[4], fma(a, m[3], m[13])));
+  const t2 = fma(c, m[8], fma(b, m[7], fma(a, m[6], m[14])));
   ch[12] = f32(t0); ch[13] = f32(t1); ch[14] = f32(t2);
 }
 
@@ -396,4 +416,94 @@ export function evaluateNode(anim, keys, tick, musicSignal, sinus) {
       concat(ch, RY); concat(ch, RX); concat(ch, RZ);
   }
   return ch;
+}
+
+// --- pass 2, compose down the hierarchy --------------------------------------
+//
+// `0x10005394`. A fixed-point iteration rather than a sweep: bit 0 of
+// `anim+0x03` is a dirty flag, a node waits while its PARENT is still dirty, and
+// the whole pass repeats until a sweep finds nothing dirty. So parents need not
+// precede children in the list.
+//
+// `flags3` IS MASKED HERE TOO — `andi. r25, r25, 0xf0` at `0x100053c8` — but
+// unlike pass 1 the mask keeps every bit the gates test, because all four live
+// in the high nibble. The masking is what marks the node resolved; it is not
+// the accident it is in pass 1.
+
+/** The four gates, by bit of `anim+0x03`. */
+export const GATE = { MULTIPLY: 0x40, ADD_PAIR: 0x80, PROJECT: 0x20, TRANSLATE: 0x10 };
+
+/**
+ * One node's compose step, given its parent's channel block.
+ *
+ * `0x20` AND `0x10` COPY the projection triple and then LEFT-multiply the whole
+ * matrix by the parent's — which is why a child inherits its parent's cx, cy
+ * and scale outright instead of scaling them.
+ *
+ * `0x20` WITHOUT `0x10` composes the matrix and then PUTS THE TRANSLATION BACK.
+ * The three `lfs` before the call and the three `stfs` after it bracket
+ * `0x10005b34`, which writes `+0x30…+0x38` itself — so the effect is to
+ * concatenate the rotation and keep the node's own translation, the opposite of
+ * PORT_SPEC §3b's "transform the triple". No shipped scene reaches it: every
+ * `0x20` in the 29 scenes also has `0x10`.
+ */
+export function composeNode(ch, parentCh, gates) {
+  if (gates & GATE.MULTIPLY) {
+    for (let i = 15; i <= 18; i++) ch[i] = f32(ch[i] * parentCh[i]);
+  }
+  if (gates & GATE.ADD_PAIR) {
+    for (let i = 19; i <= 20; i++) ch[i] = f32(ch[i] + parentCh[i]);
+  }
+  if (gates & GATE.PROJECT) {
+    if (gates & GATE.TRANSLATE) {
+      for (let i = 21; i <= 23; i++) ch[i] = parentCh[i];
+      leftConcat(ch, parentCh);
+    } else {
+      const t = [ch[12], ch[13], ch[14]];
+      concat(ch, parentCh);
+      ch[12] = t[0]; ch[13] = t[1]; ch[14] = t[2];
+    }
+    return;
+  }
+  if (gates & GATE.TRANSLATE) {
+    // Three plain `fadd`s at 0x100054b8. PORT_SPEC calls this undecidable from
+    // shipped data because every example had child, parent and result all zero;
+    // with all 29 scenes dumped there are 18 nodes on this gate alone and 60
+    // more that combine it, so it is now exercised.
+    for (let i = 12; i <= 14; i++) ch[i] = f32(ch[i] + parentCh[i]);
+  }
+}
+
+/**
+ * The whole of pass 2 over one frame's nodes.
+ *
+ * `entries` are `{addr, parent, flags3, resolved, ch}` — the state pass 1 left,
+ * mutated in place. `ch` is null for a node pass 1 skipped, which is also the
+ * case where `resolved` is 0 and the parent's byte gets copied down instead of
+ * anything being composed.
+ *
+ * Returns the number of sweeps, and how many nodes could not be resolved
+ * because their parent was not in the list — which is a property of the DUMP
+ * rather than of the pass, since sub-objects on `+0x74` are not exported.
+ */
+export function composeHierarchy(entries, maxSweeps = 64) {
+  const byAddr = new Map(entries.map((e) => [e.addr, e]));
+  let sweeps = 0, stuck = 0;
+  for (;;) {
+    let anyDirty = false;
+    sweeps++;
+    for (const e of entries) {
+      if (!(e.flags3 & 1)) continue;
+      anyDirty = true;
+      const p = byAddr.get(e.parent);
+      if (!p) { stuck++; e.flags3 &= 0xf0; continue; }
+      if (p.flags3 & 1) continue;                 // parent not resolved yet
+      const gates = e.flags3 & 0xf0;              // read BEFORE clearing
+      e.flags3 = gates;
+      if (p.resolved !== 1) { e.resolved = p.resolved; continue; }
+      if (e.ch && p.ch) composeNode(e.ch, p.ch, gates);
+    }
+    if (!anyDirty || sweeps >= maxSweeps) break;
+  }
+  return { sweeps, stuck };
 }

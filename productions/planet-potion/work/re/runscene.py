@@ -100,7 +100,9 @@ def stubs():
     return c
 
 
-def run(stream, txt_tab=0x2642, obj_tab=0x2706, dump=0x20000, steps=99, want_alloc=False, pre=()):
+# Same window as drawlog.ARENADUMP, and for the same reason: a scene reaches
+# arena+0x1ff74, so 0x20000 truncates by 140 bytes and the walks simply stop.
+def run(stream, txt_tab=0x2642, obj_tab=0x2706, dump=0x80000, steps=99, want_alloc=False, pre=()):
     c=[]
     c+=H.load32(1,H.STACK); c+=H.load32(2,R2); c+=H.load32(13,H.STACK-0x1000)
     c+=stubs()
