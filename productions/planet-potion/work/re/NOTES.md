@@ -643,12 +643,13 @@ inert. Slots 0 and 4 both point at a bare `blr`, and slots 1 and 2 belong to the
 two geometry opcodes that **never appear in the shipped data**. So exactly one
 body ever runs: **slot 3 at `0x10004e64`**.
 
-It is a transform interpreter, and it explains the operand-width rule recorded
-earlier for build-op 3 (`3 + 6·(nonzero 2-bit groups)`):
+It was read here as a transform interpreter, and it is one — but the first
+instruction of every iteration was missed, and it is the one that matters most:
 
 ```
   outer = byte[node+0x19]
   repeat outer times:
+      clone(node_list[byte[node+0x18]])   ; 0x10003e9c — APPENDS a whole copy
       sel = byte[node+0x1b]          ; up to FOUR packed 2-bit selectors
       vec = node + 0x1c              ; one 3-float vector each
       while sel:
@@ -659,6 +660,28 @@ earlier for build-op 3 (`3 + 6·(nonzero 2-bit groups)`):
               0 -> skip
           vec += 12; sel >>= 2
 ```
+
+**OP3 IS AN ARRAY MODIFIER, AND IT IS WHERE MOST OF THE GEOMETRY COMES FROM.**
+`0x10003e9c` walks `byte[node+0x18]` links from the list head to reach an
+EARLIER node, walks this node's own vertex chain to its tail, and appends a
+fresh 0x6c copy of every vertex the source owns. So each iteration lays down
+another copy and then transforms it, and `outer` copies accumulate.
+
+That resolves what looked like a contradiction: op3's BUILD handler
+(`0x10004c64`) allocates nothing at all, and yet op3's 72 nodes own **7,502 of
+the 11,723 vertices — 64%**. They are not generated, they are copied.
+`geocheck.mjs` pins it: for all 72, vertex and triangle counts are exactly
+`count x source`, the reference is always backward, and every chain bottoms out
+at an op0 or op4 node.
+
+The consequence for the port is a large one. **Only op0 and op4 are real
+generators**, between them 2,033 and 2,188 vertices, and the remaining work is
+one clone routine and three transforms rather than three independent mesh
+generators.
+
+It also explains the operand-width rule recorded earlier for build-op 3
+(`3 + 6·(nonzero 2-bit groups)`): the selector byte the eval pass reads is the
+same one the build pass used to decide how many triples to consume.
 
 All three walk the object's vertex list (`node+4`, chained by `+0x68`) and act on
 each vertex's position at `+0x24…+0x2c`:

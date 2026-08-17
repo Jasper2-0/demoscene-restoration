@@ -19,11 +19,13 @@
 // prologue and in all five handlers is gated by a bit read from the stream a
 // few instructions earlier.
 //
-// WHAT IS NOT CHECKED HERE, because the decoder does not claim it: the vertices
-// and triangles the five generators produce. `out/geo.json` carries 11,723 and
-// 19,074 of them and they are the oracle for the generators, which are a
-// separate port. This check covers the stream grammar only, and says so in its
-// output rather than letting a green line imply more than it tested.
+// WHAT IS NOT CHECKED HERE, because the decoder does not claim it: the vertex
+// and triangle DATA the generators produce. `out/geo.json` carries 11,723 and
+// 19,074 of them and they are the oracle for that separate port. What this file
+// does cover beyond the grammar is the SHAPE of the built structure — how many
+// vertices each node ends up owning and where they came from — because that is
+// what decides how much of a generator port is left, and it turned out to be a
+// good deal less than the vertex count suggested.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -163,6 +165,70 @@ for (const p of doc.programs) {
   if (bad) progBad++; else progOK++;
 }
 
+// ---------------------------------------------------------------------------
+// The built structure, which is a different claim from the grammar.
+//
+// OP3 GENERATES NOTHING. Its build handler allocates nothing at all, and yet
+// its 72 nodes own 7,502 of the 11,723 vertices — 64% of the geometry. The
+// answer is in its EVAL handler `0x10004e64`, which is where the work happens
+// for the one opcode PORT_SPEC 4b says does per-frame work:
+//
+//     lbz r9, 0x19(r27)     /* an outer repeat count            */
+//     lbz r3, 0x18(r27)     /* an index into the node list      */
+//     bl  0x10003e9c        /* walk to that node and CLONE it   */
+//     ... up to four transforms from the packed selectors ...
+//     addic. r9, r9, -1; bgt
+//
+// `0x10003e9c` walks `r3` links from the list head, then walks THIS node's
+// vertex chain to its tail and appends a fresh 0x6c copy of every vertex of the
+// source. So op3 is an ARRAY MODIFIER: N progressively transformed copies of an
+// earlier node. That leaves only op0 and op4 as real generators — 2,033 and
+// 2,188 vertices between them — which is a much smaller port than 11,723
+// vertices across three opcodes suggested.
+//
+// Checked rather than asserted from the disassembly, because "op3 copies
+// something" and "op3 copies node[at18] exactly count times" are different
+// claims and only the second one is worth building on.
+let repOK = 0, repBad = 0, backOK = 0, backBad = 0, genBad = 0, rootOK = 0;
+for (const p of doc.programs) {
+  const ns = p.nodes;
+  for (let i = 0; i < ns.length; i++) {
+    const n = ns[i];
+    if (n.op === 3) {
+      const k = n.at18;
+      // The source must already exist when the clone runs, so the reference is
+      // always backwards. A forward one would read a node the eval pass has not
+      // filled in yet and the geometry would depend on evaluation order.
+      if (k < i) backOK++;
+      else { backBad++; note(`${p.part}[${p.index}] node ${i} op3 at18=${k} is not backward`); }
+      const s = ns[k];
+      if (s && n.vertices.length === n.count * s.vertices.length
+        && n.triangles.length === n.count * s.triangles.length) repOK++;
+      else {
+        repBad++;
+        note(`${p.part}[${p.index}] node ${i} op3 at18=${k} count=${n.count}: `
+          + `${n.vertices.length} verts, expected ${n.count} x ${s?.vertices.length}`);
+      }
+    }
+    // Follow the clone chain down. An op3 whose source is another op3 is
+    // common — 40 vertices become 80 become 160 — so the question that
+    // actually has content is whether every chain BOTTOMS OUT at a generator.
+    // "Only op0 and op4 generate geometry" would be vacuous here: no shipped
+    // program contains an op1 or op2, so there is nothing else it could rule
+    // out. This can fail.
+    if (n.op === 3) {
+      let j = i, hops = 0;
+      while (ns[j] && ns[j].op === 3 && hops++ < ns.length) j = ns[j].at18;
+      if (ns[j] && (ns[j].op === 0 || ns[j].op === 4)) rootOK++;
+      else {
+        genBad++;
+        note(`${p.part}[${p.index}] node ${i} op3 chain ends at `
+          + `${ns[j] ? `op${ns[j].op}` : 'nothing'} after ${hops} hops`);
+      }
+    }
+  }
+}
+
 let failed = 0;
 const ok = (name, pass, detail = '') => {
   console.log(`${pass ? 'ok  ' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`);
@@ -208,8 +274,16 @@ if (dead.length) {
     + 'they are decoded from the instructions and unverified — a wrong operand '
     + 'width there would not fail this check');
 }
-console.log('     the stream grammar only: the vertices and triangles in '
-  + 'geo.json are the oracle for the five generators, which are not ported');
+ok('op3 repeats node[at18] exactly count times', repBad === 0,
+  `${repOK}/${repOK + repBad} nodes, vertices and triangles both`);
+ok('op3\'s source reference is always backward', backBad === 0,
+  `${backOK}/${backOK + backBad}`);
+ok('every op3 clone chain bottoms out at an op0 or op4 generator',
+  genBad === 0, `${rootOK}/${rootOK + genBad} chains`);
+
+console.log('     the generators themselves are not ported: geo.json\'s '
+  + '11,723 vertices and 19,074 triangles are their oracle, and only op0 '
+  + '(2,033) and op4 (2,188) actually make any — op3 copies');
 
 for (const f of failures) console.log(`     ${f}`);
 
