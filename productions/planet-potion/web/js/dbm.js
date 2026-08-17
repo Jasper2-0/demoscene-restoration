@@ -128,11 +128,18 @@ function readEnvelopes(r) {
  */
 function readDspEcho(r) {
   const maskLength = r.u16();
-  const enabled = [];
-  for (let i = 0; i < maskLength; i++) enabled.push(r.u8());
+  // THE MASK IS INVERTED. A track has echo where its byte is ZERO — the
+  // reference loader says so in one line, `if (track_mask[i] == 0) ... |=
+  // DSP_MASK_ECHO`. Read the obvious way round it puts the echo on the few
+  // tracks that should be dry and leaves it off the many that should have it,
+  // which is most of the module: part one's mask is mostly zeros.
+  const rawMask = [];
+  for (let i = 0; i < maskLength; i++) rawMask.push(r.u8());
+  const enabled = rawMask.map((m) => m === 0);
   return {
     channels: maskLength,
     enabled,
+    rawMask,
     delay: r.u16(),
     feedback: r.u16(),
     mix: r.u16(),

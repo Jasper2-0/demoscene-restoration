@@ -17,6 +17,7 @@
 //   * the DSPE parameters match the table in PORT_SPEC §8j.
 import fs from 'node:fs';
 import { parseDBM } from '../../web/js/dbm.js';
+import { unhandledEffects } from '../../web/js/dbmplayer.js';
 
 const argv = process.argv.slice(2);
 const ai = argv.indexOf('--audio');
@@ -45,6 +46,18 @@ for (const f of files) {
 
   console.log(`    version ${mod.version}, reserved 0x${mod.reserved.toString(16)}, `
     + `chunks ${mod.chunks.map((c) => c.id).join(' ')}`);
+
+  // HOW MUCH OF THE MUSIC IS ACTUALLY PLAYED, as a number in the output. The
+  // player once acted on 2 of the 38 commands dbplayer.library dispatches —
+  // 13% of what part one asks for — while every check here passed, because
+  // they all test structure and none of them tests interpretation. The gap was
+  // found by ear, which is the one instrument this suite does not have.
+  const fx = unhandledEffects(mod);
+  console.log(`    effect commands acted on: ${(fx.coverage * 100).toFixed(1)}%`
+    + `  unhandled: ${JSON.stringify(fx.unhandled)}`
+    + `  extended sub-commands unhandled: ${JSON.stringify(fx.extendedUnhandled)}`);
+  say(fx.coverage > 0.95, 'the player acts on most of the effect commands used',
+    `${(fx.coverage * 100).toFixed(1)}%`);
   say(mod.version === '2.21', 'version is 2.21', mod.version);
   say(mod.coverage.trailing === 0, 'no bytes between the last chunk and the end',
     `${mod.coverage.trailing}`);
