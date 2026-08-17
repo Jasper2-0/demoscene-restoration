@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Twenty-three checks accumulated over the work and there is no point in
-# remembering twenty-three invocations. Each passes or names what drifted; none of them
+# Twenty-four checks accumulated over the work and there is no point in
+# remembering twenty-four invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -169,6 +169,12 @@ run "arenacheck — the structural export, and scenes.json agreeing with it" \
 # page. Needs no dataset argument — it drives web/ itself.
 run "stagecheck — the pipeline switch, and the adapter reporting it" \
   node "$HERE/stagecheck.mjs"
+
+# PORT_SPEC §1: the glyph atlas, the glyph table, the clipper's scratch
+# geometry and the per-scene fog. The first two are checkable byte-for-byte
+# today and would be much harder to isolate once Stage 3b consumes them.
+run "initcheck — the atlas, the glyph table and the fog schedule" \
+  node "$HERE/initcheck.mjs" "$FLAT" "$HERE/out"
 
 # Every Warp3D name in PORT_SPEC rests on this ordering, and it was measured
 # once and written up as prose. Re-derives it from the shipped libraries.

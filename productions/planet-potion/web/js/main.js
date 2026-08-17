@@ -111,6 +111,15 @@ async function main() {
 
   let dataset = null;
   let textures = null;
+  // The four fog presets. `setFog` has existed in the shim since it was written
+  // and had never been called by anything — the intro turns linear fog on for
+  // four of part one's scenes and the page was rendering all of them clear.
+  let fogPresets = [];
+  try {
+    fogPresets = (await loadJSON('./data/render_state.json')).fog_presets ?? [];
+  } catch {
+    // Older dataset: no presets, so no fog. Not worth a message of its own.
+  }
   try {
     dataset = await loadJSON('./data/draws.json');
   } catch {
@@ -134,6 +143,13 @@ async function main() {
     if (!scene?.frames?.length) return null;
     const frame = scene.frames[Math.min(frameIndex, scene.frames.length - 1)];
     textures?.use(scene.part);
+    // Set UNCONDITIONALLY, including back to null. The original sets a preset
+    // once and lets it persist, which is fine playing start to finish; this
+    // page draws scenes out of order, so `export.py` resolves each scene's
+    // EFFECTIVE fog and the renderer applies exactly that. Carrying it as state
+    // here would make `?scene=N` depend on which scenes had been drawn before.
+    w3d.setFog(scene.fog === null || scene.fog === undefined
+      ? null : fogPresets[scene.fog]);
     w3d.setZBuffer(false, false);
     w3d.clear([0, 0, 0]);
     const info = w3d.drawFrame(frame);
@@ -274,6 +290,15 @@ async function main() {
             : 'absent',
         }),
         stageErrors,
+        // The fog plumbing, which is otherwise invisible: it needs
+        // render_state.json AND a resolved `fog` on each scene in draws.json,
+        // and either one missing leaves every scene clear with nothing to see.
+        fog: {
+          presets: fogPresets.length,
+          scenes: (dataset?.scenes ?? [])
+            .filter((s) => s.fog !== null && s.fog !== undefined)
+            .map((s) => `${s.part}/${s.slot}=${s.fog}`),
+        },
       }),
     };
     window.__demoReady = true;

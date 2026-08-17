@@ -40,16 +40,31 @@ REUSES = {'new_camera', 'dalej'}
 PARTS = [('p1', 0x100013f0, 0x10001698, 0x2642, 0x2706),
          ('p3', 0x10001724, 0x10001898, 0x27a6, 0x27fe)]
 FOG_SETTER = 0x100016e8
+SETSTATE = 0x1000212c
+W3D_FOGGING = 0x4000
+W3D_ENABLE, W3D_DISABLE = 1, 2
 
 
 def scan(d0, lo, hi):
-    """Walk the part function, tracking the two argument idioms the drivers use.
+    """Walk the part function, tracking the argument idioms the drivers use.
 
     `lwz r10, disp(r2)` stages the scene stream; `li r3, n` stages the camera
     index; `addi r3, r2, disp` stages a fog preset. Each `bl` to a driver
     consumes whatever is currently staged.
+
+    SETTING A PRESET IS NOT THE SAME AS FOG BEING ON, and reading only the
+    presets gets part one wrong. `W3D_SetState(W3D_FOGGING, ...)` turns fogging
+    on and off around them — twice on and twice off inside part one — so the
+    scenes between a disable and the next enable render CLEAR even though a
+    preset is still staged from earlier. `fogOn` is that state at each call, and
+    a consumer wanting the effective fog needs both fields.
+
+    Warp3D's actions are W3D_ENABLE = 1 and W3D_DISABLE = 2; those are the only
+    two values any of the program's nine SetState calls uses.
     """
     calls, stream, cam, fog = [], None, None, None
+    r4 = r5 = None
+    fog_on = False
     for off in range(lo - BASE, hi - BASE, 4):
         w = struct.unpack_from('>I', d0, off)[0]
         op, rD, rA, imm = w >> 26, (w >> 21) & 31, (w >> 16) & 31, w & 0xFFFF
@@ -59,11 +74,19 @@ def scan(d0, lo, hi):
             cam = imm
         elif op == 14 and rD == 3 and rA == 2:                # addi r3, r2, d
             fog = imm
+        elif op == 14 and rD == 4 and rA == 0:                # li r4, n
+            r4 = imm
+        elif op == 14 and rD == 5 and rA == 0:                # li r5, n
+            r5 = imm
         elif op == 18 and (w & 1):                            # bl
             li = w & 0x03FFFFFC
             if li & 0x02000000:
                 li -= 0x04000000
             t = BASE + off + li
+            if t == SETSTATE:
+                if r4 == W3D_FOGGING:
+                    fog_on = (r5 == W3D_ENABLE)
+                continue
             if t == FOG_SETTER:
                 continue                                      # keeps `fog` staged
             if t not in DRIVERS:
@@ -72,7 +95,8 @@ def scan(d0, lo, hi):
             calls.append({'driver': drv,
                           'slot': None if drv in REUSES else hex(stream),
                           'camera': cam if drv == 'new_camera' else None,
-                          'fog': hex(fog) if fog is not None else None})
+                          'fog': hex(fog) if fog is not None else None,
+                          'fogOn': fog_on})
             fog = None
     return calls
 
@@ -109,7 +133,8 @@ def schedule(flat, mods=()):
                    'startTick': prev_t, 'durTicks': end_t - prev_t}
             sched.append(row)
             cam = '' if c['camera'] is None else f" cam{c['camera']}"
-            fog = '' if c['fog'] is None else f" fog@{c['fog']}"
+            fog = ('' if c['fog'] is None else f" fog@{c['fog']}") \
+                + ('' if c.get('fogOn') else ' fog-off')
             print(f"  [{i:2}] {c['driver']:11} {c['slot'] or '(reuse)':>8}{cam}{fog}"
                   f"   {prev_s:8.3f}..{end_s:8.3f}s  ({row['durTicks']:5} ticks)")
             prev_s, prev_t = end_s, end_t

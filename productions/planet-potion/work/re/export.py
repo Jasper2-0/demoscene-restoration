@@ -40,6 +40,11 @@ PATCH_NOTE = ['glyph scan at 0x10002e78: compare rA r26 -> r10, so the lookup '
               'builds (sin, atan, 2^x, e^x), rebuilt from its own constants.']
 
 
+# The four fog presets, in the order export_render_state writes them, so a
+# scene's `fog` field indexes that array directly.
+FOG_PRESETS = (0x25f2, 0x2606, 0x261a, 0x262e)
+
+
 def g(d0, r2, disp):
     return struct.unpack_from('>I', d0, r2 + disp - BASE)[0]
 
@@ -84,10 +89,11 @@ def export_font_atlas(flat, out):
 
 def export_render_state(d0, r2, out):
     fog = []
-    for disp in (0x25f2, 0x2606, 0x261a, 0x262e):
+    for disp in FOG_PRESETS:
         a = r2 + disp - BASE
         v = struct.unpack_from('>fffff', d0, a)
-        fog.append({'start': v[0], 'end': v[1], 'color': [v[2], v[3], v[4]]})
+        fog.append({'disp': hex(disp), 'start': v[0], 'end': v[1],
+                    'color': [v[2], v[3], v[4]]})
     json.dump({
         'state': {'W3D_TEXMAPPING': True, 'W3D_PERSPECTIVE': True,
                   'W3D_GOURAUD': True, 'W3D_BLENDING': True,
@@ -242,16 +248,28 @@ def spans(sched):
     follow it, so its span runs to the next call that builds a new one.
 
     Yields the r2 DISPLACEMENT, not the stream pointer — the caller resolves it
-    through the small-data base.
+    through the small-data base — and the fog preset in effect.
+
+    FOG IS RESOLVED HERE RATHER THAN LEFT STICKY, and that is not tidiness. The
+    original sets a preset once and it persists until the next change, which is
+    fine for a program that plays start to finish; the page renders scenes out
+    of order (`?scene=N` draws exactly one) and cannot carry state it never ran
+    through. Attaching each scene's EFFECTIVE fog makes every scene
+    self-contained, which is the same property the rest of the dataset has.
     """
-    out = []
+    out, fog = [], None
     for i, c in enumerate(sched):
+        if c.get('fog') is not None:
+            fog = FOG_PRESETS.index(int(c['fog'], 16))
         if not c['slot']:
             continue
         j = next((k for k in range(i + 1, len(sched)) if sched[k]['slot']), None)
         end = sched[j]['startTick'] if j is not None else \
             sched[-1]['startTick'] + sched[-1]['durTicks']
-        out.append((int(c['slot'], 16), c['startTick'], end - c['startTick']))
+        # Both halves: the last preset staged, and whether fogging is switched
+        # on at this call. A preset with fogging disabled renders clear.
+        out.append((int(c['slot'], 16), c['startTick'], end - c['startTick'],
+                    fog if c.get('fogOn') else None))
     return out
 
 
@@ -268,7 +286,7 @@ def export_draws(flat, d0, r2, out, mods=()):
     res, fails = [], 0
     jobs = [('p1', P1_OVERLAY, 0x2642, 0x2706), ('p3', None, 0x27a6, 0x27fe)]
     for part, over, txt, obj in jobs:
-        for order, (disp, start, dur) in enumerate(spans(sch[part]['schedule'])):
+        for order, (disp, start, dur, fog) in enumerate(spans(sch[part]['schedule'])):
             samples = tuple(round(dur * (k + 0.5) / NSAMPLES) for k in range(NSAMPLES))
             strm = g(d0, r2, disp)
             o, _ = drawlog.run(strm, frames=samples, txt_tab=txt, obj_tab=obj,
@@ -277,11 +295,13 @@ def export_draws(flat, d0, r2, out, mods=()):
             if not frames:
                 fails += 1
                 res.append({'part': part, 'order': order, 'stream': hex(strm),
-                            'slot': hex(disp), 'startTick': start, 'durTicks': dur, 'frames': None,
+                            'slot': hex(disp), 'startTick': start, 'durTicks': dur,
+                            'fog': fog, 'frames': None,
                             'note': 'did not decode'})
                 continue
             res.append({'part': part, 'order': order, 'stream': hex(strm),
                         'slot': hex(disp), 'startTick': start, 'durTicks': dur,
+                        'fog': fog,
                         'overlay': hex(over) if over else None,
                         'frames': [{'t': f['time'], 'draws': [
                             {'prim': d['prim'], 'texture': d['texture'],

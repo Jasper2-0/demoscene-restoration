@@ -32,6 +32,27 @@ original's own output exactly, checked with `work/re/texvmdiff.mjs` and
 result, so the textures on screen are generated from the intro's bytecode rather
 than loaded from the exported PNGs — those are now only the oracle.
 
+`js/font.js` is PORT_SPEC §1's init stage: `_init_txtgen` expands seg2's
+2,048-byte 1bpp mask into the 128x128 glyph atlas, and `_init_scene_generate`
+unpacks the 40 glyph records from 200 bytes in seg0. Both reproduce their
+exported oracle exactly — `work/re/initcheck.mjs` compares 49,152 colour samples
+against `font_atlas.png` and all 40 records against `font.json`, and asserts the
+two shipped quirks are preserved rather than tidied away: `'0'` appears twice,
+and `'v'` carries `'w'`'s rectangle so the intro renders "v" as "w".
+
+Nothing on the page draws text yet — the type-4 handler is Stage 3b — so this is
+groundwork with an oracle rather than a change to what renders. That is the
+reason to do it now: both outputs are checkable byte-for-byte today and would be
+much harder to isolate once a text handler is consuming them.
+
+**Fog is applied.** `setFog` had existed in the shim since it was written and
+nothing had ever called it, so four of part one's scenes rendered clear that
+should not have. The show script turns `W3D_FOGGING` on and off around four
+`SetFogParams` calls, and the four presets are used by exactly four scenes, one
+each. `export.py` resolves the effective preset per scene rather than leaving it
+sticky, because the page draws scenes out of order and cannot carry state it
+never ran through.
+
 One thing the shim cannot settle on its own is the **texture environment**. No
 `W3D_SetTexEnv` call exists, so the Warp3D default applies, and the recorded
 stream does not pin it down: vertex colours are neither uniformly black nor

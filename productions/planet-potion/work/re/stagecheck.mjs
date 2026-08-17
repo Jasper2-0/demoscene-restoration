@@ -106,6 +106,13 @@ if (!findChrome()) {
       + 'the side that exists',
       st.stageErrors?.length === 1 && st.anim?.side === 'recorded',
       `${st.stageErrors?.[0] ?? 'no error reported'}; anim=${st.anim?.side}`);
+    // The fog plumbing needs two files to agree, and neither of rendercheck's
+    // two target frames is one of the four scenes that use it — so without this
+    // the wiring could be entirely absent and every suite would still pass.
+    ok('the page loaded the fog presets', st.fog?.presets === 4,
+      `${st.fog?.presets} presets`);
+    ok('and sees four scenes using them', st.fog?.scenes?.length === 4,
+      (st.fog?.scenes ?? []).join(' ') || 'none');
   });
 
   // 2. The switch reaches the pixels, and the two sides agree where they can.
