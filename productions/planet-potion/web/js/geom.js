@@ -331,6 +331,130 @@ export function transformVertex(v, rec, table) {
     f32(z - rec.translate[2])];
 }
 
+// ---------------------------------------------------------------------------
+// Triangles. Every one of them is emitted by `0x1000335c`, which takes FOUR
+// vertex indices and lays down two triangles — (a,b,c) and (c,d,a) — with the
+// count hardcoded to 3 at both of its emit sites. So a quad arrives as two
+// records rather than as one with four indices, and the winding is decided by
+// which of the four corners the caller loads into which register.
+
+const quad = (out, a, b, c, d) => { out.push([a, b, c]); out.push([c, d, a]); };
+
+/** The grid loop at `0x10004a78`: one quad per cell of an (inner+1)x(outer+1)
+ *  lattice of contiguous indices. `flip` is the reversed winding the box's back
+ *  face uses. */
+function gridFaces(out, base, inner, outer, flip) {
+  let b = base;
+  for (let j = 0; j < outer; j++) {
+    let a = b, b1 = b + 1, c = b + inner + 1, d = c + 1;
+    for (let i = 0; i < inner; i++) {
+      if (flip) quad(out, d, c, a, b1); else quad(out, b1, a, c, d);
+      a++; b1++; c++; d++;
+    }
+    b += inner + 1;
+  }
+}
+
+/**
+ * `0x100035c8` — the ordinal of grid point (x, y, z) among the ones the box
+ * emission kept.
+ *
+ * In the original this is a literal SEARCH: it re-walks the entire lattice from
+ * (0,0,0) on every call, counting non-interior points until it reaches the one
+ * asked for, which makes building a subdivided box quadratic in its own vertex
+ * count. Enumerating once into a lookup computes the same function — the
+ * interior predicate here is character for character the one the emission uses,
+ * which is what makes the two orders agree.
+ */
+function boxIndex(s0, s1, s2) {
+  const m = new Map();
+  let n = 0;
+  for (let z = 0; z <= s2; z++) {
+    for (let y = 0; y <= s1; y++) {
+      for (let x = 0; x <= s0; x++) {
+        m.set(`${x},${y},${z}`, n);
+        const interior = (x !== 0 && x !== s0) && (y !== 0 && y !== s1)
+          && (z !== 0 && z !== s2);
+        if (!interior) n++;
+      }
+    }
+  }
+  return (x, y, z) => m.get(`${x},${y},${z}`);
+}
+
+/**
+ * The box's six faces.
+ *
+ * The two z faces go through `gridFaces` on contiguous indices — the front
+ * plane starts at 0 and the back at `idx(0, 0, s2)`, which op0 obtains by
+ * calling the search rather than by arithmetic. The other four go through
+ * `0x100033d8` (x = 0 and x = s0) and `0x1000346c` (y = 0 and y = s1), each
+ * corner resolved by the same search.
+ *
+ * EACH PAIR FLIPS ON THE OPPOSITE SIDE. `0x100033d8` swaps its corners when its
+ * fixed coordinate is ZERO and `0x1000346c` swaps when it is NOT — `bne` in one
+ * and `beq` in the other — so the two routines are not the same code with a
+ * different axis, and copying one into the other inverts two of the six faces.
+ */
+function boxFaces(s0, s1, s2) {
+  const out = [];
+  const idx = boxIndex(s0, s1, s2);
+  gridFaces(out, 0, s0, s1, false);
+  gridFaces(out, idx(0, 0, s2), s0, s1, true);
+  for (const xv of [0, s0]) {
+    for (let y = 0; y < s1; y++) {
+      for (let z = 0; z < s2; z++) {
+        let p1 = idx(xv, y, z + 1), p2 = idx(xv, y, z);
+        let p3 = idx(xv, y + 1, z), p4 = idx(xv, y + 1, z + 1);
+        if (xv === 0) { [p1, p4] = [p4, p1]; [p2, p3] = [p3, p2]; }
+        quad(out, p1, p2, p3, p4);
+      }
+    }
+  }
+  for (const yv of [0, s1]) {
+    for (let x = 0; x < s0; x++) {
+      for (let z = 0; z < s2; z++) {
+        let p1 = idx(x, yv, z + 1), p2 = idx(x, yv, z);
+        let p3 = idx(x + 1, yv, z), p4 = idx(x + 1, yv, z + 1);
+        if (yv !== 0) { [p1, p4] = [p4, p1]; [p2, p3] = [p3, p2]; }
+        quad(out, p1, p2, p3, p4);
+      }
+    }
+  }
+  return out;
+}
+
+/** op4's tube skin, `0x100047ec` — a quad strip that always wraps around the
+ *  sides, and joins the last ring back to the first only when `closed`. */
+function tubeFaces(sides, rings, closed) {
+  const out = [];
+  let r0 = 0, r1 = sides;
+  for (let s = 0; s < rings - 1; s++) {
+    let a = r0, b = r1;
+    for (let e = 0; e < sides; e++) {
+      let a2 = a + 1, b2 = b + 1;
+      if (r0 + sides === a2) a2 = r0;
+      if (r1 + sides === b2) b2 = r1;
+      quad(out, a, a2, b2, b);
+      a++; b++;
+    }
+    r0 += sides; r1 += sides;
+  }
+  if (closed) {
+    let a = r0, b = 0;
+    for (let e = 0; e < sides; e++) {
+      if (a === r1) a = r0;
+      let a2 = a + 1;
+      if (a2 === r1) a2 = r0;
+      let b2 = b + 1;
+      if (b2 === sides) b2 = 0;
+      quad(out, a, a2, b2, b);
+      a++; b++;
+    }
+  }
+  return out;
+}
+
 /**
  * op0's generator — a subdivided box, or a plane when one extent is zero.
  *
@@ -403,7 +527,17 @@ export function buildOp0(node, table) {
       plane(z);
     }
   }
-  return out;
+  // A material record of kind 5 makes NO faces at all: `cmpwi r3, 5; beq` jumps
+  // clean over the whole face pass, so those nodes are point clouds.
+  const PAIR = { 0: [0, 1], 1: [2, 1], 2: [0, 2], 3: [0, 1] }[node.mode];
+  const triangles = rec?.kind === 5 ? []
+    : (node.mode === 0 ? boxFaces(s0, s1, s2)
+      : (() => {
+        const t = [];
+        gridFaces(t, 0, node.steps[PAIR[0]], node.steps[PAIR[1]], false);
+        return t;
+      })());
+  return { vertices: out, triangles };
 }
 
 // ---------------------------------------------------------------------------
@@ -477,8 +611,13 @@ function rotateAll(V, deg, table) {
  */
 export function buildOp3(node, source, table) {
   const V = [];
+  const T = [];
+  const n = source.vertices.length;
   for (let iter = 0; iter < node.count; iter++) {
-    for (const p of source) V.push([p[0], p[1], p[2]]);
+    // `0x10003fe4` adds the destination's CURRENT vertex count to every index,
+    // so each copy references its own vertices rather than the first copy's.
+    for (const t of source.triangles) T.push(t.map((v) => v + iter * n));
+    for (const p of source.vertices) V.push([p[0], p[1], p[2]]);
     let sel = node.sel, slot = 0;
     for (;;) {
       const kind = sel & 3;
@@ -490,7 +629,7 @@ export function buildOp3(node, source, table) {
       if (sel === 0) break;
     }
   }
-  return V;
+  return { vertices: V, triangles: T };
 }
 
 // ---------------------------------------------------------------------------
@@ -667,7 +806,10 @@ export function buildOp4(node, table, atanTable) {
   }
 
   const rec = node.records[0];
-  return V.map((v) => (rec ? transformVertex(v.p, rec, table) : v.p));
+  return {
+    vertices: V.map((v) => (rec ? transformVertex(v.p, rec, table) : v.p)),
+    triangles: tubeFaces(sides, rings, closed),
+  };
 }
 
 /**
@@ -682,17 +824,16 @@ export function buildProgram(decoded, table) {
   const out = [];
   for (const node of decoded.nodes) {
     if (node.op === 0) {
-      out.push({ op: 0, vertices: buildOp0(node, table) });
+      out.push({ op: 0, ...buildOp0(node, table) });
     } else if (node.op === 3) {
       const src = out[node.at18];
-      out.push({
-        op: 3,
-        vertices: src && src.vertices ? buildOp3(node, src.vertices, table) : null,
-      });
+      out.push(src && src.vertices
+        ? { op: 3, ...buildOp3(node, src, table) }
+        : { op: 3, vertices: null, triangles: null });
     } else if (node.op === 4) {
-      out.push({ op: 4, vertices: buildOp4(node, table, atanTable()) });
+      out.push({ op: 4, ...buildOp4(node, table, atanTable()) });
     } else {
-      out.push({ op: node.op, vertices: null });
+      out.push({ op: node.op, vertices: null, triangles: null });
     }
   }
   return out;

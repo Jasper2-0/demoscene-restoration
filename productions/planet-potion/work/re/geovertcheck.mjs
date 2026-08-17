@@ -1,4 +1,4 @@
-// geovertcheck.mjs — the geometry generators' vertex POSITIONS.
+// geovertcheck.mjs — the geometry generators' vertex positions AND triangles.
 //
 //   node work/re/geovertcheck.mjs flat/ out/geo.json
 //
@@ -49,6 +49,7 @@ const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
 const table = sinus();
 
 let nodesOK = 0, nodesBad = 0, vOK = 0, vBad = 0, countBad = 0;
+let tOK = 0, tBad = 0, tCountBad = 0;
 let worst = 0, worstAt = null;
 const unported = new Map();
 const failures = [];
@@ -85,6 +86,29 @@ for (const p of doc.programs) {
     else if (rec?.scale.some((v) => v !== 1)) seen.scale++;
     else if (rec?.translate.some((v) => v)) seen.translate++;
     else seen.plain++;
+
+    // The indexed triangles. Integers, so there is nothing to round and no
+    // reason for anything but exact equality — and the winding matters, so the
+    // three indices are compared in order rather than as a set.
+    const wt = want.triangles, gt = b.triangles ?? [];
+    if (wt.length !== gt.length) {
+      tCountBad++;
+      if (failures.length < 8) {
+        failures.push(`${p.part}[${p.index}] node ${i} op${want.op}: `
+          + `${gt.length} triangles, arena has ${wt.length}`);
+      }
+    } else {
+      for (let k = 0; k < wt.length; k++) {
+        if (gt[k].every((v, c) => v === wt[k].idx[c])) tOK++;
+        else {
+          tBad++;
+          if (failures.length < 8) {
+            failures.push(`${p.part}[${p.index}] node ${i} triangle ${k}: `
+              + `${JSON.stringify(gt[k])} vs ${JSON.stringify(wt[k].idx)}`);
+          }
+        }
+      }
+    }
 
     let bad = 0;
     for (let k = 0; k < built.length; k++) {
@@ -138,9 +162,13 @@ for (const [op, n] of [...unported].sort()) {
   skipped += n;
   console.log(`     op${op} produced no vertices: ${n} not checked`);
 }
+ok('every triangle has the same three indices, in order', tBad === 0
+  && tCountBad === 0, `${tOK}/${tOK + tBad}`
+  + (tCountBad ? `, ${tCountBad} nodes differ in count` : ''));
 ok('every vertex in the intro is covered', skipped === 0,
   `${vOK} of ${vOK + vBad + skipped}`);
 for (const f of failures) console.log(`     ${f}`);
 
 if (failed) process.exit(1);
-console.log('\nall three geometry generators reproduce the original exactly');
+console.log('\nall three geometry generators reproduce the original exactly, '
+  + 'vertices and triangles');
