@@ -44,16 +44,48 @@ default and the reasoning is in `js/warp3d.js` and `PORT_SPEC.md` §6.
 Serve the repository with any static HTTP server and open `productions/planet-potion/web/`.
 No build step, no runtime dependencies.
 
+Press **Start with sound** for the show: the real soundtrack, with the recorded
+frames stepping in time with it. Everything else is a single still.
+
 - `?oracle=1` — replay a recorded frame
 - `?scene=N&t=M` — one recorded frame, deterministically
 - `?inspect=1` — install the shared `window.__demo` adapter and draw nothing on its own
 - `?texenv=0|1|2` — texture environment: replace (default), modulate, decal
 
+The button is hidden in those four modes, because it cannot mean anything in
+them — each renders one still or nothing at all.
+
+## What "Start with sound" is, and is not
+
+The **audio is a port**: `dbm.js` reads the module and `dbmplayer.js` sequences
+and mixes it with the DSP echo, so what plays is generated here rather than
+streamed from a recording. `work/re/soundcheck.mjs` presses the button in a real
+browser and measures the samples that reach the output — part one's full 289.286
+seconds, stereo, and not silence.
+
+The **visuals are still recorded**, and sampled sparsely: five frames per scene,
+140 in all. So the show is stills changing in time with the music, not
+animation. Real playback would need 21,915 frames — `draws.json` is already
+19 MB for 140 — which is the clearest statement of why the engine, not a bigger
+export, is the remaining work.
+
+Frames follow the **audio clock** (`AudioContext.currentTime`), not
+`requestAnimationFrame`. METHOD.md §8 requires it for anything audio-locked, and
+here it is also the only clock that means anything: the show's schedule is
+defined by effect-7 signals inside the music, which is how `showorder.py`
+recovered the timeline in the first place.
+
 The recorded stream and textures are **not committed**; they are regenerable:
 
 ```sh
-cd ../work/re && python3 export.py flat/ out/ && cp -r out/* ../../web/data/
+cd ../work/re && ./ppcbox.sh python3 export.py flat/ out/ \
+  && ./ppcbox.sh python3 synthdump.py flat/ mods/ \
+  && cp -r out/* mods/*.dbm ../../web/data/
 ```
+
+`ppcbox.sh` is there because both tools generate their data by running the
+original under `qemu-user`, which does not exist on macOS. The full recipe,
+including where `flat/` comes from, is at the top of `../work/re/checkall.sh`.
 
 ## What is not here yet
 
@@ -68,7 +100,7 @@ between recorded and computed per stage, and only the last one is computed today
 | draw emission | recorded |
 | **GL state / raster** | **computed — this file** |
 
-Audio plays, without its dynamics. Two files and two checks:
+Audio plays **in the page**, not only in the harness. Two files and four checks:
 
 * `js/dbm.js` reads a DigiBooster Pro 2 module. `work/re/dbmcheck.mjs` holds it
   to every byte being claimed by a chunk, the chunk sizes agreeing with an
@@ -78,15 +110,77 @@ Audio plays, without its dynamics. Two files and two checks:
   cross. `work/re/dbmtime.mjs` checks the half that can be checked exactly: the
   sequencer reproduces `showorder.py`'s timeline tick for tick on both parts —
   1,013 rows and 289.286 s with all 26 scene boundaries on the same tick for
-  part one, 1,088 rows and 150.000 s with all 13 for part three.
+  part one, 1,088 rows and 156.563 s with all 13 for part three. That second
+  figure was 150.000 until `0xEE` pattern delay was implemented — the Python
+  timeline in `showorder.py` had the same hole, so the two agreed with each
+  other and the check stayed green while both were wrong.
+* `work/re/soundcheck.mjs` covers what neither of those can: that the **page**
+  calls them. Both were green the whole time `main.js` imported neither, and
+  "Start with sound" was a button with no click handler — visible, by an
+  inverted `hidden`, in exactly the modes where it could not work.
 
-**The effect set is deliberately unimplemented.** DigiBooster's numbering is not
-ProTracker's — effect 7 is the scene signal where ProTracker numbering would make
-it tremolo — so filling the rest in from ProTracker would be inventing behaviour.
-Only 7 and 15 are acted on, and `unhandledEffects()` reports what each module
-actually uses, so the gap is a number in the output rather than something noticed
-later by ear.
+**The effects are read out of the player, not guessed.** DigiBooster's numbering
+is not ProTracker's, so every one of them comes from the handler in
+`dbplayer.library` — which is embedded in the intro as seg1, and disassembles as
+68K. `unhandledEffects()` reports coverage as a number, and `dbmcheck` asserts
+it: **100% of the effect commands either module uses are acted on.**
 
-Still missing: those eleven effects, and the two softsynth generators that build
-the modules in the first place (`PORT_SPEC.md` §8b–8h). The modules themselves
-are currently exported by the harness rather than generated in the browser.
+| effect | what the handler does | at |
+|---|---|---|
+| 1 / 2 | portamento up / down, period ∓ param×4 per tick | `0x10022be4`, `0x10022c44` |
+| 3 | tone portamento toward the note's period | `0x10022e6c` |
+| 7 | writes the scene signal — six instructions, no sound | `0x100231c6` |
+| 8 / 25 | set panning / pan slide, on a 0..255 field | `0x100227f8`, `0x10022804` |
+| 9 | sample offset, `param << 8` | `0x100227b8` |
+| 10 / 12 | volume slide / set volume, 8.8 fixed, ceiling 0x4000 | `0x10022d38`, `0x10022d2e` |
+| 15 | speed below 32, BPM at or above | `0x1002283c` |
+| 0xE1 / 0xE2 | fine portamento up / down, once per row | `0x10022dfc`, `0x10022dd0` |
+| 0xE9 | retrigger the sample every n ticks | `0x10022a80` |
+| 0xEA / 0xEB | fine volume slide up / down | `0x10022e28`, `0x10022e4c` |
+| 0xED | note delay by n ticks | `0x10022ade` |
+| 0xE3 | play backwards — done in the mixer, not the dispatch | `0x10021b96` |
+| 0xEE | pattern delay: the row lasts (1 + n) rows | `0x10022722` |
+
+That required the mixer to run a **tick loop** rather than filling a row at a
+time, since most of these move something once per tick — the player draws the
+same distinction with a flag at `0x10021666` that every handler tests.
+
+**Coverage is 100% of the effect commands either module uses**, `0xE3` (play
+backwards) and the volume envelopes included. The envelopes matter more than
+their count suggests: part one has two for 56 instruments, but **164 of its 176
+key offs land on those two**, so they are the sustained voices and both shapes
+end at silence.
+
+The player is checked against **libdigibooster3**, the format author's own
+replayer — `work/re/oracle.sh` builds it, `work/re/dbmsuite.mjs` diffs one
+generated module per behaviour, and `work/re/dbmdiff.mjs` diffs the real
+modules. **All 37 behaviours match**, and with the echo parameters aligned the
+whole of part one matches the reference at **0.9955** on the amplitude envelope
+and **0.9858** on the waveform; part three at 0.9951 and 0.9772.
+
+The alignment is needed because of a difference that is the reference's rather
+than ours: **it ignores a module's echo settings.** Its "old" echo type never
+pushes DSPE into the DSP object, so it plays every DBM at delay 0x40 and
+feedback 0x80 — a generated module declaring 40 ms, which its own dbminfo
+prints as 40 ms, renders with taps 128 ms apart. These modules say 430 ms and
+have echo on 12 of 18 tracks. We keep the module's own values, so as the page
+actually plays it the figures are 0.97 and 0.91. Both are checked.
+
+The note base was also settled by ear rather than by measurement: the two
+references disagreed by two octaves, correlation preferred one and the
+disassembly the other, and only listening could say which was the intro. See
+`../work/re/NOTES.md`.
+
+Still missing:
+
+* **The final level is a stopgap and says so in the source.** The channel sum is
+  divided by `nch / 4`, which left part one peaking at 1.4 against Web Audio's
+  1.0 clamp — audible as crackle on the busiest passages. The finished buffer is
+  now scaled by 1/peak, which removes the clipping without touching the balance,
+  but the original's own mixing law has not been read yet.
+* **Exact resampler arithmetic.** Ours interpolates linearly in floating
+  point; the reference does the same in 16.16 fixed point with an eight-sample
+  lead-in, which is one sample of latency and a hair of shape. Worth the last
+  0.014 on a held note.
+* The two **softsynth generators** that build the modules (`PORT_SPEC.md`
+  §8b–8h); the modules are still exported by the harness.

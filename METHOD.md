@@ -324,6 +324,19 @@ halves are identical and fill every slot, so any aligned load returns it. And wh
 a run faults, `qemu -d in_asm -dfilter <lo>..<hi>` narrows it to a function in one
 pass; that is how the missing font-table initialiser was found.
 
+The technique has one cost worth planning for: it makes the project's strongest
+checks depend on `qemu-user`, which is **Linux-only** — Homebrew builds system
+targets, not user-mode ones, so there is nothing to install on macOS. Half of
+Planet Potion's suites therefore could not run on the machine the work was
+actually done on, and the gap is easy not to notice, because the portable half
+still passes and prints a healthy-looking score. Keep the oracle runnable where
+the editing happens: a container with two apt packages and the tool directory
+bind-mounted costs a page of Dockerfile
+(`productions/planet-potion/work/re/ppcbox.sh`) and it emulates PowerPC on Apple
+Silicon perfectly well. If it genuinely cannot run, the tools should exit
+**77 — absent**, so a suite that could not run is reported as skipped rather
+than counted as a pass.
+
 ### And where it is *not* pure, record the calls instead of stubbing them
 
 The obvious limit of the above is that it only covers subsystems touching no

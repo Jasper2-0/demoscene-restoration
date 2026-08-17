@@ -1,10 +1,10 @@
 #!/bin/sh
 # checkall.sh — run every Planet Potion verification suite.
 #
-#   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir]
+#   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Eleven checks accumulated over the work and there is no point in remembering
-# eleven invocations. Each either passes or names what drifted; none of them
+# Nineteen checks accumulated over the work and there is no point in
+# remembering nineteen invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -18,6 +18,45 @@
 # The tools that read the binary exit 77 in that case, and 77 is reported as
 # SKIP rather than counted as a failure. A suite that cannot run is not a suite
 # that found something.
+#
+# Rebuilding what those need, from nothing:
+#
+#   node ../../../../tools/fetch/originals.mjs planet-potion
+#   bsdtar -xf ../../../../originals/potion/potionplanet_potion.lha -C ../unpacked
+#   python3 hunkload.py ../unpacked/planet-potion_dcr.exe flat/
+#   ./ppcbox.sh python3 synthdump.py flat/ mods/
+#   ./ppcbox.sh python3 export.py flat/ out/ mods/part1_full.dbm mods/part3.dbm
+#   ./ppcbox.sh python3 texopsuite.py flat/ out/tex_programs.json out/opsuite/
+#   ./ppcbox.sh python3 animdump.py flat/ 0x100320b1 out/anim.json 92 200 400
+#   mkdir -p ../../web/data && cp -r out/* mods/*.dbm ../../web/data/
+#
+# That last copy is not optional for rendercheck and soundcheck: both drive a
+# real browser against web/, so the data has to be where the PAGE loads it
+# from, and an unpopulated web/data/ fails as 404s rather than as a missing
+# input. The two .dbm modules go with it — the page plays the real soundtrack,
+# and until the softsynth is ported (PORT_SPEC §8b–8h) the modules are exported
+# by synthdump.py rather than generated in the browser.
+#
+# Modules first: without them export.py rebuilds both under emulation to get
+# the show timeline, which is the slowest step in the whole pipeline.
+#
+# animdump's "92 200 400" are not decoration either. animcheck reads its node
+# list from frames[0], and at t=0 the scene has not drawn, so the default times
+# hand it an empty frame and every assertion is silently skipped.
+#
+# The ppcbox lines go through a container because those tools generate their
+# data by RUNNING the original under qemu-user, which does not exist on macOS.
+# See NOTES.md, "Where the oracle runs, and where it does not". The checks
+# below are all portable — they read flat/ or the dataset, never run PowerPC.
+#
+# dbmsuite needs no module of its own: it GENERATES one per behaviour and
+# compares each against the reference, which is how a wrong effect is found
+# without eighteen tracks of real music on top of it. It needs oracle.sh, and
+# skips at 77 without it.
+#
+# lvocheck needs the two Warp3D archives, which are copyrighted redistributables
+# and are NOT in this repository (hashes in NOTES.md). Give their directory as
+# the sixth argument, or leave it out and that one check skips.
 set -u
 
 FLAT=${1:?usage: checkall.sh flat/ dataset/ [modules/] [anim.json] [opsuite/]}
@@ -25,6 +64,7 @@ DATA=${2:?}
 MODS=${3:-}
 ANIM=${4:-}
 SUITE=${5:-}
+W3D=${6:-}
 HERE=$(dirname "$0")
 rc=0
 skipped=0
@@ -44,6 +84,8 @@ run "fpcheck — the two floating-point primitives, against exact arithmetic" \
   node "$HERE/fpcheck.mjs"
 run "speccheck — spec numbers re-derived from the binary" \
   python3 "$HERE/speccheck.py" "$FLAT"
+run "periodcheck — the pitch table, against the shipped dbplayer.library" \
+  node "$HERE/periodcheck.mjs" "$FLAT" ${MODS:+"$MODS/part1_full.dbm" "$MODS/part3.dbm"}
 run "texvmdiff — 69 texture programs against the original's own output" \
   node "$HERE/texvmdiff.mjs" "$DATA"
 run "texbuildcheck — the layer the browser calls, reorder included" \
@@ -52,6 +94,10 @@ run "projcheck — the emitter, over every recorded vertex" \
   node "$HERE/projcheck.mjs" "$DATA/draws.json"
 run "rendercheck — the player in a real browser, pixels read back" \
   node "$HERE/rendercheck.mjs" "$DATA"
+run "soundcheck — the page's own button, and the samples it queues" \
+  node "$HERE/soundcheck.mjs"
+run "dbmsuite — one generated module per replayer behaviour" \
+  node "$HERE/dbmsuite.mjs"
 
 [ -n "$SUITE" ] && run "texopdiff — each opcode in isolation" \
   node "$HERE/texopdiff.mjs" "$SUITE" "$DATA/tex_kernels.json"
@@ -63,6 +109,27 @@ if [ -n "$MODS" ]; then
   run "dbmtime — the sequencer reproduces the show timeline" \
     node "$HERE/dbmtime.mjs" "$MODS/part1_full.dbm" "$MODS/part3.dbm" \
     --showorder "$DATA/showorder.json"
+  # A RATCHET, not a target: the number is the best measured so far and the
+  # check fails if a change makes it worse. It will not reach 1.0, and that is
+  # understood rather than outstanding — the reference disagrees with
+  # dbplayer.library about the note base by two octaves and slides pitch in a
+  # different domain, so dbmdiff cancels the octaves and the portamento
+  # passages stay different by construction. See dbmplayer.js and NOTES.md.
+  # ./oracle.sh builds what this compares against; without it, 77 = skip.
+  # THE REAL MEASURE OF THE PORT, with the echo parameters aligned. The
+  # reference ignores a module's DSPE for its "old" echo type and plays every
+  # DBM at delay 0x40 / feedback 0x80; these modules say 430 ms / 120 and have
+  # echo on 12 of 18 tracks, so that one divergence — which is the reference's,
+  # not ours — is the whole of the remaining difference.
+  run "dbmdiff p1 — against libdigibooster3, echo aligned" \
+    node "$HERE/dbmdiff.mjs" "$MODS/part1_full.dbm" --ref-echo --min 0.99 --min-wave 0.98
+  run "dbmdiff p3 — against libdigibooster3, echo aligned" \
+    node "$HERE/dbmdiff.mjs" "$MODS/part3.dbm" --ref-echo --min 0.99 --min-wave 0.97
+  # And as the page actually plays it, honouring the module's own echo.
+  run "dbmdiff p1 — as played, with the module's own echo" \
+    node "$HERE/dbmdiff.mjs" "$MODS/part1_full.dbm" --min 0.96 --min-wave 0.90
+  run "dbmdiff p3 — as played" \
+    node "$HERE/dbmdiff.mjs" "$MODS/part3.dbm" --min 0.96 --min-wave 0.89
 elif [ -f "$DATA/audio.json" ]; then
   # No modules, but audio.json alone is worth checking: its chunk table has to
   # account for the size the generator declared, and that is what catches a
@@ -73,6 +140,11 @@ fi
 
 [ -n "$ANIM" ] && run "animcheck — the keyframe evaluator against real motion" \
   node "$HERE/animcheck.mjs" "$ANIM"
+
+# Every Warp3D name in PORT_SPEC rests on this ordering, and it was measured
+# once and written up as prose. Re-derives it from the shipped libraries.
+[ -n "$W3D" ] && run "lvocheck — the LVO table, re-derived from the real libraries" \
+  python3 "$HERE/lvocheck.py" "$W3D"
 
 printf '\n=== scenegram — EXPECTED TO FAIL 0/29, see PORT_SPEC section 4a\n'
 python3 "$HERE/scenegram.py" "$FLAT" "$DATA/scenes.json" 2>&1 | grep -E 'streams produce|no .*layout'

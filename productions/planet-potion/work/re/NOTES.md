@@ -1653,6 +1653,316 @@ The reference implementation to port from is libopenmpt's `Load_dbm.cpp` plus it
 DigiBooster Pro Echo plugin (BSD). UADE running the real `dbplayer` is the
 byte-exact ground truth if an A/B is ever needed.
 
+### A note byte is not a semitone — read from the player, after it was guessed
+
+The page played the soundtrack and it sounded wrong. It was wrong: **every note
+was about three octaves sharp**, 87% of triggers running above 4× sample rate
+and the worst at 67×, which is aliasing rather than music. `dbmplayer.js` had
+`c3 * 2 ** ((note - 25) / 12)` with a comment asserting that DigiBooster notes
+are 1-based semitones. That sentence is plausible, it is about trackers in
+general, and nothing in this project had ever checked it.
+
+Three suites were green the whole time. `dbmcheck` accounts for every byte,
+`dbmtime` reproduces the timeline tick for tick, and `soundcheck` measured peak
+0.80 and 99.8% non-silent — all true, none of them about pitch. Aliased noise
+scores *better* on "is it silent" than music does.
+
+**The modules said so first.** Across 3,196 notes in the two of them, no low
+nibble ever exceeds 11, and the only byte that breaks that is `0x1F`. For a
+flat semitone index, nibbles 12–15 would be a quarter of the population. That
+is the "count the population before naming a field" rule again, and the count
+was available without disassembling anything.
+
+**The player settled it.** `dbplayer.library 2.0` is embedded as seg1, so the
+authority was inside the artifact all along — `hunkload.py` parses it (it is a
+hunk executable in its own right) and capstone disassembles the 68K. At
+`0x10021d34`:
+
+```
+move.b  (a1), d0         ; the note byte
+lea.l   $10023106.l, a3  ; the period table
+lsr.b   #$4, d3          ; HIGH nibble = octave
+subq.b  #$1, d3          ; octave - 1
+mulu.w  #$18, d3         ; x 24 bytes = 12 words per octave
+andi.b  #$f, d0          ; LOW nibble = semitone
+move.w  (a3, d0.w), d0   ; -> an Amiga PERIOD
+```
+
+and the rate conversion at `0x10021c50` is `(0x369E99 / period) * (c3 / 0x20AB)`
+— the NTSC clock 3,579,545 over the period, scaled by the instrument's own C-3
+frequency against 8363. Since 3579545/8363 = 428.02 and 428 is the table's
+octave-6 C, an instrument plays at its own rate exactly on note `0x60`.
+
+One thing falls out that a formula would have got wrong even after the decode
+was fixed: the table is the **traditional rounded Amiga table, not a computed
+one** — 1812 halves to 904 where equal temperament wants 906, and 11520 steps
+to 10848 where it wants 10873 — so it is copied, not derived.
+
+**`0x1F` is KEY OFF, and this file said the opposite for one commit.** The
+claim was that the original reads five words past octave one onto period 5,760,
+and that the over-read was authentic. It is not: the test sits ahead of the
+note path at `0x10021cc4`, `cmpi.b #$1f, (a1)`, and branches past the trigger
+after bumping two envelope release counters. The reason it was missed is worth
+recording — a grep for `#$1f` across the disassembly was piped through
+`head -12`, the twelve hits shown were all `divu.w #$1f4` and friends from
+earlier addresses, and "no match" was concluded from a truncated list. The same
+shape as the `checkall.sh` stderr mistake further up this file: a command that
+was cut short read as a command that found nothing.
+
+An outside research summary of the DBM format flagged `0x1F` as the usual
+key-off value, which is what prompted the recheck. It agreed with the player on
+every other point that mattered here — the octave/semitone packing, 0..64
+volumes, the 0x20 speed/BPM threshold, `Cxx` as set-volume — and it was right
+about this one too.
+
+`periodcheck.mjs` pins all of it: the table appears in the shipped library
+exactly once, and no note in either module resolves above 4× — which is the
+assertion that fails, loudly, on the formula this replaced.
+
+### The effects, and the envelopes key off releases
+
+Reading the rest of the dispatch turned coverage from **13% of part one's
+effect commands to 99.2%**. The table is in `web/README.md`; what matters here
+is the shape of the work. The dispatch sets `a5` to a channel field before
+jumping, so one routine serves several effects — the volume slide at
+`0x10022d38` and the pan slide at `0x10022804` are the same code with different
+clamps, `0x4000` against `0x100`. Effect 14 looked like 1,032 separate problems
+until it was broken down by parameter nibble: `0xEA` and `0xEB`, fine volume
+slides, are three quarters of it.
+
+Most of it only works per tick, which the old mixer could not express — it
+filled a whole row at a time. The player marks the same distinction with a flag
+at `0x10021666` that every handler tests, and the mixer here now runs a tick
+loop for the same reason.
+
+**Volume envelopes matter more than their count suggests.** Part one has two,
+for 56 instruments — but **164 of its 176 key offs land on those two**, so they
+are the sustained voices and their whole amplitude shape is the envelope. Both
+end at y=0, so without them those instruments played flat out and never
+stopped. The evaluation is at `0x100220be`: find the first point at or past the
+position, step back one, interpolate linearly, then
+`channelVolume * envelopeY / 64` at `0x1002213a`. The point-count byte holds
+**one less than the number of points** — instrument 3 says 3 and carries
+`(0,0) (7,64) (38,11) (98,0)` — which is a documented DBM quirk and plainly
+true in the data.
+
+Implementing key off and the envelopes together dropped part one's DC offset
+from 0.104 to 0.061, because notes now stop instead of holding a DC-biased
+sample forever. The remaining bias is **not** ours: four of the 48 samples
+carry real offset, worst 0.45, and those samples are byte-exact against the
+original.
+
+### An oracle for the audio, and the first thing it found
+
+Two audio bugs shipped and were caught by ear. That is not a process, so
+`oracle.sh` builds **libdigibooster3** — the DBM format author's own replayer,
+BSD-2 — and `dbmdiff.mjs` renders both it and ours and prints a correlation.
+
+Getting it took some digging. The upstream repository is **gone**:
+`github.com/grzegorz-kraszewski` is a 404, the whole account, and
+digibooster.de's download link points at it while its amigafuture.de mirror
+answers 403. What survives is **Software Heritage's archive** of the repo, and
+that is what `oracle.sh` fetches — snapshot `f8565730`, master `9f4640bb`,
+2022-12-24. One build fix: `player.c` defines a function as a bare `inline`,
+which emits no symbol under C99, so it needs `-fgnu89-inline` to link on clang.
+
+**Measure the envelope, not the waveform.** Sample-phase correlation reads 0.09
+whether the notes are perfect or nonsense, because the two renders differ in
+length by a tenth of a percent and a few samples of drift floor it. RMS over
+~12 ms windows asks "is the same thing happening, as loudly, at the same
+moment", which keeps working while the player is still wrong. Both are
+reported; per-ten-second figures with the lag that achieved them say WHICH
+passage is off and whether the error is tempo or structure.
+
+The tool immediately paid for itself three times over, by **rejecting**
+hypotheses in a minute each. Ping-pong loops, linear interpolation and the DSP
+echo were each implemented or disabled and each moved the number by less than
+0.01 — none of them was the problem, which no amount of listening would have
+established.
+
+Then it found a real one. Part three rendered **6.7 seconds shorter** than the
+reference, which is structural rather than subtle, and part three is exactly
+where the one unimplemented sub-command lives: `0xEE`, pattern delay, four uses,
+all on the last four rows, each with n=14. Implementing it closed the gap to
+137 ms.
+
+**And `showorder.py` had the same hole.** The Python timeline and the JS
+sequencer both ignored `0xEE` and therefore agreed with each other, which is
+why `dbmtime` was green: two implementations of the same misunderstanding check
+out perfectly against one another. Part three's last scene actually runs to
+154.805s rather than 149.883s — 990 ticks, not 744 — so the recorded show
+schedule was short at the end. Both are fixed and `showorder.json` regenerated.
+
+Where the two references disagree, **dbplayer.library wins**: libdigibooster3 is
+a third implementation, and it does not even work in the same domain — it
+slides pitch in linear units (`MaxPitch = Speed * 864`) where dbplayer slides
+Amiga periods, so portamento-heavy passages may never match it exactly.
+
+**Standing: with the echo parameters aligned, the player matches the reference
+at 0.9955 on the envelope and 0.9858 on the waveform for part one, and
+0.9951 / 0.9772 for part three.** All 37 isolated behaviours match, none are
+known-different, and per-track levels sit at 1.00 except the two tracks the
+echo divergence below accounts for. As the page actually plays it — honouring
+the module's own echo, which the reference does not — the figures are
+0.97 / 0.91 and 0.96 / 0.90. All four are ratcheted in `checkall.sh`.
+
+### The last difference is the reference's, not ours
+
+Everything else was chased down to one thing: **libdigibooster3 ignores a
+module's echo settings.** `msynth_change_echo_params` only pushes DSPE values
+into the DSP object for `EchoType_New`; the type used at load is
+`EchoType_Old`, so `dsp_echo_new`'s built-in constants stand — delay 0x40,
+feedback 0x80 — for every DBM it plays. Measured rather than deduced: a
+generated module declaring 40 ms, which the reference's OWN dbminfo prints as
+40 ms, renders with echo taps 128 ms apart and each tap exactly half the last.
+
+Part one carries 430 ms and feedback 120, and 12 of its 18 tracks have echo, so
+the two players differ across most of the mix. Patching the module to the
+reference's own defaults and re-rendering settles it: **0.9700 to 0.9955 on the
+envelope, 0.9100 to 0.9858 on the waveform**. That gap was entirely the echo.
+
+We keep the module's parameters, because they are the module's own data and
+what dbplayer.library would have used, and `dbmdiff.mjs --ref-echo` measures
+everything else. Both figures are checked, so neither can quietly drift.
+
+### Four bugs the ear found and the metric could not
+
+The correlation sat at 0.85/0.76 with every behaviour test passing, and it
+still sounded wrong. Each of these came from listening, and each was then
+confirmed against the reference's source.
+
+**The kick drum went missing** when the note base moved two octaves. The first
+fix shifted the table INDEX, which ran octave nibbles 7 and 8 — instrument 5 at
+note 0x70 is the bass drum — past the end of a 96-entry table, where they got
+no period and fell silent. Nothing errored; 176 triggers simply produced
+nothing. The rate is multiplied by four instead, which cannot overflow and
+keeps the table's own rounded tuning.
+
+**Correlation is blind to level.** Every one of the 22 behaviour cases passed
+while the module was audibly too loud, because Pearson is scale-invariant: a
+voice at three times the right volume scores 1.0. Adding an RMS ratio to
+`dbmsuite.mjs` found the rest in a single run — every case sat at x2.00 except
+`panning` at x4.00.
+
+**Panning must not change loudness.** The reference pans by phase shifting and
+says so outright — "does not change amplitude" — so a centred voice is at full
+level in BOTH channels and a hard-panned one at full level in one. Our linear
+split cost 6 dB at centre, which put every hard-panned track at the wrong level
+against the centred ones; this module pans whole tracks with `fx8=0` / `ff`.
+The divisor was wrong too: the reference divides by the track count, measured
+as a per-track peak of 1/18 against our 1/9.
+
+**The echo mask is inverted.** `if (track_mask[i] == 0) ... |= DSP_MASK_ECHO`:
+a track has echo where its byte is ZERO. We had echo on the six tracks that
+should be dry and off the twelve that should have it. The note further up this
+file — "enabled on a handful of channels per module, in bursts" — was exactly
+backwards. The echo itself was wrong twice more: it CROSSFADES dry against wet
+(`l * NMix + l_del * PMix >> 8`) rather than adding, and its delay parameter is
+in half-milliseconds, `(data * mixfreq + 250) / 500`, so ours ran at half
+length. Correlation went 0.85 to 0.92 on that one fix.
+
+### Drift, and pitch in the right domain
+
+**Rounding each tick independently loses the remainder.** At 128 BPM a tick is
+861.328 samples; part three's 6,528 ticks drifted 2,141 samples — 48 ms —
+behind the reference. Part one never showed it because 105 BPM is exactly
+1,050 samples. Carrying the fraction took part three's waveform correlation
+from 0.02 to 0.70 and its envelope from 0.82 to 0.94.
+
+**Pitch slides belong in the semitone domain.** The reference keeps pitch as
+`(octave * 12 + note) << 3`, eighth-semitones, and every slide moves that;
+dbplayer's handlers subtract from an Amiga period. Part one scored 0.9 up to
+135 s and 0.5 to 0.7 after — which is exactly where effect 3 starts being used,
+144 times, and never once before. Moving to eighth-semitones took fine
+portamento from 0.13 to **0.93** and tone portamento from 0.35 to **0.95**.
+
+Continuous portamento is still not right: 0.70 down, 0.52 up from a low note,
+and -0.10 up from a high one where the slide ends above Nyquist and our
+resampler aliases. The magnitude is confirmed by sweep — halving or quartering
+the step makes it worse — and applying it on tick 0 is better than skipping it,
+so what remains is the shape of the per-tick trajectory. Pitch is now clamped
+to the reference's 96..864 eighth-semitones, which is right whether or not it
+is currently reached.
+
+### Isolating one behaviour at a time, and the two-octave disagreement
+
+A whole-module correlation says the player is wrong without saying where, so
+`dbmgen.mjs` builds a minimal module — the audio equivalent of `texops.py` —
+and `dbmsuite.mjs` runs one per behaviour through both players. `dbmsolo.mjs`
+does the same by stripping a real module to a single track, which is what first
+narrowed the problem: tracks 2, 3 and 4 scored 0.18–0.30 while track 9 scored
+0.82.
+
+The first generated case settled a much bigger question than it was written
+for. **A plain held note correlated 0.20**, with the pitch identical — and the
+zero crossings said why: 118 in the reference against our 29, a factor of four.
+The two references disagree about the note base **by two octaves**.
+
+* dbplayer.library indexes its period table `(octave - 1) * 12 + semitone`
+  (`0x10021d44`), so the instrument's stated frequency lands on octave nibble 6,
+  period 428.
+* libdigibooster3's loader computes `((Octave << 3) + (Octave << 2) + Note) << 3`
+  — `octave * 12 + note`, no minus one — two octaves lower.
+
+**I called this for dbplayer and I was wrong.** The structural argument looked
+strong — the table is exactly 96 entries, the modules use octave nibbles up to
+8, and `(octave - 1) * 12` fills that exactly while `octave * 12` runs off the
+end — so the reference was recorded as rendering these modules two octaves
+high, and `dbmdiff` was made to cancel the difference. Correlation said the
+opposite (0.51 against 0.76) and was overruled.
+
+**Listening settled it the other way: two octaves up is the intro.** A metric
+can only say which reference you resemble, not which reference is true, and the
+disassembly cannot say what the composer heard. The ear could, and did.
+
+The first fix for it was also wrong, in a way worth keeping. Shifting the
+INDEX by two octaves ran notes at nibbles 7 and 8 past the end of the table,
+where they got no period and fell silent — so the music came out at the right
+pitch **with the kick drum missing**, instrument 5 at note 0x70. That is what
+the next listen reported, and it is a good example of a bug whose symptom is a
+missing thing rather than a wrong thing: nothing errored, 176 note triggers
+simply produced no rate.
+
+The rate is multiplied by four instead. It cannot overflow, and it keeps the
+table's own rounded tuning, which is not exactly equal temperament and belongs
+to the original. Correlation went 0.76 to **0.84** for part one and 0.67 to
+**0.73** for part three, most of that being the notes that had been silent.
+
+What remains unresolved is left unresolved rather than tidied: the note path at
+`0x10021d34` is quoted correctly and the table is where it says it is, so
+something between that table and the mixer scales by four and has not been
+found. `0xD87C3C` at `0x1002195a` — four times the PAL clock, against the
+`0x369E99` used elsewhere — is the obvious suspect and the place to start.
+
+**17 of 22 behaviours match** — note, set volume,
+volume slides fine and coarse, offset, retrigger, key off, panning, all three
+loop modes, instrument volume, speed, note delay. Five differ for reasons that
+are understood and asserted as such:
+
+* the four **portamento** cases, because dbplayer slides an Amiga period and
+  libdigibooster3 slides linear pitch. Different domains, not different values:
+  scaling our step by a quarter moved 0.21 to 0.19;
+* **note-high**, because the period table is rounded integers. Period 80 where
+  79.85 was wanted is a 0.2% detune — inaudible, invisible to the envelope, and
+  enough to walk a waveform a cycle out of phase within a second. That is also
+  why a matching behaviour scores 0.94 rather than 0.99, and why the suite's
+  bar is 0.9.
+
+Three hypotheses died cheaply along the way, which is the tooling working:
+ping-pong loops, linear interpolation and the echo each moved the number by
+under 0.01, and a box filter for high playback rates moved it by 0.0000.
+
+`0xE3`, play backwards, is now implemented — dbplayer does it in the mixer by
+flipping the position accumulator's sign, libdigibooster3 with one line, and
+the direction flag ping-pong already needed. **Effect coverage is 100% of what
+both modules use.**
+
+**Still open**, measured: the final level, where the channel sum
+divided by `nch / 4` peaks at 1.4 against Web Audio's 1.0 clamp and is scaled
+by 1/peak as a stopgap — the original's own mixing law has not been read. Our
+render is also 2–5× louder than the reference with a ratio that VARIES, which
+is a balance difference rather than a gain one, and is the obvious next thread.
+
 ### The LVO table — CONFIRMED against the shipped library
 
 This was the project's last single-sourced dependency: every Warp3D name here
@@ -1701,8 +2011,28 @@ names *setstate*/*lock*/*unlock* landing on `SetState`/`LockHardware`/
 spot-check offsets and the table they come from are confirmed.** The 22 renderer
 names in this document are no longer provisional.
 
+**This is now `lvocheck.py` rather than a paragraph.** All of the above was
+measured once and written up here, which makes it evidence that cannot be
+re-run — and every Warp3D name in `PORT_SPEC.md` rests on it. The check
+re-derives the count and the tag scan from whichever libraries it is given,
+fails on a table that is not the API library's, and exits 77 when the archives
+are absent, which they are in a fresh clone. Pass their directory as
+`checkall.sh`'s sixth argument.
+
+Two traps it had to get past, both of which produce confident wrong answers.
+Scanning each vector until its first `blr` finds **three** of the four, not
+four: `W3D_RequestMode`'s `lis` sits past an early return, and an under-read
+looks exactly like a refutation. Each function is bounded by the next vector
+address instead. And the archives carry 24 hardware **driver** libraries
+alongside the API pair — `W3D_Virge`, `W3D_Permedia2`, `W3D_AvengerBE` and so
+on — whose tables are 69 and 75 entries because they implement a different
+interface. Asserting 88 across everything named `*.library` produced 48
+failures that were all the checker's fault. They are reported now, not
+asserted, because the contrast is the point: 88 belongs to the API library.
+
 The Warp3D archives are copyrighted redistributables and stay out of this
-repository; only `lvo.py` and this note are committed. Their hashes:
+repository; only `lvo.py`, `lvocheck.py` and this note are committed. Their
+hashes, which `lvocheck.py` also verifies when handed the `.lha` files:
 
 ```
 Warp3D-4.0.lha   a1da7fd863dd69c667f7d1f1bd07a4c80df985f600741acb505732cb30183df7
@@ -1892,20 +2222,90 @@ produced two answers that disagree.
 | `texvmcheck.mjs` | decode and instruction-coverage report for the texture VM |
 | `speccheck.py` | re-derives PORT_SPEC's numbers from the binary and greps the doc for superseded ones; exits non-zero on drift |
 | `synthhash.py` | pins both modules' size, SHA-256 and per-chunk digests — the audio acceptance test. Slow: minutes per module, so it is not part of `export.py` |
+| `synthdump.py` | writes those two modules out as files, under the names `checkall.sh` expects. The suite took a modules directory that nothing here produced |
 | `dbmpatt.py` | unpacks DBM0 song and pattern data; finds the scene-advance signals |
 | `showorder.py` | the show schedule: call order from the code, durations from the music |
 | `vecscan.py` | every library vector the code fetches, by tracking the base registers |
 | `ppdis.py` | ranged disassembly with symbol names; `-m` for the 68K bootstrap. Resyncs past words capstone cannot decode instead of stopping |
+| `ppcbox.sh` | runs any of the oracle tools inside `Dockerfile.ppcbox`, because `qemu-ppc-static` is Linux-only and this project is mostly edited from a Mac |
 | `lvo.py` | reads a Warp3D library's own vector table from its ROMTag |
+| `dbmgen.mjs` | builds a minimal DBM module — the audio equivalent of `texops.py` |
+| `dbmsuite.mjs` | one generated module per replayer behaviour, each diffed against the reference |
+| `dbmsolo.mjs` | strips a real module to one track, so a bad voice can be found among eighteen |
+| `oracle.sh` | fetches libdigibooster3 from Software Heritage (upstream is gone) and builds it |
+| `dbmdiff.mjs` | our replayer against that reference, as an envelope correlation per ten seconds |
+| `periodcheck.mjs` | the pitch table and note decode, against the dbplayer.library embedded as seg1 |
+| `lvocheck.py` | the same reading, as a check that can fail: 88 vectors, and the four tag-taking functions on indices 4, 15, 69, 80 |
 | `export.py` | runs all of the above and writes the whole dataset |
 | `PORT_SPEC.md` | the current answer, organised for someone implementing it |
 | `PPLoad.java` | Ghidra: load segments, apply symbols, decompile the named functions |
 | `PPVm.java` | Ghidra: pin `r2`, name the VM handlers, decompile them |
 
 ```sh
-python3 hunkload.py planet-potion_dcr.exe flat/
-python3 rendertex.py flat/ tex/
+node ../../../../tools/fetch/originals.mjs planet-potion
+bsdtar -xf ../../../../originals/potion/potionplanet_potion.lha -C ../unpacked
+python3 hunkload.py ../unpacked/planet-potion_dcr.exe flat/
+./ppcbox.sh python3 synthdump.py flat/ mods/
+./ppcbox.sh python3 export.py flat/ out/ mods/part1_full.dbm mods/part3.dbm
+./ppcbox.sh python3 animdump.py flat/ 0x100320b1 out/anim.json 92 200 400
 $GHIDRA/support/analyzeHeadless proj pp -import flat/seg0_CODE_10000000.bin \
     -processor PowerPC:BE:32:default -loader BinaryLoader \
     -loader-baseAddr 0x10000000 -postScript PPVm.java $PWD/flat
 ```
+
+`bsdtar` reads LHA — macOS ships it, so unpacking needs no `lhasa`. `hunkload.py`
+is pure Python and runs anywhere; everything downstream of it wants a PowerPC.
+
+Generate the modules **before** the export rather than after. `export.py` needs
+the show timeline, `showorder.schedule` reads it out of the music, and given no
+module paths it rebuilds both modules under emulation — 8.3 MB of samples, the
+slowest thing in the pipeline, repeated on every export.
+
+## Where the oracle runs, and where it does not
+
+The tools here split cleanly in two, and the split is not the one the file names
+suggest. About half **read** the binary — `hunkload.py`, `speccheck.py`,
+`ppdis.py`, `scenegram.py` — and are portable. The other half **run** it, under
+`/usr/bin/qemu-ppc-static`, and that is Linux user-mode emulation: Homebrew's
+qemu builds system targets only, so on macOS there is no version of it to
+install. Most of this project is edited from a Mac, which meant the whole oracle
+half was reachable only from a cloud session.
+
+`ppcbox.sh` closes that: a Debian container with two apt packages, this
+directory bind-mounted at `/work`, so relative paths like `flat/` and `out/`
+keep working and the tools never learn they are containerised. Debian builds
+every qemu target on arm64 too, so it runs on Apple Silicon — measured at
+qemu-ppc 7.2.22, with `texconv.py`'s 40 kernels reproducing exactly in 2.4 s.
+
+Eight places here spawn the emulator and five of them wrote the path out as a
+literal, so `ppcrun.QEMU` was a single definition that most of its users
+ignored — `rungeo`, `runscene`, `runsynth`, `texops` and `texops2`. It is now
+`ppcrun.qemu()`, which checks and then returns the path — a tool cannot obtain
+the string without passing the check. Missing, it exits **77**, the ABSENT code
+`checkall.sh` already reports as SKIP, instead of a `FileNotFoundError` that
+names the path but not the reason.
+
+### Two things that only showed up once every suite could run here
+
+Rebuilding the whole dataset from the archive, rather than inheriting one, is
+what surfaced both. Neither is visible when the inputs are already on disk.
+
+**`animdump.py` segfaulted on its own documented invocation.** `export.py`
+takes two steps before it runs anything — `fix_glyph_scan`, because the
+original's glyph loop tests the wrong register and spins on any character
+outside the shipped 40, and `preload_tables`, because seg 5 is BSS and the
+**68K** bootstrap is what fills the sin/atan/2^x/e^x tables. `animdump` took
+neither, so `_calc_matrix` — which is built entirely on those tables — ran
+against 505,056 bytes of zeros and died on a qemu SIGSEGV. It does both now.
+The general shape is worth remembering: the harness setup lived in the caller
+that happened to need it first, not in the harness.
+
+**`animcheck.mjs` passed while checking nothing.** It reads its node list from
+`frames[0]`, and `animdump`'s default times begin at t=0, where the scene has
+not drawn yet — so the list was empty, every assertion was skipped, and it
+printed "all checks passed". Sampled at 92, 200 and 400 instead it has two
+tracked nodes and really does assert: blocks 12/13/14 reproduce the published
+cx, cy and scale, worst |diff| 1.5e-5 on the one that moves, and the parented
+node's `flags3 0x20|0x10` copy of channels 21..23 holds exactly. It now fails
+when the node count is zero. This is METHOD.md's rule about checks that cannot
+exit non-zero, found in the suite that was written to enforce it.
