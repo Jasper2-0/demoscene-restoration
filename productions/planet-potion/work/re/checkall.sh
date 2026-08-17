@@ -102,6 +102,13 @@ run "dbmsuite — one generated module per replayer behaviour" \
 [ -n "$SUITE" ] && run "texopdiff — each opcode in isolation" \
   node "$HERE/texopdiff.mjs" "$SUITE" "$DATA/tex_kernels.json"
 
+# The softsynth, primitive by primitive, against per-sample targets sliced out
+# of the modules the original built. --min is a RATCHET: the count of samples
+# that must come out byte-exact, raised as each primitive lands. Needs
+# `python3 synthref.py flat/ mods/ out/synthref/` first; 77 = skip without it.
+run "synthdiff — each softsynth primitive against its own sample" \
+  node "$HERE/synthdiff.mjs" "$FLAT" "$HERE/out/synthref" --min 11
+
 if [ -n "$MODS" ]; then
   run "dbmcheck — the DigiBooster reader accounts for every byte" \
     node "$HERE/dbmcheck.mjs" "$MODS/part1_full.dbm" "$MODS/part3.dbm" \
