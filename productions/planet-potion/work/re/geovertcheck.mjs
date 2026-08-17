@@ -52,6 +52,8 @@ let nodesOK = 0, nodesBad = 0, vOK = 0, vBad = 0, countBad = 0;
 let tOK = 0, tBad = 0, tCountBad = 0;
 let nOK = 0, nBad = 0, nNonFinite = 0, colourBad = 0;
 let mOK = 0, mBad = 0;
+const uvBySub = new Map();
+let uvOK = 0, uvBad = 0;
 let worst = 0, worstAt = null;
 const unported = new Map();
 const failures = [];
@@ -142,6 +144,15 @@ for (const p of doc.programs) {
         .filter((f) => gt[k][f] !== wt[k][f])
         .concat(gt[k].rgba?.some((v, c) => v !== wt[k].rgba[c]) ? ['rgba'] : [])
         .concat(gt[k].hasLayer !== (parseInt(wt[k].layer, 16) !== 0) ? ['layer'] : []);
+      // UVs, kept per projection mode. Five of the seven modes reproduce
+      // exactly; 0x30 and 0x40 do not, and the split is reported rather than
+      // averaged away, because an aggregate percentage would hide which ones.
+      const key = `sub 0x${wt[k].sub.toString(16).padStart(2, '0')}`;
+      const st = uvBySub.get(key) ?? { ok: 0, bad: 0 };
+      uvBySub.set(key, st);
+      if (gt[k].uv && gt[k].uv.every((pair, c) =>
+        pair.every((v, d) => v === wt[k].uv[c][d]))) { st.ok++; uvOK++; }
+      else { st.bad++; uvBad++; }
       if (!diff.length) mOK++;
       else {
         mBad++;
@@ -218,12 +229,27 @@ ok('the builder leaves every source colour at zero', colourBad === 0,
 // with the node's bounding box as the divisor — and kind 4 then overwrites two
 // of the three pairs with a different formula. Named here with a count so that
 // "the material is exact" is not read as covering the texture coordinates.
-console.log(`     UVs are NOT ported: ${(tOK + tBad) * 2} coordinate pairs `
-  + 'from the projection routine at 0x100036e8 are not compared');
+// A RATCHET, not a pass. 0x100036e8 has seven projection modes; five of them
+// reproduce exactly and two do not, so the number below is what has been earned
+// rather than what is right. It is asserted so a regression in the five that
+// work fails the suite, and the per-mode split is printed so the two that do
+// not cannot be averaged into looking fine.
+const UV_FLOOR = 18082;
+ok('the UV projection reproduces at least what it did', uvOK >= UV_FLOOR,
+  `${uvOK}/${uvOK + uvBad} triangles, floor ${UV_FLOOR}`);
+for (const [k, v] of [...uvBySub].sort()) {
+  console.log(`     ${k}  ${v.ok} exact${v.bad ? `, ${v.bad} NOT reproduced` : ''}`);
+}
+if (uvBad) {
+  console.log('     modes 0x30 and 0x40 are unsolved: a vertex whose box '
+    + 'coordinate is 0 projects to 0 in a triangle\'s FIRST slot and to '
+    + 'something else in the others, so the routine carries state across '
+    + 'corners that this port does not model');
+}
 ok('every vertex in the intro is covered', skipped === 0,
   `${vOK} of ${vOK + vBad + skipped}`);
 for (const f of failures) console.log(`     ${f}`);
 
 if (failed) process.exit(1);
-console.log('\nall three geometry generators reproduce the original exactly, '
-  + 'vertices, triangles and normals');
+console.log('\nvertices, triangles, normals and materials are exact; '
+  + `UVs are ${uvOK}/${uvOK + uvBad} and two projection modes are unsolved`);

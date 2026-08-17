@@ -332,6 +332,118 @@ export function transformVertex(v, rec, table) {
 }
 
 // ---------------------------------------------------------------------------
+// Texture coordinates, `0x100036e8`. Seven projection modes on the record's
+// `sub` byte, and every one of them appears in the shipped data.
+
+/** min and max of a set of points, componentwise. */
+function bounds(points) {
+  const lo = [...points[0]], hi = [...points[0]];
+  for (const p of points) {
+    for (let c = 0; c < 3; c++) {
+      if (p[c] < lo[c]) lo[c] = p[c];
+      if (p[c] > hi[c]) hi[c] = p[c];
+    }
+  }
+  return { lo, ext: [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]] };
+}
+
+/**
+ * One vertex's (u, v).
+ *
+ * THE FLAG SWITCHES BOTH THE POINT AND THE BOX, TOGETHER. By default the
+ * routine reads the vertex at +0x24 — the SOURCE position — and divides by the
+ * box of the source positions. When the record's +0x03 flag is set it reloads
+ * from +0x00, the transformed position, and divides by the transformed box.
+ * Both boxes are built in the same pass, one before the transform and one
+ * after, so taking the transformed point against the source box is a single
+ * plausible-looking mistake that leaves the coordinates off by a whole tile.
+ *
+ * `state` carries the previous vertex's value so a face that straddles a
+ * texture seam can be unwrapped — the +-1 nudge when two coordinates differ by
+ * more than half a turn. It is reset per TRIANGLE, not per node, so the first
+ * corner of every face is always taken as written.
+ *
+ * THE HALF IT COMPARES AGAINST IS 128/255, not 0.5: `f29` still holds what
+ * `_generate_obj` divided at entry and nothing since has touched it.
+ */
+function projectUV(pSrc, pOut, gen, rec, b1, b2, state, atanTable) {
+  const HALF = HALFISH;
+  const box = rec.flag ? b2 : b1;
+  const p = rec.flag ? pOut : pSrc;
+  let n = [(p[0] - box.lo[0]) / box.ext[0], (p[1] - box.lo[1]) / box.ext[1],
+    (p[2] - box.lo[2]) / box.ext[2]];
+  let u = fma(n[0], rec.span[0], rec.size[0]);
+  let v = fma(n[1], rec.span[1], rec.size[1]);
+  const sub = rec.sub;
+
+  if (sub === 0x20) return [u, v];
+
+  if (sub === 0x60) {
+    // The generator already wrote a coordinate per vertex — op4's ring u and
+    // its arc-length v — and this mode uses those rather than a projection.
+    let gu = gen ? gen[0] : 0, gv = gen ? gen[1] : 0;
+    if (state.seen) {
+      let d = gu - state.u;
+      if (d > HALF) gu -= 1.0; else if (-d > HALF) gu += 1.0;
+      d = gv - state.v;
+      if (d > HALF) gv -= 1.0; else if (-d > HALF) gv += 1.0;
+    }
+    state.seen = true; state.u = gu; state.v = gv;
+    return [fma(gu, rec.span[0], rec.size[0]), fma(gv, rec.span[1], rec.size[1])];
+  }
+
+  // The remaining modes all replace one of the two coordinates, and four of
+  // them take u from an ANGLE rather than from a box coordinate.
+  let ang = p[0];
+  let angled = false;
+  if (sub === 0x00) return [fma(n[2], rec.span[0], rec.size[0]), v];
+  if (sub === 0x10) return [u, fma(n[2], rec.span[1], rec.size[1])];
+  if (sub === 0x30) {
+    v = fma(n[0], rec.span[1], rec.size[1]);
+    ang = atanTurns(p[2], p[1], atanTable); angled = true;
+  } else if (sub === 0x40) {
+    v = fma(n[1], rec.span[1], rec.size[1]);
+    ang = atanTurns(p[0], p[2], atanTable); angled = true;
+  } else if (sub === 0x50) {
+    v = fma(n[2], rec.span[1], rec.size[1]);
+    ang = atanTurns(p[0], p[1], atanTable); angled = true;
+  }
+  void angled;
+  if (state.seen) {
+    const d = Math.abs(state.u - ang);
+    if (d > HALF) ang = state.u <= HALF ? ang - 1.0 : ang + 1.0;
+  }
+  state.seen = true; state.u = ang;
+  return [fma(ang, rec.span[0], rec.size[0]), v];
+}
+
+/**
+ * Fill every triangle's three (u, v) pairs. `0x10003be0`.
+ *
+ * KIND 4 THEN OVERWRITES TWO OF THE THREE. After the projection has run, a
+ * record of kind 4 replaces the first pair with `span * 128/255 + size` and the
+ * second with `span * 128/255`, leaving only the third as projected — so a
+ * third of that node's coordinates come from the projection and two thirds do
+ * not.
+ */
+function applyUVs(triangles, positions, gen, records, atanTable) {
+  const rec = records[0];
+  if (!rec || !positions.built.length) return;
+  const b1 = bounds(positions.source);
+  const b2 = bounds(positions.built);
+  for (const t of triangles) {
+    const state = { seen: false, u: 0, v: 0 };
+    t.uv = t.idx.map((i) => projectUV(positions.source[i], positions.built[i],
+      gen ? gen[i] : null, rec, b1, b2, state, atanTable).map(f32));
+    if (rec.kind === 4) {
+      t.uv[0] = [f32(fma(rec.span[0], HALFISH, rec.size[0])),
+        f32(fma(rec.span[1], HALFISH, rec.size[1]))];
+      t.uv[1] = [f32(rec.span[0] * HALFISH), f32(rec.span[1] * HALFISH)];
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The material fields, `0x10003b8c`. Each triangle is filled in from the node's
 // FIRST material record — `lwz r20, 0(r27)` is reloaded per triangle, so the
 // chain is walked from the top every time rather than carried along.
@@ -568,9 +680,15 @@ export function buildOp0(node, table) {
   const dx = a / s0, dy = b / s1, dz = d / s2;
   const rec = node.records[0];
   const out = [];
-  const V = (x, y, z) => out.push(rec
-    ? transformVertex([f32(x), f32(y), f32(z)], rec, table)
-    : [f32(x), f32(y), f32(z)]);
+  // Both frames are kept: the UV projection divides by a box built from the
+  // SOURCE positions and, when the record's flag is set, by one built from the
+  // transformed ones.
+  const src = [];
+  const V = (x, y, z) => {
+    const p = [f32(x), f32(y), f32(z)];
+    src.push(p);
+    out.push(rec ? transformVertex(p, rec, table) : p);
+  };
   const plane = (z) => {
     let y = y0;
     for (let j = 0; j <= s1; j++) {
@@ -624,11 +742,9 @@ export function buildOp0(node, table) {
         gridFaces(t, 0, node.steps[PAIR[0]], node.steps[PAIR[1]], false);
         return t;
       })());
-  return {
-    vertices: out,
-    triangles: materialise(triangles, node.records),
-    normals: computeNormals(out, triangles),
-  };
+  const tris = materialise(triangles, node.records);
+  applyUVs(tris, { source: src, built: out }, null, node.records, atanTable());
+  return { vertices: out, triangles: tris, normals: computeNormals(out, triangles) };
 }
 
 // ---------------------------------------------------------------------------
@@ -819,7 +935,7 @@ function atanTurns(y, x, atanTable) {
  * against the `neg` on the pitch index, and getting only one of the two right
  * leaves the tube inside out.
  */
-export function buildOp4(node, table, atanTable) {
+export function buildOp4(node, table, atanTab) {
   const sides = node.at18, closed = node.flag, pts = node.points;
   const count = node.count;
   if (!sides || !count) return [];
@@ -849,6 +965,10 @@ export function buildOp4(node, table, atanTable) {
   // Pass one: sample the spline, and lay down a ring of `sides` vertices at
   // each sample, all sharing that sample's position and radius.
   const V = [];
+  // The v coordinate the generator writes is arc length along the spline,
+  // accumulated as sqrt of the squared step — `frsqrte` then `fres`, which is
+  // a reciprocal of a reciprocal square root rather than a square root.
+  let arc = 0.0;
   let lx = pts[0].p[0], ly = pts[0].p[1], lz = pts[0].p[2];
   for (let i = 0; i < count; i++) {
     const cur = pts[i];
@@ -872,8 +992,14 @@ export function buildOp4(node, table, atanTable) {
       const y = splineAt(P.p[1], cur.p[1], N.p[1], Q.p[1], t, t2, t3);
       const z = splineAt(P.p[2], cur.p[2], N.p[2], Q.p[2], t, t2, t3);
       const w = splineAt(P.w, cur.w, N.w, Q.w, t, t2, t3);
+      const dx = x - lx, dy = y - ly, dz = z - lz;
+      let sq = dx * dx;
+      sq = fma(dy, dy, sq);
+      sq = fma(dz, dz, sq);
+      arc += fres(1 / Math.sqrt(sq));
       for (let e = 0; e < sides; e++) {
-        V.push({ sp: [f32(x), f32(y), f32(z)], w: f32(w), p: null });
+        V.push({ sp: [f32(x), f32(y), f32(z)], w: f32(w), p: null,
+          u: circle[e][2], arc: f32(arc) });
       }
       lx = x; ly = y; lz = z;
       t += dt;
@@ -881,6 +1007,7 @@ export function buildOp4(node, table, atanTable) {
   }
 
   // Pass two: a frame per ring from the local tangent, then place the circle.
+  const invArc = fres(arc);
   const rings = V.length / sides;
   for (let r = 0; r < rings; r++) {
     const pr = r === 0 ? (closed ? rings - 1 : 0) : r - 1;
@@ -889,11 +1016,11 @@ export function buildOp4(node, table, atanTable) {
     const A = V[nr * sides].sp, B = V[pr * sides].sp;
     const dx = A[0] - B[0], dy = A[1] - B[1], dz = A[2] - B[2];
 
-    const a = fctiw(atanTurns(dz, dx, atanTable) * 32768.0);
+    const a = fctiw(atanTurns(dz, dx, atanTab) * 32768.0);
     const yaw = (-a) & 0x7ffc, flat = a & 0x7ffc;
     const s1 = table[flat >>> 2], c1 = table[(flat >>> 2) + 2048];
     const horiz = fma(dx, c1, dz * s1);
-    const b = fctiw(atanTurns(dy, horiz, atanTable) * 32768.0);
+    const b = fctiw(atanTurns(dy, horiz, atanTab) * 32768.0);
     const pitch = (-b) & 0x7ffc;
     const s2 = table[pitch >>> 2], c2 = table[(pitch >>> 2) + 2048];
     const s3 = table[yaw >>> 2], c3 = table[(yaw >>> 2) + 2048];
@@ -910,11 +1037,15 @@ export function buildOp4(node, table, atanTable) {
   }
 
   const rec = node.records[0];
+  const src = V.map((v) => v.p);
   const vertices = V.map((v) => (rec ? transformVertex(v.p, rec, table) : v.p));
   const triangles = tubeFaces(sides, rings, closed);
+  const tris = materialise(triangles, node.records);
+  applyUVs(tris, { source: src, built: vertices },
+    V.map((v) => [v.u, f32(v.arc * invArc)]), node.records, atanTab);
   return {
     vertices,
-    triangles: materialise(triangles, node.records),
+    triangles: tris,
     normals: computeNormals(vertices, triangles),
   };
 }
