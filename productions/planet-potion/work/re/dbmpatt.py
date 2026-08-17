@@ -104,6 +104,7 @@ def timeline(pats, orders, speed=6, bpm=125):
                 if k in f:
                     fx.setdefault(r, []).append((f[k], f.get(pk, 0)))
         for r in range(pat['rows']):
+            repeat = 0
             for e, v in fx.get(r, ()):
                 if e == 15 and v:
                     if v < 32: speed = v
@@ -112,7 +113,15 @@ def timeline(pats, orders, speed=6, bpm=125):
                     events.append({'row': row + r, 'order': oi, 'pattern': p,
                                    'patrow': r, 'seconds': round(t, 3),
                                    'ticks50': round(t * 50)})
-            t += (2.5 / bpm) * speed
+                # PATTERN DELAY (0xEE): the row lasts (1 + n) rows. This file
+                # and web/js/dbmplayer.js both missed it and agreed with each
+                # other, which is why nothing caught it until part three was
+                # rendered against libdigibooster3 and came out 6.7 seconds
+                # short. Part three's last four rows each carry 0xEE with
+                # n = 14; the handler is at 0x10022722 in dbplayer.library.
+                elif e == 14 and (v >> 4) == 0xE and (v & 0xF):
+                    repeat = max(repeat, v & 0xF)
+            t += (2.5 / bpm) * speed * (1 + repeat)
         row += pat['rows']
     return events, row, t
 

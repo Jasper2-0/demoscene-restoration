@@ -320,7 +320,7 @@
   },
   "p3": {
     "matched": true,
-    "totalSeconds": 150.0,
+    "totalSeconds": 156.562,
     "totalRows": 1088,
     "schedule": [
       {
@@ -474,10 +474,10 @@
         "fog": null,
         "index": 12,
         "start": 135.0,
-        "end": 149.883,
-        "dur": 14.883,
+        "end": 154.805,
+        "dur": 19.805,
         "startTick": 6750,
-        "durTicks": 744
+        "durTicks": 990
       }
     ]
   }
