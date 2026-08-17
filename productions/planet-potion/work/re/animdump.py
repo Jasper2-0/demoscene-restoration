@@ -86,7 +86,22 @@ def read_anim(snap, addr, arena):
         'origin': _at(snap, o + 0x6c, '>i')[0],
         # A BYTE. `lbz r4, 0x70(r22)` — the halfword read pulled in +0x71 too.
         'trigger': snap[o + 0x70],
+        # THE SUB-OBJECT ON +0x74, which nothing exported before. `_restore_time`
+        # walks this chain to rebase a scene's clock, and the publish pass's text
+        # tail steps to it for the glyph scale: `lwz r22, 0x74(r22)` then reads
+        # its channels at +0x30/+0x34. Without them a text node cannot be
+        # checked at all — the width and height of every glyph come from here.
+        'subAt': _at(snap, o + 0x74, '>I')[0],
+        'sub': _sub_channels(snap, _at(snap, o + 0x74, '>I')[0], arena),
     }
+
+
+def _sub_channels(snap, addr, arena):
+    """Just the 24 channels of an anim object, for the +0x74 sub-object."""
+    o = addr - arena
+    if addr in (0, NIL) or not 0 <= o < len(snap) - 0x6c:
+        return None
+    return list(_at(snap, o + 0x0c, '>24f'))
 
 
 def read_track(snap, head, arena, limit=512):
@@ -156,6 +171,91 @@ def read_vertices(snap, arena, head, limit=MAX_VERTS):
             'out_n': list(struct.unpack_from('>3f', snap, o + 0x5c)),
         })
         addr = struct.unpack_from('>I', snap, o + 0x68)[0]
+    return out
+
+
+def read_cameras(snap, arena, addr, limit=64):
+    """A type-6 node's sub-structure chain on `+0x2c`. `0x1000555c`.
+
+    Each link holds a POINTER at +0x00 and its own 24-float channel block at
+    +0x04 — the publish pass copies the camera's whole block in there with a
+    `lwzu`/`stwu` pair and then concatenates it with the channels of the object
+    that pointer leads to, two dereferences away: sub -> node -> animation
+    object, +0xc. The chain continues on +0x64.
+
+    Nothing exported this before, so the camera tail ran on 48 node-frames
+    without anything able to judge it.
+    """
+    def u32(o):
+        return struct.unpack_from('>I', snap, o)[0]
+
+    out, a, seen = [], addr, set()
+    while a not in (0, NIL) and a not in seen and len(out) < limit:
+        o = a - arena
+        if not 0 <= o < len(snap) - 0x68:
+            break
+        seen.add(a)
+        target = None
+        p = u32(o)
+        if p not in (0, NIL) and 0 <= p - arena < len(snap) - 4:
+            q = u32(p - arena)
+            if q not in (0, NIL) and 0 <= q - arena < len(snap) - 0x6c:
+                target = list(_at(snap, q - arena + 0x0c, '>24f'))
+        out.append({'addr': hex(a), 'targetAt': hex(p), 'target': target,
+                    'channels': list(_at(snap, o + 4, '>24f'))})
+        a = u32(o + 0x64)
+    return out
+
+
+def read_glyphs(snap, arena, addr, limit=256):
+    """A type-4 node's glyph array and the four vertices each one writes.
+
+    `0x10005788` sets the cursor to `node+0x30` and reads with `lwzu r24, 4(...)`,
+    which PRE-increments — so the array starts at node+0x34 and node+0x30 is the
+    string's total advance width, which scene op 4 stored there. Getting that
+    one wrong shifts the whole array by an entry.
+
+    A pointer of -1 is a SPACE: the quad is skipped but the pen still advances.
+
+    Each glyph carries four vertex pointers at +0x18..+0x24 and the tail writes
+    nine floats to each — the quad's corners. Those nine are the oracle for the
+    text tail, and nothing else in this dump reaches them.
+    """
+    def u32(o):
+        return struct.unpack_from('>I', snap, o)[0]
+
+    def f32(o):
+        return struct.unpack_from('>f', snap, o)[0]
+
+    base = addr - arena
+    if not 0 <= base < len(snap) - 0x40:
+        return None
+    count = u32(base + 0x28)
+    if count > limit:
+        return None
+    out = {'count': count,
+           'at2c': f32(base + 0x2c), 'advance': f32(base + 0x30),
+           'glyphs': []}
+    for i in range(count):
+        p = u32(base + 0x34 + 4 * i)
+        if p == 0xFFFFFFFF:
+            out['glyphs'].append({'space': True})
+            continue
+        g = p - arena
+        if not 0 <= g < len(snap) - 0x28:
+            out['glyphs'].append({'bad': hex(p)})
+            continue
+        quad = []
+        for k in range(4):
+            vp = u32(g + 0x18 + 4 * k)
+            v = vp - arena
+            quad.append([f32(v + 4 * j) for j in range(9)]
+                        if 0 <= v < len(snap) - 0x24 else None)
+        out['glyphs'].append({
+            'addr': hex(p), 'mode': u32(g),
+            'rect': [f32(g + 4 + 4 * j) for j in range(4)],
+            'quad': quad,
+        })
     return out
 
 
@@ -258,6 +358,11 @@ def dump(flat, stream, times, txt_tab=0x2642, obj_tab=0x2706):
                 'objects': (read_objects(snap, arena,
                                          struct.unpack_from('>I', snap, addr - arena + 0x24)[0])
                             if n['type'] == 5 else []),
+                'glyphs': (read_glyphs(snap, arena, addr)
+                           if n['type'] == 4 else None),
+                'cameras': (read_cameras(snap, arena,
+                                         struct.unpack_from('>I', snap, addr - arena + 0x2c)[0])
+                            if n['type'] == 6 else None),
                 'built': snap[addr - arena + 0x0f],
                 'drawGate': snap[addr - arena + 0x0c],
             })

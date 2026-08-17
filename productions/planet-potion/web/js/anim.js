@@ -39,6 +39,12 @@
 import { f32, fma } from './fp.js';
 import { fctiw } from './tables.js';
 
+// The two constants the text tail loads, `r2+0x2bd6` and `r2+0x2da6`. The first
+// is the same 0.5 the geometry builder uses for half-extents; the second is the
+// italic shear, in the same units as a glyph's width.
+const HALF = 0.5;
+const SLANT = 48.0;
+
 export { fma };
 
 /**
@@ -513,11 +519,10 @@ export function composeHierarchy(entries, maxSweeps = 64) {
 // `0x10005510`. Three things in order: copy the resolved byte onto the render
 // node, publish the projection triple, then a tail per node type.
 //
-// THE TEXT TAIL (`0x1000570c`, type 4) IS NOT HERE. It is 137 instructions of
-// glyph-quad layout whose output nothing yet consumes — Stage 3b's text handler
-// does not exist — and it is a self-contained piece worth doing against its own
-// oracle rather than folded in here. `publishNode` returns 'text-unported' for
-// those nodes so a caller cannot mistake silence for success.
+// All four tails are here. The text one (`0x1000570c`) needed two things the
+// dump did not carry — the glyph array on the render node and the channels of
+// the animation object's +0x74 SUB-OBJECT — so `animdump` grew both before any
+// of it could be checked.
 
 /**
  * `0x10005510` for one node.
@@ -544,9 +549,80 @@ export function publishNode(node, ch, resolved) {
     case 7: return 'root';
     case 6: return publishCamera(node, ch);
     case 5: return publishMesh(node, ch);
-    case 4: return 'text-unported';
+    case 4: return publishText(node, ch);
     default: return 'other-unported';
   }
+}
+
+/**
+ * Type 4 — text. `0x1000570c`, one quad per glyph.
+ *
+ * THE GLYPH SCALE COMES FROM THE ANIMATION OBJECT'S SUB-OBJECT, not from this
+ * node: `lwz r22, 0x74(r22)` steps to it and reads its channels at +0x30/+0x34,
+ * each divided by 255 — but ONLY IF NON-ZERO, so a zero stays a zero rather
+ * than becoming one. Those two are the glyph width and height in units of the
+ * texture's own pixels.
+ *
+ * THE PEN ADVANCE IS A RATIO, NOT A CONSTANT. `f18 = node.at2c * sub.z +
+ * node.at30` and then `f17 = f18 / node.at2c` — the total run divided by the
+ * per-character width — so the string is laid out to fit rather than at a fixed
+ * pitch, and the cursor starts at `ch[12] - f18/2`.
+ *
+ * A GLYPH POINTER OF -1 IS A SPACE. The quad is skipped and the pen still
+ * advances; `cmpwi` sign-extends, so the sentinel is -1 and not 0xffff.
+ *
+ * MODE 1 IS AN ITALIC AND IT IS APPLIED TWICE. `f5 * 0.5` is added to both x
+ * coordinates before the bottom two corners are written, then the full `f5` is
+ * subtracted before the top two — so the bottom edge shifts +24 and the top
+ * -24, about a centre that does not move. Applying it once, or to all four
+ * corners, gives a sheared quad that still looks like text.
+ */
+function publishText(node, ch) {
+  const sub = node.subChannels;
+  if (!sub || !node.glyphs) return 'text-no-suboject';
+  let gx = sub[12], gy = sub[13];
+  if (gx !== 0) gx /= 255.0;
+  if (gy !== 0) gy /= 255.0;
+
+  const at2c = node.at2c, at30 = node.at30;
+  let pen = fma(at2c, sub[14], at30);
+  const step = pen / at2c;
+  pen = -(fma(pen, HALF, -ch[12]));       // ch[12] - pen*0.5
+  gx *= HALF;
+  gy *= HALF;
+
+  const cy = ch[13], cz = ch[14];
+  const c0 = ch[15], c1 = ch[16], c2 = ch[17], c3 = ch[18];
+  const du = ch[19], dv = ch[20];
+
+  let drawn = 0;
+  for (const g of node.glyphs) {
+    if (!g || g.space) { pen += step; continue; }
+    const [ru, rv, rw, rh] = g.rect;
+    let x0 = -(fma(rw, gx, -pen));        // pen - rw*gx
+    const y0 = -(fma(rh, gy, -cy));       // cy - rh*gy
+    let x1 = fma(rw, gx, pen);
+    const y1 = fma(rh, gy, cy);
+    // The four texture coordinates, and note the far pair picks up the channel
+    // offset TWICE — once on its own and once through the near pair it is added
+    // to. That is what the instruction stream does; it is not a transcription
+    // slip.
+    const u0 = ru + du, v0 = rv + dv;
+    const u1 = (rw + du) + u0, v1 = (rh + dv) + v0;
+    if (g.mode === 1) { x0 = fma(SLANT, HALF, x0); x1 = fma(SLANT, HALF, x1); }
+    g.quad[0] = [f32(x0), f32(y0), f32(cz), f32(c0), f32(c1), f32(c2), f32(c3),
+      f32(u0), f32(v0)];
+    g.quad[1] = [f32(x1), f32(y0), f32(cz), f32(c0), f32(c1), f32(c2), f32(c3),
+      f32(u1), f32(v0)];
+    if (g.mode === 1) { x0 -= SLANT; x1 -= SLANT; }
+    g.quad[2] = [f32(x1), f32(y1), f32(cz), f32(c0), f32(c1), f32(c2), f32(c3),
+      f32(u1), f32(v1)];
+    g.quad[3] = [f32(x0), f32(y1), f32(cz), f32(c0), f32(c1), f32(c2), f32(c3),
+      f32(u0), f32(v1)];
+    pen += step;
+    drawn++;
+  }
+  return `text:${drawn}`;
 }
 
 /**

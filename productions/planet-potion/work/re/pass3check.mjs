@@ -15,17 +15,18 @@
 //
 // TWO THINGS ARE REPORTED RATHER THAN ASSERTED, and both are honest gaps:
 //
-//   * TYPE 4, TEXT, IS NOT PORTED. `0x1000570c` is 137 instructions of glyph
-//     quad layout whose consumer does not exist yet. `publishNode` returns
-//     'text-unported' and those nodes are counted here, so the gap has a number
-//     rather than being invisible;
+//   * TYPE 4, TEXT, IS PORTED AND CHECKED HERE. `0x1000570c` writes four
+//     vertices per glyph and those are compared field for field. A node whose
+//     `resolved` byte is 0 did not run the tail this frame and its quads are
+//     whatever an earlier frame left, so those are counted rather than
+//     compared — the same stale-data rule pass 1 applies to channels;
 //   * a node with `node+0x0f` set was built on an earlier frame and pass 3
 //     skips it, so its vertices are whatever that earlier frame left. Those are
 //     counted, not compared;
-//   * TYPE 6, THE CAMERA, is implemented and runs, but its output goes into the
-//     sub-structures chained off `node+0x2c` and animdump does not export
-//     those. So it is exercised without being judged, which is worth a line of
-//     its own rather than being folded into a pass/fail.
+//   * TYPE 6, THE CAMERA, is now checked too. `animdump` exports the chain on
+//     `node+0x2c` — each link's own 24-float block and the channels of the
+//     object two dereferences past its head pointer — so the block the tail
+//     copies in and then concatenates can be compared like anything else.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +52,9 @@ let projOK = 0, projBad = 0, projSkipped = 0;
 let vOK = 0, vBad = 0, oOK = 0, oBad = 0;
 let builtSkipped = 0, textNodes = 0, meshNodes = 0;
 let vNonFinite = 0, oNonFinite = 0;
+let gOK = 0, gBad = 0, gStale = 0, gUnwritten = 0, gSpace = 0;
+let cOK = 0, cBad = 0, cStale = 0;
+const gModes = new Map();
 const failures = [];
 const kinds = new Map();
 
@@ -86,7 +90,22 @@ for (const scene of doc.scenes ?? [doc]) {
       const objects = (src.objects ?? []).map((o) => ({
         nx: o.n[0], ny: o.n[1], nz: o.n[2], want: o,
       }));
-      const out = { type: src.type, built: src.built, vertices, objects, cameras: [] };
+      // The text tail's glyph quads have to exist BEFORE publishNode runs —
+      // the tail writes into them rather than returning them.
+      const wantG = src.glyphs?.glyphs ?? [];
+      // The camera's sub-structures, likewise prepared before the call: the
+      // tail writes its channel block into each one.
+      const wantC = src.cameras ?? [];
+      const out = { type: src.type, built: src.built, vertices, objects,
+        cameras: wantC.map((c) => ({ targetChannels: c.target, channels: null })) };
+      if (src.type === 4 && src.glyphs) {
+        out.glyphs = wantG.map((g) => (g.space || !('mode' in g)
+          ? { space: true }
+          : { mode: g.mode, rect: g.rect, quad: [null, null, null, null] }));
+        out.subChannels = src.anim?.sub;
+        out.at2c = src.glyphs.at2c;
+        out.at30 = src.glyphs.advance;
+      }
       const kind = publishNode(out, e.ch ?? new Float64Array(24), e.resolved);
       kinds.set(kind.split(':')[0], (kinds.get(kind.split(':')[0]) ?? 0) + 1);
       if (src.type === 4) textNodes++;
@@ -95,6 +114,49 @@ for (const scene of doc.scenes ?? [doc]) {
       // The gate byte is copied onto the render node unconditionally.
       if (out.drawGate === src.drawGate) gateOK++;
       else gateBad++;
+
+      if (src.type === 4 && src.glyphs) {
+        for (let g = 0; g < wantG.length; g++) {
+          const w = wantG[g];
+          if (w.space || !('mode' in w)) { gSpace++; continue; }
+          gModes.set(w.mode, (gModes.get(w.mode) ?? 0) + 1);
+          for (let k = 0; k < 4; k++) {
+            const b = w.quad[k];
+            // An all-zero quad is one the original never wrote — the node has
+            // never drawn — and a node that did not resolve this frame is
+            // showing an earlier frame's.
+            if (!b || b.every((v) => v === 0)) { gUnwritten++; continue; }
+            if (e.resolved !== 1) { gStale++; continue; }
+            const a = out.glyphs[g].quad[k];
+            if (a && a.every((v, c) => v === b[c])) gOK++;
+            else {
+              gBad++;
+              if (failures.length < 6) {
+                failures.push(`${scene.part}/${scene.order} t=${frame.t} `
+                  + `glyph ${g} v${k}: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`);
+              }
+            }
+          }
+        }
+      }
+
+      if (src.type === 6) {
+        for (let c = 0; c < wantC.length; c++) {
+          // Unresolved nodes leave an earlier frame's block behind, same rule
+          // as everywhere else in this pass.
+          if (e.resolved !== 1) { cStale++; continue; }
+          const a = out.cameras[c].channels, b = wantC[c].channels;
+          if (a && b.every((v, k) => a[k] === v)) cOK++;
+          else {
+            cBad++;
+            if (failures.length < 6) {
+              const at = b.findIndex((v, k) => !a || a[k] !== v);
+              failures.push(`${scene.part}/${scene.order} t=${frame.t} camera `
+                + `sub ${c} channel ${at}: ${a ? a[at] : 'null'} vs ${b[at]}`);
+            }
+          }
+        }
+      }
 
       if (e.resolved !== 1) { projSkipped++; continue; }
 
@@ -169,13 +231,18 @@ console.log(`     ${vNonFinite} vertices and ${oNonFinite} objects carry non-fin
   + 'fields in the original and are not comparable');
 ok('the vertex check has real coverage', vOK > 1000, `${vOK} vertices`);
 
-console.log(`     type 4 (text) is not ported: ${textNodes} node-frames skipped`);
+ok('every glyph quad the text tail writes is bit-exact', gBad === 0,
+  `${gOK}/${gOK + gBad} vertices over ${textNodes} node-frames`);
+console.log(`     glyph modes exercised: `
+  + [...gModes].sort().map(([m, n]) => `mode ${m} x${n}`).join(', ')
+  + `; ${gSpace} spaces, ${gUnwritten} never written by the original, `
+  + `${gStale} left over from an earlier frame`);
 // The camera tail RUNS but nothing here can judge it: its output goes into the
 // sub-structures on node+0x2c, which animdump does not export. Said out loud so
 // "pass 3 is verified" is not read as covering all four tails.
-console.log(`     type 6 (camera) ran on ${kinds.get('camera') ?? 0} node-frames `
-  + 'and is UNVERIFIED — its output lands in the sub-structures at node+0x2c, '
-  + 'which are not dumped');
+ok('every camera sub-structure gets the right channel block', cBad === 0,
+  `${cOK}/${cOK + cBad} over ${kinds.get('camera') ?? 0} node-frames`
+  + (cStale ? `, ${cStale} left over from an earlier frame` : ''));
 for (const f of failures) console.log(`     ${f}`);
 
 if (bad) process.exit(1);
