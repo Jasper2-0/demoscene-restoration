@@ -104,11 +104,10 @@ for (const [part, spec] of Object.entries(index.parts)) {
   const results = [];
   // `r8` and friends are sticky: the script sets them once and later calls run
   // under them, so the register state accumulates rather than resetting.
-  const regs = {};
   for (let i = 0; i < producers.length; i++) {
     const call = producers[i];
     const want = spec.samples[i];
-    Object.assign(regs, call.setup);
+    c.applySetup(call.setup);
     const impl = PRIMITIVES[call.call];
     const skip = only && `0x${call.call.toString(16)}` !== only;
 
@@ -127,7 +126,7 @@ for (const [part, spec] of Object.entries(index.parts)) {
     }
 
     const at = c.r31;
-    impl(c, regs);
+    impl(c);
     const got = c.out.subarray(at + 8, at + 8 + want.frames);
     const wantPcm = want.file
       ? new Uint8Array(fs.readFileSync(path.join(refdir, want.file)))

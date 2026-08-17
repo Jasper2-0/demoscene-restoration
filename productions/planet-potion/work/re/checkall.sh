@@ -107,7 +107,7 @@ run "dbmsuite — one generated module per replayer behaviour" \
 # that must come out byte-exact, raised as each primitive lands. Needs
 # `python3 synthref.py flat/ mods/ out/synthref/` first; 77 = skip without it.
 run "synthdiff — each softsynth primitive against its own sample" \
-  node "$HERE/synthdiff.mjs" "$FLAT" "$HERE/out/synthref" --min 11
+  node "$HERE/synthdiff.mjs" "$FLAT" "$HERE/out/synthref" --min 58
 
 if [ -n "$MODS" ]; then
   run "dbmcheck — the DigiBooster reader accounts for every byte" \

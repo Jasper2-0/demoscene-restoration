@@ -47,6 +47,70 @@ const SEG4 = 0x10040000;
 // every `r2+disp` in the disassembly resolves to seg0 + 0x7ffe + disp.
 const R2 = 0x7ffe;
 
+// --- the fused multiply-add family, in capstone's operand order -------------
+//
+// Capstone prints these as `op frD, frA, frC, frB`, so the ADDEND IS LAST in
+// the text and second-to-last in the arithmetic. Reading `fmadd f23, f0, f1,
+// f23` as "f0*f1 + f23" is right; reading it left to right as "f0 + f1*f23" is
+// the mistake these wrappers exist to prevent.
+//
+// All four are single-rounding. Negating a fused result is exact and
+// round-to-nearest-even is sign-symmetric, so `-fma(...)` is the fused negative
+// form rather than an approximation of it.
+
+/** `fmadd frD, a, c, b` = a*c + b */
+const fmadd = (a, c, b) => fma(a, c, b);
+/** `fmsub frD, a, c, b` = a*c - b */
+const fmsub = (a, c, b) => fma(a, c, -b);
+/** `fnmadd frD, a, c, b` = -(a*c + b) */
+const fnmadd = (a, c, b) => -fma(a, c, b);
+/** `fnmsub frD, a, c, b` = -(a*c - b) */
+const fnmsub = (a, c, b) => -fma(a, c, -b);
+
+/**
+ * `fsel frD, a, b, c` — b if a >= 0, else c. A BRANCHLESS SELECT, not a
+ * comparison: it takes the `c` side for NaN, and -0.0 counts as >= 0.
+ */
+const fsel = (a, b, c) => (a >= 0 ? b : c);
+
+// --- the single-precision forms ---------------------------------------------
+//
+// `0x10009510` and `0x1000742c` are written almost entirely in the `…s`
+// instructions, where the earlier routines use the double ones. These ROUND
+// THEIR RESULT TO SINGLE, which is `Math.fround` — correct rounding, and a
+// different operation from fp.js's `f32`, which is what a `stfs` STORE does to
+// a value the FPU never rounded. Using one for the other is the single easiest
+// way to be wrong by one ulp everywhere.
+//
+// A NOTE ON THE FUSED SINGLES. `fmadds` computes a*c+b to infinite precision
+// and rounds ONCE to single; `fround(fma(...))` rounds to double and then to
+// single. Those differ only when the exact result sits within a double's last
+// bit of a single-precision tie, which needs a*c+b to be inexact in double at
+// all — and with single inputs the product a*c is exact, so only the addition
+// can lose anything. Over the 1.3 million frames these two routines emit, the
+// samples come out byte-exact, so on this data the two agree. That is a
+// measurement, not a proof: if a later primitive is off by one in the last
+// place with everything else right, this is the place to look.
+const fs = Math.fround;
+const fadds = (a, b) => fs(a + b);
+const fsubs = (a, b) => fs(a - b);
+const fmuls = (a, b) => fs(a * b);
+const fdivs = (a, b) => fs(a / b);
+const fmadds = (a, c, b) => fs(fma(a, c, b));
+const fnmsubs = (a, c, b) => fs(-fma(a, c, -b));
+
+/**
+ * `0x1000a2d4(value, limit)` — symmetric clamp to [-limit, +limit].
+ *
+ * Two `fsel`s rather than two branches, which is why it is a called routine
+ * and not inline: min against +limit, then max against -limit.
+ */
+function clampSym(value, limit) {
+  let v = fsel(value - limit, limit, value);      // min against +limit
+  v = fsel(v - -limit, v, -limit);                // max against -limit
+  return v;
+}
+
 /** The two generators, as the address ranges their scripts occupy in seg0. */
 export const SCRIPTS = {
   p1: { lo: 0x10006b6c, hi: 0x10006da0, descriptor: 0x2f06 },
@@ -139,6 +203,26 @@ export class SynthContext {
     const last = this.w(0x2efe);
     this.delay = new Float32Array((last - this.delayBase + 80000) / 4);
 
+    // THE GENERAL REGISTERS ARE MACHINE STATE, not per-call arguments, and
+    // `0x1000742c` is why. Sixteen of its eighteen calls carry no setup at all,
+    // because `r25` is a TAPE CURSOR the routine advances itself and leaves for
+    // the next call — the script sets it once, twenty calls earlier, in the
+    // setup for `0x10007284`. Any model that hands a primitive its arguments
+    // and forgets them produces the first of those samples and then sixteen
+    // wrong ones.
+    //
+    // `r8` is sticky for the same reason, and the script's authors knew it:
+    // they re-set it after every call that could clobber it.
+    this.g = {};
+
+    // The PRNG, `0x1000a1f4` (seed) and `0x1000a20c` (step) — a plain LCG on
+    // 0x41c64e6d and 12345, masked to 15 bits. METHOD.md §5 warns that a shared
+    // PRNG stream makes build order part of the spec; here it does not, and
+    // that was checked rather than hoped: the synth has eight callers of the
+    // stepper and eight callers of the seeder, and every routine that draws
+    // from it seeds it first. So the stream never crosses a call boundary.
+    this.r14 = 0; this.r12 = 0; this.r11 = 0;
+
     this.out = null;      // the module being built
     this.r31 = 0;         // module write cursor, held across the whole script
     this.r19 = 0;         // sample length in frames
@@ -216,9 +300,17 @@ export class SynthContext {
   /**
    * `0x1000a23c(frames)` — start a sample.
    *
-   * Writes `flags = 1` and the frame count, advances 8, and clears the frame,
-   * step and phase counters along with NINE float accumulators. §8c says four;
-   * the instruction sequence zeroes f28 down to f20.
+   * Writes `flags = 1` and the frame count, advances 8, clears the frame, step
+   * and phase counters, sets `r15 = 2`, and zeroes EVERY float register from
+   * f28 down to f5.
+   *
+   * §8c says it zeroes "four oscillator accumulators" and it zeroes
+   * twenty-four. That matters more than a miscount: several voices READ f16 and
+   * f17 before writing them — `fmadd f17, f1, f18, f17` accumulates into its
+   * own previous value on the first frame — so if the clear stopped short those
+   * registers would carry state from the PREVIOUS sample and no primitive could
+   * be checked on its own. It does not, so every sample starts from a clean
+   * machine and `synthdiff.mjs`'s fill-from-reference isolation is sound.
    */
   startSample(frames) {
     const dv = new DataView(this.out.buffer);
@@ -227,8 +319,38 @@ export class SynthContext {
     dv.setUint32(this.r31 + 4, frames, false);
     this.r31 += 8;
     this.r20 = 0; this.r16 = 0; this.r17 = 0; this.r15 = 2;
-    this.f28 = 0; this.f27 = 0; this.f26 = 0; this.f25 = 0; this.f24 = 0;
-    this.f23 = 0; this.f22 = 0; this.f21 = 0; this.f20 = 0;
+    for (let i = 5; i <= 28; i++) this[`f${i}`] = 0;
+  }
+
+  /**
+   * Apply one call's register setup, exactly as the script's instructions do.
+   *
+   * MERGES rather than replaces, because that is what a register file does:
+   * anything this call did not write keeps the value an earlier call left in
+   * it. `r8` and `r25` both depend on that.
+   */
+  applySetup(setup) {
+    for (const [name, v] of Object.entries(setup)) {
+      if (v && typeof v === 'object') {
+        this.g[name] = 'r2' in v ? SEG0 + R2 + v.r2 : this.w(v.load);
+      } else {
+        this.g[name] = v;
+      }
+    }
+  }
+
+  /** `0x1000a1f4` — seed the LCG. */
+  srand() { this.r14 = 1; this.r12 = 0x41c64e6d; this.r11 = 0x3039; }
+
+  /**
+   * `0x1000a20c` — step it and return a float.
+   *
+   * `mullw` keeps the low 32 bits, which is what `Math.imul` does; the mask to
+   * 0x7fff then makes the sign irrelevant.
+   */
+  rand() {
+    this.r14 = (Math.imul(this.r14, this.r12) + this.r11) & 0x7fff;
+    return (this.r14 - this.k(0x2e6a)) * this.k(0x2e6e);
   }
 
   /**
@@ -413,8 +535,442 @@ export function gen_10006f4c(c) {
   } while (c.emit());
 }
 
+/**
+ * `0x10009020` — 100,800 frames in 16 steps of 6,300. Eight calls in part one.
+ *
+ * A drum. `f10` ramps linearly into a cosine while `f9` (its rate) and `f5`
+ * (its amplitude) are multiplied by constants EVERY FRAME, so the cosine
+ * argument sweeps downward under an exponential decay — a pitched-down click.
+ * `f26` accumulates the oscillator phase and wraps against `r2+0x2e26`, and on
+ * each wrap `f10`, `f9` and `f5` restart, which is what makes it a repeating
+ * hit rather than one decaying tone.
+ *
+ * FOUR BYTE TABLES, indexed by the STEP counter `r16`, not by the frame:
+ *
+ *     r24 = r2+0x2faa   local     per-step flag: glide (non-zero) or jump
+ *     r25 = script                the note, +12
+ *     r22 = script                a per-step gate for the two shaping stages
+ *     r21 = script                per-step amplitude
+ *
+ * §8g says this routine "hardcodes its tables rather than taking them from the
+ * script". It hardcodes ONE of four; the other three come from the script,
+ * which is what §8b says two pages earlier and what makes eight calls cover
+ * eight instruments from three shared tables. §8g is right about `0x10009258`.
+ *
+ * `r15` IS A THREE-STATE ENVELOPE, and `0x1000a2c4` exists only to compare it
+ * against 0, 1 and 2 in one place: 0 attacks (`f12` ramps to 1.0 and switches
+ * to 1), 1 sustains, 2 releases. `startSample` sets it to 2, so every sample
+ * begins in release and the first step's flag byte kicks it into attack.
+ */
+export function gen_10009020(c) {
+  const r24 = SEG0 + R2 + 0x2faa;
+  const { r21, r22, r25 } = c.g;
+  c.r18 = 0x189c;                       // 6,300 frames per step
+  c.startSample(0x189c0);               // 100,800 = 16 steps
+  let f19 = c.k(0x2b26), f9 = c.k(0x2e52), f5 = c.k(0x2d7a), f4 = c.f30;
+  let f10 = c.f10, f12 = c.f12, f16 = c.f16, f17 = c.f17;
+  let f21 = c.f21, f22 = c.f22, f23 = c.f23, f24 = c.f24, f26 = c.f26;
+  do {
+    const f28 = (c.k(0x2bfe) - c.cos(f10 * f9)) * f5;
+    f10 += c.k(0x2af6);
+    f9 *= c.k(0x2c66);
+    f5 *= c.k(0x2c5a);
+
+    // Per-step portamento: glide toward the target when the flag is set, jump
+    // to it when it is not.
+    if (c.u8(r24 + c.r16) !== 0) f23 = fmadd(f24 - f23, c.k(0x2ac2), f23);
+    else f23 = f24;
+    if (f23 !== f22) f21 = c.pow2(f23 - c.k(0x2bd6));
+    f22 = f23;
+
+    f26 += f21;
+    if (f26 >= c.k(0x2e26)) {
+      f26 -= c.k(0x2e26);
+      f10 = c.f31;
+      f9 = c.k(0x2e52);
+      f5 = c.k(0x2d7a);
+    }
+
+    if (c.r17 === 0) {
+      f24 = (c.u8(r25 + c.r16) + 0xc) * c.k(0x2b2e);
+      if (c.u8(r24 + c.r16) === 0) c.r15 = 0;
+    }
+
+    if (c.u8(r22 + c.r16) !== 0) {
+      if (c.r17 > 0 && c.r17 < 0x2ee) {
+        f4 *= c.k(0x2d02);
+        f19 *= c.k(0x2cf6);
+        f12 *= c.k(0x2cfe);
+      }
+      if (c.r17 > 0x320) {
+        f4 = f4 / c.k(0x2cf2);
+        f4 = fsel(f4 - c.f30, f4, c.f30);
+        f19 = f19 / c.k(0x2d06);
+        f19 = fsel(f19 - c.k(0x2b26), f19, c.k(0x2b26));
+      }
+    }
+
+    const f8 = c.u8(r21 + c.r16) * c.k(0x2afa);
+    const f7 = f8 * c.k(0x2bd6);
+    const f18 = fnmsub(f19, f17, fnmsub(f16, c.k(0x2bba), f28));
+    const drive = f12 * f4;
+    f17 = fmadd(c.k(0x2d1e) * drive * f8, f18, f17);
+    f16 = fmadd(c.k(0x2d46) * drive * f7, f17, f16);
+
+    if (c.r17 === 0x15a8 && c.u8(r24 + ((c.r16 + 1) & 0xf)) !== 1) c.r15 = 2;
+
+    if (c.r15 === 0) {
+      f12 = fmadd(f12, c.k(0x2d0e), c.k(0x2afe));
+      if (f12 >= c.f30) { f12 = c.f30; c.r15 = 1; }
+    } else if (c.r15 === 1) {
+      if (c.u8(r24 + c.r16) === 0) f12 *= c.k(0x2c9e);
+    } else if (c.r15 === 2) {
+      f12 *= c.u8(r22 + c.r16) !== 0 ? c.k(0x2c96) : c.k(0x2c5e);
+    }
+
+    c.f29 = f12 * c.k(0x2d8e) * f16;
+    // `cmpw r17, r18; blt` guards a reset of f4 and f19 that CANNOT RUN: the
+    // emitter wraps r17 to 0 the instant it reaches r18, so r17 < r18 holds at
+    // every visit. Transcribed as dead because it is dead, not omitted — the
+    // next reader should not have to re-derive that.
+  } while (c.emit());
+}
+
+/**
+ * `0x10009258` — 50,400 frames in 16 steps of 3,150. Eight calls in part one.
+ *
+ * The other half of the percussion pair, and a clean one-to-one: eight calls,
+ * and part one's SMPL holds exactly eight samples of 50,400 frames.
+ *
+ * Same skeleton as `0x10009020` — swept cosine, per-step glide, three-state
+ * `r15` envelope — but three tables are hardcoded and only the amplitude table
+ * comes from the script, and the output stage is quite different: a symmetric
+ * clamp through `0x1000a2d4`, a dry/wet blend against the clamped signal, and
+ * then a THREE-POLE cascade (f15 -> f14 -> f13) whose middle coefficient is
+ * itself modulated by the envelope `f12`. That last stage is what a drum's body
+ * sounds like as opposed to its click.
+ */
+export function gen_10009258(c) {
+  const r22 = SEG0 + R2 + 0x2f5a;
+  const r25 = SEG0 + R2 + 0x309a;
+  const r24 = SEG0 + R2 + 0x2fba;
+  const { r21 } = c.g;
+  c.r18 = 0xc4e;                        // 3,150 frames per step
+  c.startSample(0xc4e0);                // 50,400 = 16 steps
+  const r9 = 0x294;
+  let f12 = c.f30, f27 = c.f30;
+  let f5 = c.k(0x2d7a), f9 = c.k(0x2e52);
+  let f4 = c.f4, f7 = c.f7, f8 = c.f8, f10 = c.f10, f19 = c.f19;
+  let f13 = c.f13, f14 = c.f14, f16 = c.f16, f17 = c.f17;
+  let f21 = c.f21, f22f = c.f22, f23 = c.f23, f24 = c.f24, f26 = c.f26;
+  do {
+    const f28 = (c.k(0x2bfe) - c.cos(f10 * f9)) * f5;
+    f10 += c.k(0x2af6);
+    f9 *= c.k(0x2c66);
+    f5 *= c.k(0x2c5a);
+
+    if (c.u8(r24 + c.r16) !== 0) f23 = fmadd(f24 - f23, c.k(0x2abe), f23);
+    else f23 = f24;
+    if (f23 !== f22f) f21 = c.pow2(f23 - c.k(0x2bd6));
+    f22f = f23;
+
+    f26 += f21;
+    if (f26 >= c.k(0x2e0e)) {
+      f26 -= c.k(0x2e0e);
+      f10 = c.f31;
+      f9 = c.k(0x2e52);
+      f5 = c.k(0x2d7a);
+    }
+
+    if (c.r17 === 0) {
+      f24 = c.u8(r25 + c.r16) * c.k(0x2b2e);
+      f7 = fmadd(c.u8(r21 + c.r16), c.k(0x2afa), c.k(0x2b1a));
+      f19 = c.k(0x2b22);
+      f4 = c.k(0x2b56);
+      if (c.u8(r24 + c.r16) === 0) c.r15 = 0;
+    }
+
+    let f6 = f4 * c.k(0x2d1e);
+    f6 = fnmsub(f27, f6, f6);           // f6 * (1 - f27)
+
+    if (c.u8(r22 + c.r16) !== 0 && c.r17 !== r9) {
+      if (c.r17 < r9) { f27 *= c.k(0x2cfe); f12 *= c.k(0x2cee); }
+      else { f27 *= c.k(0x2cb6); f12 *= c.k(0x2cce); }
+    }
+
+    if (c.r16 !== 0) f8 = fmadd(f7 - f8, c.k(0x2abe), f8);
+    else f8 = f7;
+
+    let f0 = f8 * (f27 - f6);
+    f0 = fsel(f0 - c.k(0x2d2e), c.k(0x2d2e), f0);
+    let f18 = fnmadd(f19, f17, f16);
+    f18 = f28 + f18;
+    f17 = fmadd(f18, f0, f17);
+    f16 = fmadd(f17, f0, f16);
+
+    if (c.r17 === 0x762 && c.u8(r24 + ((c.r16 + 1) & 0xf)) !== 1) c.r15 = 2;
+
+    if (c.r15 === 0) {
+      f12 = fmadd(f12, c.k(0x2d0e), c.k(0x2ad2));
+      f27 = fmadd(f27, c.k(0x2d0e), c.k(0x2ad2));
+      f27 = fsel(f27 - c.f30, c.f30, f27);
+      if (f12 >= c.f30) { f12 = c.f30; c.r15 = 1; }
+    } else if (c.r15 === 1) {
+      if (c.u8(r24 + c.r16) !== 0) { f12 *= c.k(0x2cc6); f27 *= c.k(0x2cca); }
+      else { f12 *= c.k(0x2cba); f27 *= c.k(0x2cbe); }
+    } else if (c.r15 === 2) {
+      if (c.u8(r22 + c.r16) !== 0) { f12 *= c.k(0x2c72); f27 *= c.k(0x2cd2); }
+      else { f12 *= c.k(0x2c66); f27 *= c.k(0x2cce); }
+    }
+
+    const f3 = f16 * (f12 * c.k(0x2d76));
+    const f2 = clampSym(f3, c.k(0x2bd6));
+    const mix = c.k(0x2c42);
+    let f29 = c.k(0x2d96) * mix * f2;
+    f29 = fmadd(c.f30 - mix, f3, f29);
+    const f15v = f29 - fmadd(c.k(0x2bba), f14, f13);
+    f14 = fmadd(f15v, fnmsub(f12, c.k(0x2bb6), c.f30), f14);
+    f13 = fmadd(f14, f12 * c.k(0x2be6), f13);
+    const kOut = c.k(0x2c3e);
+    c.f29 = fmsub(f15v, kOut, (c.f30 - kOut) * f29);
+  } while (c.emit());
+}
+
+/**
+ * `0x10009510` — part one's dominant voice. 13 of its 56 samples.
+ *
+ * `r8` PICKS EVERYTHING. It is set once by the script and is sticky across
+ * calls, and it chooses the length, the step count and all three byte tables at
+ * the same time:
+ *
+ *     r8 == 0   201,600 frames = 32 steps   r25/r24/r23 = 0x30aa/0x2fca/0x2fca
+ *     r8 != 0   100,800 frames = 16 steps   r25/r24/r23 = 0x303a/0x2f6a/0x301a
+ *
+ * With `r8 == 0` the glide-flag table and the gate table are THE SAME POINTER
+ * (`r23 = r24`), so the 32-step patterns cannot gate and glide independently
+ * and the 16-step ones can. Nine of the thirteen calls run with `r8 = 0`, which
+ * with the one 16-step call elsewhere is exactly the eleven samples of 201,600
+ * frames the module holds.
+ *
+ * TWO OSCILLATORS, and they are square rather than sinusoidal: `f6` and `f5`
+ * are sign flags that NEGATE on each phase wrap while `f28`/`f27` are envelopes
+ * reset to 1.0 at the same moment and decaying by `f *= 1-k` through `fnmsubs`.
+ * The second wraps at twice the first's period — `fadd f0, f0, f0` — and at
+ * `r8 == 1` twice again, so the flag is an octave as well as a length.
+ *
+ * The output stage is a symmetric clamp at ±2.0 blended against the unclamped
+ * signal — soft saturation — into a two-pole cascade whose coefficient is `f10`,
+ * the smoothed amplitude, so the filter opens with the note.
+ */
+export function gen_10009510(c) {
+  const at = (d) => SEG0 + R2 + d;
+  const r8 = c.g.r8 ?? 0;
+  let r25 = at(0x30aa), r24 = at(0x2fca), r23 = r24, r19 = 0x31380;
+  if (r8 !== 0) {
+    r25 = at(0x303a); r24 = at(0x2f6a); r23 = at(0x301a); r19 = 0x189c0;
+  }
+  const { r21 } = c.g;
+  c.r18 = 0x189c;
+  c.startSample(r19);
+
+  let f28 = c.f30, f27 = c.f30, f6 = c.f30, f5 = c.f30, f4 = c.f30;
+  let f19 = c.k(0x2b1a), f23 = c.k(0x2db6);
+  let f24 = c.f24, f22 = c.f22, f21 = c.f21, f20 = c.f20;
+  let f25 = c.f25, f26 = c.f26, f12 = c.f12;
+  let f7 = c.f7, f8 = c.f8, f9 = c.f9, f10 = c.f10;
+  let f13 = c.f13, f14 = c.f14, f16 = c.f16, f17 = c.f17, f18 = c.f18;
+
+  do {
+    f28 = fnmsubs(f28, c.k(0x2b76), f28);
+    f27 = fnmsubs(f27, c.k(0x2b3e), f27);
+
+    if (c.u8(r24 + c.r16) !== 0) {
+      f23 = fmadds(fsubs(f24, f23), c.k(0x2ac6), f23);
+    } else {
+      f23 = f24;
+    }
+    if (f23 !== f22) { f21 = c.pow2(fsubs(f23, c.k(0x2bd6))); f20 = f21; }
+    f22 = f23;
+
+    f26 = fadds(f26, f21);
+    f25 = fadds(f25, f20);
+    const wrap = c.k(0x2df2);
+    if (f26 >= wrap) { f26 = fsubs(f26, wrap); f28 = c.f30; f6 = -f6; }
+    // The second oscillator's wrap point is the first's doubled — and doubled
+    // again at r8 == 1. These two are `fadd`, not `fadds`: double adds in the
+    // middle of an otherwise single-precision routine.
+    let wrap2 = wrap + wrap;
+    if (r8 === 1) wrap2 = wrap2 + wrap2;
+    if (f25 >= wrap2) { f25 = fsubs(f25, wrap2); f27 = c.f30; f5 = -f5; }
+
+    if (c.r17 === 0) {
+      f24 = fmuls(c.u8(r25 + c.r16) + 0xc, c.k(0x2b2e));
+      const amp = fmuls(c.u8(r21 + c.r16), c.k(0x2afa));
+      f8 = fdivs(amp, c.k(0x2d1e));
+      f7 = fdivs(f8, c.k(0x2d1e));
+      if (c.u8(r23 + c.r16) === 0) c.r15 = 0;
+    }
+
+    if (c.r16 !== 0) {
+      f10 = fmadds(fsubs(f8, f10), c.k(0x2aae), f10);
+      f9 = fmadds(fsubs(f7, f9), c.k(0x2aae), f9);
+    } else {
+      f10 = f8; f9 = f7;
+    }
+
+    const osc = fmuls(fadds(fmuls(f28, f6), fmuls(f27, f5)), c.k(0x2bd6));
+    f18 = fnmsubs(f16, c.k(0x2b52), osc);
+    f18 = fnmsubs(f19, f17, f18);
+    f17 = fmadds(fmuls(f4, f10), f18, f17);
+    f16 = fmadds(fmuls(f4, f9), f17, f16);
+
+    if (c.r17 === 0x627 && c.u8(r23 + ((c.r16 + 1) & 0x1f)) !== 1) c.r15 = 2;
+
+    // Only states 0 and 2 do anything — there is no cr1 branch here, where
+    // both percussion routines have one. State 1 is a plain sustain.
+    if (c.r15 === 0) {
+      f12 = fmadds(f12, c.k(0x2d0e), c.k(0x2afe));
+      if (f12 >= c.f30) { f12 = c.f30; c.r15 = 1; }
+    } else if (c.r15 === 2) {
+      f12 = fmuls(f12, c.k(0x2c82));
+    }
+
+    const env = fmuls(f12, c.k(0x2d96));
+    let f3 = fmuls(f16, env);
+    f3 = fmadds(f18, fmuls(c.k(0x2d96), f12), f3);
+    const f2 = clampSym(f3, c.f30 + c.f30);       // fadd f0, f30, f30 — double
+    const mix = c.k(0x2c4a);
+    let f29 = fmadds(fmuls(c.k(0x2d9e), mix), f2, fmuls(fsubs(c.f30, mix), f3));
+    f29 = fmuls(c.k(0x2d1e), f29);
+
+    const f15 = fsubs(f29, fmadds(f14, fsubs(c.k(0x2d0e), f12), f13));
+    f14 = fmadds(f15, f10, f14);
+    f13 = fmadds(f14, f10, f13);
+    c.f29 = fmuls(fsubs(f29, fadds(f14, f15)), c.k(0x2bd6));
+    // As in 0x10009020, `cmpw r17, r18` guards a reset the emitter's wrap makes
+    // unreachable. Left out here rather than written as dead code, because it
+    // would touch four registers and read as live.
+  } while (c.emit());
+}
+
+/**
+ * `0x1000742c` — part three's voice. 18 of its 38 samples, sixteen of them
+ * consecutive with no arguments at all.
+ *
+ * ITS SEED DATA IS A TAPE, NOT A TABLE, and `r25` is a cursor the routine
+ * advances and leaves behind for the next call — which is the whole reason
+ * sixteen consecutive calls need no setup. The script points `r25` at
+ * `r2+0x362a` once, twenty calls earlier, in `0x10007284`'s setup.
+ *
+ * The tape reads:
+ *
+ *     u16   total frames / 4
+ *     u16   number of blocks
+ *     then per block, eleven u16: ten control targets and, at +0x14,
+ *           that block's length in frames / 2
+ *
+ * SO `r19` IS OVERWRITTEN PER BLOCK. It holds the sample length while
+ * `startSample` writes the header, and from then on it is the current BLOCK's
+ * length, with `r20` reset to zero each time — so the emitter's loop bound is
+ * per block and the outer loop counts blocks. That is why every one of these
+ * eighteen samples is a different length while all the other routines' are
+ * immediates: the length is data.
+ *
+ * TEN ONE-POLE SMOOTHERS, into f28…f19, all on `r2+0x2ad2` except the tenth,
+ * which is deliberately on `r2+0x2ae2` — a different time constant for the
+ * parameter that ends up crossfading the noise in.
+ *
+ * FOUR PHASE ACCUMULATORS advanced by `x += K - round(x)`. §8h reads this as
+ * `frac(x) + K`, which would be truncation; the instruction pair is `float2int`
+ * then `int2float`, and `float2int` is `fctiw`, which ROUNDS TO NEAREST. For a
+ * phase in [0,1) the two agree, but these accumulators do not stay there.
+ *
+ * Then a noise/tone crossfade and three identical two-pole resonators — one per
+ * (cutoff, resonance) pair out of the smoothed controls — summed at the output.
+ *
+ * IT LEAVES TWO BYTES UNWRITTEN. The final `addi r31, r31, 2` advances the
+ * module cursor past two frames the emitter never produced, so the block
+ * lengths sum to two less than the declared sample length and every one of
+ * these samples ends with two bytes of whatever the buffer already held. The
+ * original allocated that buffer zeroed and so do we, so they are zeros — but
+ * they are not silence the synth computed, and a port that "fixes" the
+ * off-by-two by emitting two more frames gets 18 samples wrong.
+ */
+export function gen_1000742c(c) {
+  c.srand();
+  let r25 = c.g.r25;
+  const frames = c.u16(r25) * 4;
+  r25 += 2;
+  c.startSample(frames);
+  let r24 = c.u16(r25);
+  r25 += 2;
+
+  let f28 = c.f28, f27 = c.f27, f26 = c.f26, f22 = c.f22, f21 = c.f21, f20 = c.f20;
+  let f19 = c.f19, f17 = c.f17, f16 = c.f16, f14 = c.f14, f13 = c.f13;
+  let f11 = c.f11, f10 = c.f10;
+  let f8 = c.f8, f7 = c.f7, f9 = c.f9, f6 = c.f6;
+
+  do {
+    c.r19 = c.u16(r25 + 0x14) * 2;      // this block's length, in frames
+    c.r20 = 0;
+    let f25 = c.k(0x2daa), f24 = c.k(0x2dda), f23 = c.k(0x2de2);
+    do {
+      // Ten one-pole smoothers toward the block's ten u16 targets.
+      const k = c.k(0x2ad2);
+      f28 = fmadd(c.u16(r25 + 0x00) - f28, k, f28);
+      f27 = fmadd(c.u16(r25 + 0x02) - f27, k, f27);
+      f26 = fmadd(c.u16(r25 + 0x04) - f26, k, f26);
+      f25 = fmadd(c.u16(r25 + 0x06) - f25, k, f25);
+      f24 = fmadd(c.u16(r25 + 0x08) - f24, k, f24);
+      f23 = fmadd(c.u16(r25 + 0x0a) - f23, k, f23);
+      f22 = fmadd(c.u16(r25 + 0x0c) - f22, k, f22);
+      f21 = fmadd(c.u16(r25 + 0x0e) - f21, k, f21);
+      f20 = fmadd(c.u16(r25 + 0x10) - f20, k, f20);
+      const k10 = c.k(0x2ae2);
+      f19 = fmadd(c.u16(r25 + 0x12) - f19, k10, f19);
+
+      f8 += c.k(0x2ab6) - fctiw(f8);
+      f7 += c.k(0x2aba) - fctiw(f7);
+      f9 += c.k(0x2aca) - fctiw(f9);
+      f6 += c.k(0x2ace) - fctiw(f6);
+
+      let f5 = (((f9 + f8) + f7) + f6) * c.k(0x2b96);
+      const noise = c.rand() * c.k(0x2a7a);
+      const half = c.k(0x2bd6);
+      const depth = c.k(0x2aea);
+      f5 = f5 - half;
+      const wet = fmsub(noise, depth, half);
+      f5 = f5 * fnmsub(f19, depth, c.f30);
+      f5 = fmadd(f19 * depth, wet, f5);
+
+      // Three two-pole resonators: (cutoff, resonance) pairs (f25,f22),
+      // (f24,f21), (f23,f20), damped by f28, f27, f26 respectively.
+      const kQ = c.k(0x2abe), kA = c.k(0x2a96), kB = c.k(0x2a92);
+      const f18 = fmsub(f5, f22, fmadd(kQ * f25, f17, f16));
+      f17 = fmadd(f18, kA * f28, f17);
+      f16 = fmadd(f17, kB * f28, f16);
+      const f15 = fmsub(f5, f21, fmadd(kQ * f24, f14, f13));
+      f14 = fmadd(f15, kA * f27, f14);
+      f13 = fmadd(f14, kB * f27, f13);
+      const f12 = fmsub(f5, f20, fmadd(kQ * f23, f11, f10));
+      f11 = fmadd(f12, kA * f26, f11);
+      f10 = fmadd(f11, kB * f26, f10);
+
+      c.f29 = ((f17 + f14) + f11) * c.k(0x2d26);
+    } while (c.emit());
+    r25 += 0x16;
+  } while (--r24 > 0);
+
+  c.r31 += 2;
+  c.g.r25 = r25;
+}
+
 /** Address -> implementation. Everything absent is filled from the oracle. */
 export const PRIMITIVES = {
   0x10006f38: gen_10006f38,
   0x10006f4c: gen_10006f4c,
+  0x10009020: gen_10009020,
+  0x10009258: gen_10009258,
+  0x10009510: gen_10009510,
+  0x1000742c: gen_1000742c,
 };
