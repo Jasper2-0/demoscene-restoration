@@ -702,6 +702,54 @@ float32 rounding), so the recorded stream shows the *exact* answer and a port
 matched against it inherits qemu's precision, not a 604e's. Only a capture can
 say whether that is visible.
 
+## What the three live geometry opcodes actually build
+
+Every one of the 181 nodes' vertex and triangle counts is now predicted from
+the stream alone, and checked by `geocheck.mjs`. That is not the same as porting
+the generators — the positions are still float maths nobody has written down —
+but it settles the shape of each one, which decides how much is left.
+
+**op0 — a box or a plane, 76 nodes, 2,033 vertices.** Which one is decided by
+WHICH EXTENT IS ZERO rather than by an opcode of its own. The handler reads two
+halfwords and branches on their top bits, and each arm both picks a mode and
+rewrites the operands so the masked-off bit becomes a zero extent:
+
+| mode | | shape | vertices | triangles |
+|---|---|---|---|---|
+| 0 | all extents live | subdivided box | `2(pq+qr+rp) + 2` | `4(pq+qr+rp)` |
+| 1 | extent a is zero | plane on steps 1,2 | `(u+1)(v+1)` | `2uv` |
+| 2 | extent b is zero | plane on steps 0,2 | `(u+1)(v+1)` | `2uv` |
+| 3 | extent d is zero | plane on steps 0,1 | `(u+1)(v+1)` | `2uv` |
+
+The `+2` on the box is the two corners no face-pair shares. Subdivision counts
+are three five-bit fields of one halfword, each stored one less than it means.
+
+**Except when the material record's kind is 5, which makes no faces at all** —
+`lbz r3, 0(r20); cmpwi r3, 5; beq` jumps clean over face generation, so those
+nodes are point clouds. Without that clause an 8x8 grid carrying 81 vertices and
+0 triangles reads as a broken model rather than a deliberate one.
+
+**op4 — a tube, 33 nodes, 2,188 vertices.** `at18` is the number of sides in the
+swept ring; each control point carries a subdivision count `k` in the top ten
+bits of its last halfword; the spline is evaluated at `sum(k)` places, giving one
+ring of `sides` vertices each. So `vertices = sides x sum(k)`, exactly, on all
+33. Consecutive rings are joined by a quad strip that always wraps around the
+sides, giving `2 x sides` triangles per gap.
+
+**Whether it also joins the last ring back to the first is bit 7 of the operand
+byte**, at node+0x19 — the same bit the generator tests when picking each
+control point's two spline neighbours, so an open tube clamps at the ends and a
+closed one wraps. Asserted without it, the triangle count read 30/33: vertices
+matched everywhere and only the three flagged nodes carried one extra ring of
+triangles, which is what a missing wrap looks like and nothing else.
+
+The generator is a Catmull-Rom-shaped basis at `0x10004180`, called four times
+per sample for x, y, z and a fourth channel, over a neighbour window
+`(prev, cur, next, next+1)` chosen with that same wrap flag.
+
+**op3 — none of its own, 72 nodes, 7,502 vertices.** See above: it clones
+node[at18] `count` times.
+
 With this the **five dispatch tables are all read**: texture, scene, geometry
 build, geometry evaluate, render.
 

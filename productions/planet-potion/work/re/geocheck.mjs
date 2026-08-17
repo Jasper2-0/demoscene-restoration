@@ -60,6 +60,10 @@ let recOK = 0, recBad = 0, nodeOK = 0, nodeBad = 0, fieldOK = 0, fieldBad = 0;
 let seqOK = 0, seqBad = 0, spanOK = 0, spanBad = 0;
 const failures = [];
 const note = (s) => { if (failures.length < 10) failures.push(s); };
+// op0's law needs the subdivision counts, and those go straight into the
+// generator's registers without ever being written to the node — so they exist
+// only in the decoder's output and the structural pass below needs it kept.
+const decoded = new Map();
 
 // Comparing NUMBERS, not JSON text: geodump writes non-finite floats as null,
 // and a decoded 0 must not silently match one.
@@ -78,6 +82,7 @@ for (const p of doc.programs) {
   if (!seg) { progBad++; note(`${p.part}[${p.index}] ${p.program} outside seg3/seg4`); continue; }
 
   const got = decodeProgram(seg.data, addr - seg.base, null);
+  decoded.set(p, got.nodes);
   let bad = 0;
 
   // The stream's own u16 length is an independent witness, and the comparison
@@ -190,6 +195,7 @@ for (const p of doc.programs) {
 // something" and "op3 copies node[at18] exactly count times" are different
 // claims and only the second one is worth building on.
 let repOK = 0, repBad = 0, backOK = 0, backBad = 0, genBad = 0, rootOK = 0;
+let tubeOK = 0, tubeBad = 0, boxOK = 0, boxBad = 0;
 for (const p of doc.programs) {
   const ns = p.nodes;
   for (let i = 0; i < ns.length; i++) {
@@ -208,6 +214,74 @@ for (const p of doc.programs) {
         repBad++;
         note(`${p.part}[${p.index}] node ${i} op3 at18=${k} count=${n.count}: `
           + `${n.vertices.length} verts, expected ${n.count} x ${s?.vertices.length}`);
+      }
+    }
+    // OP0 IS FOUR PRIMITIVES, and which one is decided by WHICH EXTENT IS ZERO
+    // rather than by an opcode of its own. The handler reads two halfwords and
+    // branches on their top bits, and each arm both picks a mode and rewrites
+    // the operands so that the masked-off bit becomes a zero extent:
+    //
+    //     mode 0  all three extents live   a subdivided BOX
+    //     mode 1  extent a is zero         a PLANE on steps 1 and 2
+    //     mode 2  extent b is zero         a PLANE on steps 0 and 2
+    //     mode 3  extent d is zero         a PLANE on steps 0 and 1
+    //
+    // A box grid's surface has 2(pq + qr + rp) + 2 vertices and twice that many
+    // triangles — the +2 being the two corners no face-pair shares — and a
+    // plane has the ordinary (u+1)(v+1) and 2uv.
+    //
+    // EXCEPT WHEN THE MATERIAL RECORD'S KIND IS 5, which produces no faces at
+    // all: `lbz r3, 0(r20); cmpwi r3, 5; beq` jumps clean over face generation.
+    // Those nodes are point clouds, and without that clause an 8x8 grid of 81
+    // vertices carrying 0 triangles looks like a broken model rather than a
+    // deliberate one.
+    if (n.op === 0) {
+      const g = decoded.get(p)?.[i];
+      const [x, y, z] = g?.steps ?? [0, 0, 0];
+      const PAIR = { 1: [1, 2], 2: [0, 2], 3: [0, 1] }[g?.mode];
+      let wantV, wantT;
+      if (g?.mode === 0) {
+        const f = x * y + y * z + z * x;
+        wantV = 2 * f + 2; wantT = 4 * f;
+      } else if (PAIR) {
+        const u = g.steps[PAIR[0]], v = g.steps[PAIR[1]];
+        wantV = (u + 1) * (v + 1); wantT = 2 * u * v;
+      }
+      if (n.records[0]?.kind === 5) wantT = 0;
+      if (n.vertices.length === wantV && n.triangles.length === wantT) boxOK++;
+      else {
+        boxBad++;
+        note(`${p.part}[${p.index}] node ${i} op0 mode=${g?.mode} `
+          + `steps=${JSON.stringify(g?.steps)} kind=${n.records[0]?.kind}: `
+          + `${n.vertices.length}v ${n.triangles.length}t, `
+          + `expected ${wantV}v ${wantT}t`);
+      }
+    }
+    // OP4 IS A TUBE, and its two counts are exactly predictable from the
+    // decoded operands — which is what says the reading of its generator is
+    // right before a line of it is ported. `at18` is the number of sides in the
+    // swept ring; each control point carries a subdivision count `k` in the top
+    // ten bits of its last halfword; the spline is evaluated at the sum of
+    // those, giving one ring of `sides` vertices each. Consecutive rings are
+    // joined by a quad strip that always wraps around the sides.
+    //
+    // WHETHER IT ALSO JOINS THE LAST RING BACK TO THE FIRST is `flag`, bit 7 of
+    // the operand byte, stored at node+0x19 — the same bit the generator tests
+    // when it picks each control point's two neighbours for the spline, so an
+    // open tube's end segments use a clamped neighbour and a closed one wraps.
+    // Written first without it, this assertion read 30/33: vertices matched
+    // everywhere and only the three flagged nodes had one extra ring of
+    // triangles, which is what a missing wrap looks like and nothing else.
+    if (n.op === 4) {
+      const rings = n.points.reduce((a, q) => a + q.k, 0);
+      const wantV = n.at18 * rings;
+      const wantT = Math.max(0, n.flag ? rings : rings - 1) * n.at18 * 2;
+      if (n.vertices.length === wantV && n.triangles.length === wantT) tubeOK++;
+      else {
+        tubeBad++;
+        note(`${p.part}[${p.index}] node ${i} op4 sides=${n.at18} rings=${rings}: `
+          + `${n.vertices.length}v ${n.triangles.length}t, `
+          + `expected ${wantV}v ${wantT}t`);
       }
     }
     // Follow the clone chain down. An op3 whose source is another op3 is
@@ -274,12 +348,16 @@ if (dead.length) {
     + 'they are decoded from the instructions and unverified — a wrong operand '
     + 'width there would not fail this check');
 }
+ok('op0 builds the box or plane its zero extent selects', boxBad === 0,
+  `${boxOK}/${boxOK + boxBad} nodes, vertices and triangles both`);
 ok('op3 repeats node[at18] exactly count times', repBad === 0,
   `${repOK}/${repOK + repBad} nodes, vertices and triangles both`);
 ok('op3\'s source reference is always backward', backBad === 0,
   `${backOK}/${backOK + backBad}`);
 ok('every op3 clone chain bottoms out at an op0 or op4 generator',
   genBad === 0, `${rootOK}/${rootOK + genBad} chains`);
+ok('op4 builds sides x rings vertices, and closes the tube iff flag is set',
+  tubeBad === 0, `${tubeOK}/${tubeOK + tubeBad} nodes`);
 
 console.log('     the generators themselves are not ported: geo.json\'s '
   + '11,723 vertices and 19,074 triangles are their oracle, and only op0 '
