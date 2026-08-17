@@ -313,6 +313,32 @@ Checked so far:
 
 `0x40` and the `0x10005b34` transform are unchecked.
 
+**PASS 3 IS PORTED except for the text tail**, and verified by
+`work/re/pass3check.mjs` over all 29 scenes: the gate byte reaches the render
+node on 1,185 of 1,185, `cx`/`cy`/`scale` match what the emitter used on 733,
+and **every one of 3,764 comparable mesh vertices transforms exactly**, along
+with 4,986 object normals. A further 288 vertices carry non-finite fields in the
+original and are not comparable, and 3,480 sit on nodes with the built-already
+flag, which pass 3 skips.
+
+Two things are NOT covered and both are stated as numbers by that check rather
+than left implicit: **type 4, the text tail**, is unported — 137 instructions of
+glyph-quad layout with no consumer yet — and **type 6, the camera**, runs but is
+unverified, because its output goes into the sub-structures chained off
+`node+0x2c` and `animdump` does not export those.
+
+THE VERTEX TRANSFORM IS `M . v`, NOT `v . M`. `0x10005614` is
+`fmadd f21, f24, f13, f5` where `f13` is channel 0 and `f5` the translation, so
+the first output component takes m00, m01, m02 — row zero dotted with the
+vertex. The compose pass's `0x10005b34` uses the opposite convention on the same
+matrix four hundred bytes earlier in the same function. Getting it the wrong way
+round leaves the MIDDLE component exactly right whenever the matrix is a Y
+rotation, because that row is (0, 1, 0) either way, which is a misleading amount
+of agreement.
+
+The four colour floats are scaled POSITIONALLY by channels 15-18 — `+0x30` by
+channel 15 and so on down — not paired by colour meaning.
+
 **3c. Publish** — `0x10005510`, and it does three things in order.
 
 It copies the animation object's resolved byte at `+0x00` into the render node at

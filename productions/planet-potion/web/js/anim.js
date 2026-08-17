@@ -507,3 +507,115 @@ export function composeHierarchy(entries, maxSweeps = 64) {
   }
   return { sweeps, stuck };
 }
+
+// --- pass 3, publish ---------------------------------------------------------
+//
+// `0x10005510`. Three things in order: copy the resolved byte onto the render
+// node, publish the projection triple, then a tail per node type.
+//
+// THE TEXT TAIL (`0x1000570c`, type 4) IS NOT HERE. It is 137 instructions of
+// glyph-quad layout whose output nothing yet consumes — Stage 3b's text handler
+// does not exist — and it is a self-contained piece worth doing against its own
+// oracle rather than folded in here. `publishNode` returns 'text-unported' for
+// those nodes so a caller cannot mistake silence for success.
+
+/**
+ * `0x10005510` for one node.
+ *
+ * PUBLISHES NOTHING UNLESS THE RESOLVED BYTE IS 1 — a node whose track has not
+ * started leaves last frame's values on the render node rather than writing
+ * zeros, which is why the render node keeps `+0x0c` at all.
+ *
+ * @param node  the render node's mutable fields: {type, built, drawGate, cx,
+ *              cy, scale, vertices, objects, cameras}
+ * @param ch    the node's evaluated channel block, after pass 2
+ * @param resolved  `anim+0x00`
+ */
+export function publishNode(node, ch, resolved) {
+  node.drawGate = resolved;
+  if (resolved !== 1) return 'not-resolved';
+
+  // Channels 21, 22 and 23 -> cx, cy, scale. The same three the compose pass
+  // copies down a hierarchy and the same three animcheck verifies against the
+  // emitter's own numbers.
+  node.cx = ch[21]; node.cy = ch[22]; node.scale = ch[23];
+
+  switch (node.type) {
+    case 7: return 'root';
+    case 6: return publishCamera(node, ch);
+    case 5: return publishMesh(node, ch);
+    case 4: return 'text-unported';
+    default: return 'other-unported';
+  }
+}
+
+/**
+ * Type 6 — the camera. `0x1000555c`.
+ *
+ * Copies the WHOLE 24-float channel block into each sub-structure on the chain
+ * at `node+0x2c`, then concatenates that copy with the channel block of the
+ * node the sub-structure points at (`*(*(sub)) + 0xc` — two dereferences, sub
+ * to node to animation object). So a camera pushes its full state down a chain
+ * rather than publishing three numbers.
+ */
+function publishCamera(node, ch) {
+  let n = 0;
+  for (const sub of node.cameras ?? []) {
+    sub.channels = Float64Array.from(ch);
+    if (sub.targetChannels) concat(sub.channels, sub.targetChannels);
+    n++;
+  }
+  return `camera:${n}`;
+}
+
+/**
+ * Type 5 — the mesh. `0x100055b0`.
+ *
+ * SKIPS ENTIRELY when `node+0x0f` is 1, a built-already flag.
+ *
+ * Otherwise it transforms every vertex on the list at `node+0x20`, and the
+ * split between source and destination fields is the whole of it: position
+ * `+0x24` -> `+0x00`, colour `+0x30` -> `+0x40`, normal `+0x50` -> `+0x5c`.
+ * The position is the full affine transform, the normal is the 3x3 only, and
+ * the colour is four independent scalings by channels 15-18.
+ *
+ * Then the OBJECT chain at `node+0x24` on `+0x60`: each object's `+0x3c` triple
+ * goes through the same 3x3 into `+0x48`. That third component at `+0x50` is
+ * what §4c calls the face intensity and mode 2 uses for flat shading — it is
+ * the transformed normal's z, which is why the two descriptions are the same
+ * thing.
+ */
+function publishMesh(node, ch) {
+  if (node.built === 1) return 'built-already';
+  const m = ch;                       // 3x3 at 0-8, translation at 12-14
+
+  // M . v, NOT v . M. `0x10005614` is `fmadd f21, f24, f13, f5` where f13 is
+  // ch[0x00] and f5 the translation — so the first output component takes m00,
+  // m01, m02, which is ROW zero dotted with the vertex. The compose pass's
+  // 0x10005b34 goes the other way round (rows of the node through M), so the
+  // two conventions sit four hundred bytes apart in the same function and the
+  // wrong one still leaves the middle component exactly right whenever the
+  // matrix is a Y rotation, because that row is (0, 1, 0) either way.
+  const xf = (x, y, z, t0, t1, t2) => [
+    f32(fma(z, m[2], fma(y, m[1], fma(x, m[0], t0)))),
+    f32(fma(z, m[5], fma(y, m[4], fma(x, m[3], t1)))),
+    f32(fma(z, m[8], fma(y, m[7], fma(x, m[6], t2)))),
+  ];
+  let n = 0;
+  for (const v of node.vertices ?? []) {
+    [v.ox, v.oy, v.oz] = xf(v.x, v.y, v.z, m[12], m[13], m[14]);
+    // POSITIONAL, one scalar each: +0x30 x ch15 -> +0x40 and so on down. Not a
+    // colour-channel pairing — the record's four floats are scaled by channels
+    // 15 to 18 in order, whatever they mean.
+    v.o0 = f32(v.c0 * ch[15]); v.o1 = f32(v.c1 * ch[16]);
+    v.o2 = f32(v.c2 * ch[17]); v.o3 = f32(v.c3 * ch[18]);
+    [v.onx, v.ony, v.onz] = xf(v.nx, v.ny, v.nz, 0, 0, 0);
+    n++;
+  }
+  // The object chain's own vector: the 3x3 with no translation, and its third
+  // component is what §4c calls the face intensity.
+  for (const o of node.objects ?? []) {
+    [o.onx, o.ony, o.onz] = xf(o.nx, o.ny, o.nz, 0, 0, 0);
+  }
+  return `mesh:${n}`;
+}

@@ -108,6 +108,73 @@ def read_track(snap, head, arena, limit=512):
     return out
 
 
+def _clean(o):
+    """Non-finite floats out before writing, as arenadump does.
+
+    Python's json.dump emits bare NaN and Infinity; Python reads them back and
+    no JavaScript parser will. animdump never needed this while it dumped only
+    keyframe coefficients — the vertex arrays it now walks include records that
+    have never been written, and those are full of them.
+    """
+    if isinstance(o, float):
+        return o if -1e30 < o < 1e30 else None
+    if isinstance(o, dict):
+        return {k: _clean(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_clean(v) for v in o]
+    return o
+
+
+MAX_VERTS = 48      # per node — the transform is uniform, so a sample proves it
+
+
+def read_vertices(snap, arena, head, limit=MAX_VERTS):
+    """The mesh vertex list at `node+0x20`, chained on `+0x68`.
+
+    BOTH SIDES of every field, because pass 3's whole job is the split: source
+    position at +0x24 becomes +0x00, source colour at +0x30 becomes +0x40,
+    source normal at +0x50 becomes +0x5c. A dump of one side cannot check a
+    transform.
+
+    Capped per node: the transform is one matrix applied uniformly, so 48
+    vertices establish it as well as 4,000 and the file stays readable.
+    """
+    out, addr, seen = [], head, set()
+    while addr and addr != NIL and addr not in seen and len(out) < limit:
+        o = addr - arena
+        if not 0 <= o < len(snap) - 0x6c:
+            break
+        seen.add(addr)
+        src = struct.unpack_from('>3f', snap, o + 0x24)
+        dst = struct.unpack_from('>3f', snap, o)
+        out.append({
+            'addr': hex(addr),
+            'p': list(src), 'out_p': list(dst),
+            'rgba': list(struct.unpack_from('>4f', snap, o + 0x30)),
+            'out_rgba': list(struct.unpack_from('>4f', snap, o + 0x40)),
+            'n': list(struct.unpack_from('>3f', snap, o + 0x50)),
+            'out_n': list(struct.unpack_from('>3f', snap, o + 0x5c)),
+        })
+        addr = struct.unpack_from('>I', snap, o + 0x68)[0]
+    return out
+
+
+def read_objects(snap, arena, head, limit=64):
+    """The object chain at `node+0x24` on `+0x60`, and the one vector pass 3
+    transforms on it: `+0x3c` into `+0x48`, whose z is §4c's face intensity."""
+    out, addr, seen = [], head, set()
+    while addr and addr != NIL and addr not in seen and len(out) < limit:
+        o = addr - arena
+        if not 0 <= o < len(snap) - 0x64:
+            break
+        seen.add(addr)
+        out.append({'addr': hex(addr),
+                    'n': list(struct.unpack_from('>3f', snap, o + 0x3c)),
+                    'out_n': list(struct.unpack_from('>3f', snap, o + 0x48))})
+        addr = struct.unpack_from('>I', snap, o + 0x60)[0]
+    return out
+
+
 def walk_nodes(snap, arena, limit=256):
     """Every node in the list, from the head at arena+4.
 
@@ -183,6 +250,16 @@ def dump(flat, stream, times, txt_tab=0x2642, obj_tab=0x2706):
                 'scale': d['scale'] if d else None,
                 'anim': anim,
                 'track': read_track(snap, anim['track'], arena) if anim else [],
+                # Only meshes have a vertex list at +0x20; for other types that
+                # field is a count, and walking it as a pointer reads rubbish.
+                'vertices': (read_vertices(snap, arena,
+                                           struct.unpack_from('>I', snap, addr - arena + 0x20)[0])
+                             if n['type'] == 5 else []),
+                'objects': (read_objects(snap, arena,
+                                         struct.unpack_from('>I', snap, addr - arena + 0x24)[0])
+                            if n['type'] == 5 else []),
+                'built': snap[addr - arena + 0x0f],
+                'drawGate': snap[addr - arena + 0x0c],
             })
         frames.append({'t': t, 'nodes': nodes})
     return {'stream': hex(stream), 'arena': hex(arena),
@@ -236,13 +313,13 @@ def main():
         d0 = open(os.path.join(flat, seg0), 'rb').read()
         H.fix_glyph_scan(d0)
         H.preload_tables(d0)
-        json.dump(dump_all(flat, times), open(dest, 'w'))
+        json.dump(_clean(dump_all(flat, times)), open(dest, 'w'), allow_nan=False)
         print(f'wrote {dest}')
         return
     flat, stream, dest = sys.argv[1], int(sys.argv[2], 16), sys.argv[3]
     times = [int(x) for x in sys.argv[4:]] or [0, 50, 100, 200]
     doc = dump(flat, stream, times)
-    json.dump(doc, open(dest, 'w'))
+    json.dump(_clean(doc), open(dest, 'w'), allow_nan=False)
     for f in doc['frames']:
         withTrack = sum(1 for n in f['nodes'] if n['track'])
         print(f"t={f['t']:5}  {len(f['nodes']):3} nodes, {withTrack} with a keyframe track")

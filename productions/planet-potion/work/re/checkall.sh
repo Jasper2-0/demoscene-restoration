@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Twenty-six checks accumulated over the work and there is no point in
-# remembering twenty-six invocations. Each passes or names what drifted; none of them
+# Twenty-seven checks accumulated over the work and there is no point in
+# remembering twenty-seven invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -189,6 +189,13 @@ run "pass1check — the animation evaluator, all 29 scenes" \
 # mistaken for an evaluator one.
 run "pass2check — the compose pass, every node of every scene" \
   node "$HERE/pass2check.mjs" "$HERE/out/anim_all.json"
+
+# The publish pass: the gate byte, cx/cy/scale against what the emitter used,
+# and every mesh vertex's transformed position, colour and normal. The text tail
+# is not ported and the camera tail is not dumped; both are reported by number
+# rather than passed over.
+run "pass3check — the publish pass and the mesh vertex transform" \
+  node "$HERE/pass3check.mjs" "$HERE/out/anim_all.json"
 
 # Every Warp3D name in PORT_SPEC rests on this ordering, and it was measured
 # once and written up as prose. Re-derives it from the shipped libraries.
