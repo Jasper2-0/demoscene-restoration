@@ -34,7 +34,7 @@
 // so an opcode at exactly `r30` is read and then discarded. Stopping one byte
 // later, or testing before the increment, changes which programs terminate.
 import { f32, fma } from './fp.js';
-import { fctiw } from './tables.js';
+import { fctiw, atan as atanTable } from './tables.js';
 
 // `_generate_obj`'s own constants, both read from the small data area:
 // `[r2+0x2dee]` is 255.0 and `[r2+0x2dd2]` is 128.0. It then derives
@@ -45,6 +45,13 @@ const K255 = 255.0;
 const K128 = 128.0;
 const ONE = K128 / K128;
 const HALFISH = K128 / K255;
+// `fres` rounds its result to single precision and `frsqrte` does not — settled
+// by fpest.py against the harness that produced every reference in this repo.
+const fres = (x) => Math.fround(1 / x);
+// The two constants the arctangent routine loads, both float32 approximations
+// rather than the real thing, and both used as written.
+const PI_C = 3.1415939331054688;
+const HALF_PI = 1.5707969665527344;
 
 /** The five build handlers at `0x1000a9b0`, and the node size each allocates. */
 export const OPS = [
@@ -486,6 +493,183 @@ export function buildOp3(node, source, table) {
   return V;
 }
 
+// ---------------------------------------------------------------------------
+// op4 — a tube swept along a spline. `0x10004428`, and the longest of the three.
+
+/** `0x10004180` — the spline basis, four calls per sample (x, y, z, radius).
+ *
+ * NOT CATMULL-ROM. It builds its coefficients by repeated addition rather than
+ * from a matrix, and the result has no halves in it:
+ *
+ *     P(t) = c + (n-p)t - (q + 2c - n - 2p)t^2 + (q + c - n - p)t^3
+ *
+ * It does interpolate — P(0) = c and P(1) = n — so it looks like a cardinal
+ * spline and is not one; substituting the real thing moves every intermediate
+ * sample.
+ */
+function splineAt(p, c, n, q, t, t2, t3) {
+  let f17 = q - c;
+  let f16 = c - n;
+  const f18 = n - p;
+  f17 = f17 + f16;
+  f17 = f17 + f16;
+  f17 = f17 + f18;
+  f16 = f16 + f17;
+  f16 = f16 + f18;
+  let r = fma(f18, t, c);
+  r = fma(f17, t3, r);
+  return -(fma(f16, t2, -r));
+}
+
+/**
+ * `0x10006a7c` — arctangent, returning TURNS rather than radians.
+ *
+ * A 1,024-entry table of `atan(i/1024)` covering the first eighth of a turn,
+ * reflected into the other seven by the sign tests at the end. The result is
+ * divided by 2*pi at the very end, so what comes back is 0..1 and the caller
+ * multiplies by 32768 to get a byte offset into the sine table.
+ *
+ * IT IS CALLED WITH (0, 0) BY EVERY STRAIGHT SEGMENT, and the NaN that follows
+ * is load-bearing. The divide gives NaN; the `> 1.0` test is a `ble` on an
+ * unordered compare and so is NOT taken; `fctiw` of a NaN is 0x80000000; and
+ * `slwi r3, r3, 2` then truncates that to exactly zero. So the original reads
+ * entry 0, gets 0.0, and a straight tube ends up with an identity yaw. Any step
+ * of that chain implemented differently sends the lookup off the table.
+ */
+function atanTurns(y, x, atanTable) {
+  let r = Math.abs(y / x);
+  let sgn = 1.0, off = 0.0;
+  if (r > 1.0) { sgn = -1.0; off = HALF_PI; r = fres(r); }
+  let i = fctiw(r * 1024.0);
+  if (i >= 0x3ff) i = 0x3ff;
+  const entry = ((i << 2) >>> 0) >>> 2;
+  let v = fma(atanTable[entry] ?? 0, sgn, off);
+  if (x >= 0) { if (!(y >= 0)) v = (PI_C + PI_C) - v; }
+  else if (y >= 0) v = PI_C - v;
+  else v = v + PI_C;
+  return v / (PI_C + PI_C);
+}
+
+/**
+ * op4's generator — `sides` points swept along the spline through the control
+ * points, one ring per subdivision.
+ *
+ * TWO OUT-OF-BOUNDS READS, BOTH DETERMINISTIC AND BOTH REPRODUCED. The spline
+ * needs four control points and the loop does not special-case the ends the way
+ * you would expect: `cmpwi r14, 1` fixes up the SECOND point, not the first, so
+ * the first segment reads `array - 0x14` and walks off the front of the array.
+ * `alloc_mem` is a bump allocator and the point array is handed out immediately
+ * after the last 0x58 material record, so those twenty bytes are that record's
+ * tail: its rotate-z word at +0x44 read as a float, and its scale triple at
+ * +0x48/4c/50. A default record therefore contributes `prev = (0, 1, 1)` with a
+ * radius of 1 — small, structured, and nothing like zero. Assuming zeros gets
+ * every node with four or more control points wrong in the second decimal.
+ *
+ * The second is the closed case's fixup for point 1: `add r25, r24, r25` adds
+ * `(count-1) * 0x14` to the CURRENT point rather than to the base, landing one
+ * record past the END of the array — which is where the circle table gets
+ * allocated a moment later, so `prev` becomes `(0, 1, 0)` with radius
+ * `circle[1].x`.
+ *
+ * THE SWEEP ANGLE IS NEGATIVE because `li r4, 0x8000` sign-extends: the divisor
+ * is -32768, not 32768, so the ring is generated clockwise. That cancels
+ * against the `neg` on the pitch index, and getting only one of the two right
+ * leaves the tube inside out.
+ */
+export function buildOp4(node, table, atanTable) {
+  const sides = node.at18, closed = node.flag, pts = node.points;
+  const count = node.count;
+  if (!sides || !count) return [];
+
+  // The swept ring: a unit circle plus a u ramp, by incremental rotation.
+  const step = Math.trunc((-0x8000) / sides) & 0x7ffc;
+  const cs = table[step >>> 2], cc = table[(step >>> 2) + 2048];
+  const du = fres(sides + 1);
+  const circle = [];
+  let rx = 0.0, ry = 1.0, ru = 0.0;
+  for (let i = 0; i < sides; i++) {
+    circle.push([f32(rx), f32(ry), f32(ru)]);
+    const a = ry * cs, b = rx * cs;
+    const nx = fma(rx, cc, a), ny = fma(ry, cc, -b);
+    rx = nx; ry = ny; ru += du;
+  }
+
+  const last = node.records[node.records.length - 1];
+  const bits = new DataView(new ArrayBuffer(4));
+  bits.setInt32(0, last ? (last.rotate[2] | 0) : 0);
+  const BEFORE = last
+    ? { p: [bits.getFloat32(0), last.scale[0], last.scale[1]], w: last.scale[2] }
+    : { p: [0, 0, 0], w: 0 };
+  const AFTER = { p: [circle[0][0], circle[0][1], circle[0][2]],
+    w: circle[1] ? circle[1][0] : 0 };
+
+  // Pass one: sample the spline, and lay down a ring of `sides` vertices at
+  // each sample, all sharing that sample's position and radius.
+  const V = [];
+  let lx = pts[0].p[0], ly = pts[0].p[1], lz = pts[0].p[2];
+  for (let i = 0; i < count; i++) {
+    const cur = pts[i];
+    let pi = i - 1, ni = i + 1, qi = i + 2;
+    if (i === 0) pi = -1;
+    else if (i === 1) pi = closed ? -2 : i;
+    if (ni > count - 1) ni = closed ? 0 : count - 1;
+    if (qi > count - 1) {
+      qi = count - 1;
+      // Only the CLOSED path wraps and then steps past a collision with `next`;
+      // `beq cr2` skips both for an open tube.
+      if (closed) { qi = 0; if (qi === ni) qi += 1; }
+    }
+    const P = pi === -1 ? BEFORE : (pi === -2 ? AFTER : (pts[pi] ?? BEFORE));
+    const N = pts[ni] ?? BEFORE, Q = pts[qi] ?? BEFORE;
+    const dt = fres(cur.k);
+    let t = 0.0;
+    for (let j = 0; j < cur.k; j++) {
+      const t2 = t * t, t3 = t2 * t;
+      const x = splineAt(P.p[0], cur.p[0], N.p[0], Q.p[0], t, t2, t3);
+      const y = splineAt(P.p[1], cur.p[1], N.p[1], Q.p[1], t, t2, t3);
+      const z = splineAt(P.p[2], cur.p[2], N.p[2], Q.p[2], t, t2, t3);
+      const w = splineAt(P.w, cur.w, N.w, Q.w, t, t2, t3);
+      for (let e = 0; e < sides; e++) {
+        V.push({ sp: [f32(x), f32(y), f32(z)], w: f32(w), p: null });
+      }
+      lx = x; ly = y; lz = z;
+      t += dt;
+    }
+  }
+
+  // Pass two: a frame per ring from the local tangent, then place the circle.
+  const rings = V.length / sides;
+  for (let r = 0; r < rings; r++) {
+    const pr = r === 0 ? (closed ? rings - 1 : 0) : r - 1;
+    let nr = r + 1;
+    if (nr > rings - 1) nr = closed ? 0 : rings - 1;
+    const A = V[nr * sides].sp, B = V[pr * sides].sp;
+    const dx = A[0] - B[0], dy = A[1] - B[1], dz = A[2] - B[2];
+
+    const a = fctiw(atanTurns(dz, dx, atanTable) * 32768.0);
+    const yaw = (-a) & 0x7ffc, flat = a & 0x7ffc;
+    const s1 = table[flat >>> 2], c1 = table[(flat >>> 2) + 2048];
+    const horiz = fma(dx, c1, dz * s1);
+    const b = fctiw(atanTurns(dy, horiz, atanTable) * 32768.0);
+    const pitch = (-b) & 0x7ffc;
+    const s2 = table[pitch >>> 2], c2 = table[(pitch >>> 2) + 2048];
+    const s3 = table[yaw >>> 2], c3 = table[(yaw >>> 2) + 2048];
+
+    for (let e = 0; e < sides; e++) {
+      const v = V[r * sides + e];
+      const q1 = circle[e][0] * v.w, q2 = circle[e][1] * v.w;
+      const h = fma(q1, s2, 0);
+      const m = q1 * c2;
+      const nx = fma(q2, s3, h * c3);
+      const nz = -(fma(h, s3, -(q2 * c3)));
+      v.p = [f32(v.sp[0] + nx), f32(v.sp[1] + m), f32(v.sp[2] + nz)];
+    }
+  }
+
+  const rec = node.records[0];
+  return V.map((v) => (rec ? transformVertex(v.p, rec, table) : v.p));
+}
+
 /**
  * Build every node of a decoded program, in list order.
  *
@@ -505,6 +689,8 @@ export function buildProgram(decoded, table) {
         op: 3,
         vertices: src && src.vertices ? buildOp3(node, src.vertices, table) : null,
       });
+    } else if (node.op === 4) {
+      out.push({ op: 4, vertices: buildOp4(node, table, atanTable()) });
     } else {
       out.push({ op: node.op, vertices: null });
     }

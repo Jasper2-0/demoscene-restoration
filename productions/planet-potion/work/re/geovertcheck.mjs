@@ -13,17 +13,13 @@
 // several revisions before it was right at all, and a tolerance anywhere in the
 // 1e-3 to 1e-5 range would have called each of those wrong versions a pass.
 //
-// op0 AND op3 ARE PORTED, op4 IS NOT, and the arithmetic of that is not
-// two-thirds. op4's spline sweep owns 2,188 vertices directly — but op3 CLONES
-// an earlier node, so every op3 whose chain bottoms out at an op4 is unbuildable
-// too, and that is another 4,882. The check counts those two causes separately
-// below, because "op3 is ported" and "every op3 node can be built" are different
-// statements and only the first is true.
-//
-// Nothing here reads a vertex position out of the oracle: `buildProgram` walks
-// the node list front to back and op3 clones what the port itself built. An
-// earlier version fed op3 from `geo.json` to isolate its logic, which was the
-// right way to FIND the model and the wrong way to keep testing it.
+// ALL THREE LIVE GENERATORS ARE PORTED and every vertex in the intro is
+// covered. Nothing here reads a position out of the oracle: `buildProgram`
+// walks the node list front to back, op3 clones what the port itself built, and
+// an op0 error propagates into the 7,502 op3 vertices downstream instead of
+// being masked. An earlier version fed op3 from `geo.json` to isolate its
+// logic, which was the right way to FIND the model and the wrong way to keep
+// testing it.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -134,16 +130,17 @@ ok('the record transform is exercised, not just identity records',
   `${seen.rotate} rotate, ${seen.scale} scale, ${seen.translate} translate, `
   + `${seen.plain} plain`);
 
-const blocked = unported.get(3) ?? 0;
-console.log(`     op4 is not ported: ${unported.get(4) ?? 0} vertices`);
-if (blocked) {
-  console.log(`     and ${blocked} more op3 vertices cannot be built because `
-    + 'their clone chain bottoms out at an op4');
+// Anything the port declined to build at all, by opcode. Empty is the goal and
+// the line stays so that a future regression to null shows up as a number
+// rather than as a quietly smaller denominator.
+let skipped = 0;
+for (const [op, n] of [...unported].sort()) {
+  skipped += n;
+  console.log(`     op${op} produced no vertices: ${n} not checked`);
 }
-const total = vOK + vBad + blocked + (unported.get(4) ?? 0);
-console.log(`     ${vOK} of ${total} vertices in the intro are covered here`);
+ok('every vertex in the intro is covered', skipped === 0,
+  `${vOK} of ${vOK + vBad + skipped}`);
 for (const f of failures) console.log(`     ${f}`);
 
 if (failed) process.exit(1);
-console.log('\nop0\'s box and plane and op3\'s array modifier reproduce the '
-  + 'original exactly');
+console.log('\nall three geometry generators reproduce the original exactly');

@@ -750,6 +750,61 @@ per sample for x, y, z and a fourth channel, over a neighbour window
 **op3 — none of its own, 72 nodes, 7,502 vertices.** See above: it clones
 node[at18] `count` times.
 
+### op4's two out-of-bounds reads, and why they are reproducible
+
+All three generators are ported and `geovertcheck.mjs` holds them to
+**11,723 / 11,723 vertex positions, bit-exact**. op4 was the hard one, and most
+of the difficulty was in four places where the natural reading is wrong.
+
+**The sweep runs backwards.** `li r4, 0x8000` SIGN-EXTENDS, so the angular step
+is `-32768 / sides`, not `+32768 / sides`. That cancels against the `neg` on the
+pitch index; get one of the two right and the tube is inside out.
+
+**`atan(0, 0)` is on the hot path and its NaN is load-bearing.** Every straight
+segment calls it. The divide gives a NaN; the `> 1.0` test is a `ble` on an
+unordered compare and is therefore NOT taken; `fctiw` of a NaN is **0x80000000**;
+and `slwi r3, r3, 2` truncates that to exactly zero. So the routine reads entry 0
+of the arctangent table, gets 0.0, and a straight tube ends up with an identity
+yaw. `tables.js` had `fctiw` returning the POSITIVE maximum for a NaN, which is
+what the architecture gives for "too large" and not for "not a number" — a real
+bug, latent until this was its first caller.
+
+**The spline is not Catmull-Rom.** It builds its coefficients by repeated
+addition and has no halves anywhere:
+
+```
+  P(t) = c + (n-p)t - (q + 2c - n - 2p)t^2 + (q + c - n - p)t^3
+```
+
+It still interpolates — `P(0) = c`, `P(1) = n` — so it looks like a cardinal
+spline and substituting one moves every intermediate sample.
+
+**AND THE FIRST CONTROL POINT'S `prev` IS AN OUT-OF-BOUNDS READ.** The spline
+needs four points and the loop does not clamp the ends the way you would expect:
+`cmpwi r14, 1` fixes up the SECOND point, not the first, so the first segment
+reads `array - 0x14` and walks off the front. That is not garbage, because
+`alloc_mem` is a bump allocator and the point array is handed out immediately
+after the last 0x58 material record: the twenty bytes are that record's tail,
+its rotate-z word at +0x44 read as a float and its scale triple at +0x48/4c/50.
+A default record contributes `prev = (0, 1, 1)` with a radius of **1** — small,
+structured, and nothing like zero. Assuming zeros gets every node with four or
+more control points wrong in the second decimal, which is exactly the size of
+error that a tolerance would wave through.
+
+The closed case has a second one. Its fixup for point 1 is
+`add r25, r24, r25` — `(count-1) * 0x14` added to the CURRENT point rather than
+to the base — landing one record PAST the end of the array, which is where the
+circle table gets allocated a moment later. So `prev` becomes `(0, 1, 0)` with
+radius `circle[1].x`.
+
+Both are reproducible in a port because the allocation order is deterministic,
+and both were found by solving for the value that would make the arithmetic come
+out right and then asking what lives at that address.
+
+**One clamp is closed-only.** When `next2` runs past the end it is clamped to
+the last point; the further "and if that collided with `next`, step on one" is
+inside the `beq cr2` for the closed path and does not apply to an open tube.
+
 With this the **five dispatch tables are all read**: texture, scene, geometry
 build, geometry evaluate, render.
 

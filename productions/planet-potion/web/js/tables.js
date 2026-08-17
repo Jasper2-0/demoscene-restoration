@@ -73,6 +73,14 @@ export const mexp = () => ramp(0, E3_F32, 15000, Math.exp);
  * table index derived from a phase ramp, is not a rare input.
  */
 export function fctiw(x) {
+  // A NaN CONVERTS TO 0x80000000, NOT TO THE POSITIVE MAXIMUM. The architecture
+  // gives 0x7FFFFFFF only for a value too large to represent; NaN and too-small
+  // both give 0x80000000. This looked academic until op4's tube generator asked
+  // for atan(0, 0): the divide makes a NaN, the index comes out as 0x80000000,
+  // and `slwi r3, r3, 2` then turns it into exactly zero, so the original reads
+  // entry 0 of the arctangent table and carries on. Returning the positive
+  // maximum instead sends the same lookup off the end of the table.
+  if (Number.isNaN(x)) return -2147483648;
   if (!(x > -2147483649 && x < 2147483648)) return x < 0 ? -2147483648 : 2147483647;
   const f = Math.floor(x), d = x - f;
   if (d < 0.5) return f;
