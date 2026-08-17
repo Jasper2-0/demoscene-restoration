@@ -158,6 +158,40 @@ for (const s of arena.scenes) {
 ok('source positions are populated', moved === positions,
   `${moved}/${positions}`);
 
+// --- the two fields the harness used to destroy ------------------------------
+//
+// runscene.py blanketed the Warp3D vector table with one self-similar pointer
+// and returned one fake object from every allocation, so every mesh face
+// carried the same draw vector and the same texture. Both are now distinct
+// stubs, and both of these assertions fail the moment that regresses — which
+// matters because the failure is silent: the export still writes 5 MB and every
+// other check here still passes.
+
+const meshFaces = allNodes.filter((n) => n.type === 5)
+  .flatMap((n) => n.objects.flatMap((o) => o.faces));
+const prims = new Set(meshFaces.map((f) => f.prim));
+const fans = meshFaces.filter((f) => f.prim === 'trifan').length;
+const strips = meshFaces.filter((f) => f.prim === 'linestrip').length;
+ok('every mesh face names a primitive',
+  prims.size === 2 && !prims.has(undefined) && !prims.has(null),
+  `${fans} trifan, ${strips} linestrip of ${meshFaces.length}`);
+// A single value here is the exact signature of the stubs collapsing back to
+// one pointer, which is why it is its own assertion rather than folded above.
+ok('and both primitives actually occur', fans > 0 && strips > 0,
+  `${prims.size} distinct`);
+
+const texIdx = new Set(meshFaces.map((f) => f.textureIndex).filter((v) => v !== null));
+ok('mesh faces reference more than one texture object', texIdx.size > 1,
+  `${texIdx.size} distinct AllocTexObj ordinals, max ${Math.max(...texIdx)}`);
+
+// The same offsets on other node types are not a draw vector — they hold
+// floats — so decoding must not have invented primitives there.
+const nonMesh = allNodes.filter((n) => n.type !== 5)
+  .flatMap((n) => n.objects.flatMap((o) => o.faces));
+ok('non-mesh records are not decoded as primitives',
+  nonMesh.every((f) => f.prim === null || f.prim === undefined),
+  `${nonMesh.length} records on types other than 5`);
+
 console.log(`\n${allNodes.length} nodes, ${allFaces.length} faces, ` +
   `${positions} vertices across ${arena.scenes.length} scenes`);
 if (bad) {

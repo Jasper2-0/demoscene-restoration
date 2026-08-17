@@ -11,6 +11,12 @@ FLAT=H.FLAT=(sys.argv[1] if len(sys.argv)>1 else 'flat')
 BASE=0x10000000; R2=BASE+0x7FFE
 SET_ALLOC=0x10006b14; GEN_OBJ=0x10003018
 ARENA=0x20340000; TABLE=0x20380000; OUT=0x203c0000
+# NOTE: this stub points every vector at ONE address, which is fine here —
+# rungeo dumps the geometry node list and never looks at a face record. It is
+# not fine for anything that does: the geometry builder bakes the DrawTriFan or
+# DrawLineStrip pointer into each face as a fan/strip discriminator, and one
+# shared vector erases it. runscene.py hands out a distinct stub per vector for
+# exactly that reason; copy that if this tool ever grows a face walk.
 W3DBASE=0x20500000; BLR=0x20400000
 def stw(s,a,d): return (36<<26)|(s<<21)|(a<<16)|(d&0xFFFF)
 def blr(): return (19<<26)|(20<<21)|(16<<1)

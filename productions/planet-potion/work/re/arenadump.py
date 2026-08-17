@@ -48,7 +48,7 @@ STRUCTURES, read out of the handlers rather than assumed:
       +0x10 next node                 +0x30/34/38 r, g, b
       +0x14/18/1c cx, cy, scale       +0x50 face intensity
       +0x20 sub-object count          +0x54 texture
-      +0x24 mesh object head          +0x58 (read, unnamed)
+      +0x24 mesh object head          +0x58 draw vector: fan or strip
       +0x28 point-sprite head         +0x5c next FACE
       +0x74 sub-object chain          +0x60 next OBJECT
 
@@ -56,6 +56,14 @@ THE OBJECT IS ITS OWN FIRST FACE. `0x100061c4` is `mr r17, r16` — the face
 cursor starts at the object address rather than at a pointer inside it — so a
 walk that expects a separate face-list pointer finds nothing. Objects advance on
 `+0x60`, faces on `+0x5c`, and the first face of each object is the object.
+
+THE DRAW VECTOR AND THE TEXTURE ARE ONLY LEGIBLE BECAUSE THE HARNESS WAS
+CHANGED. `runscene.py` used to blanket the whole Warp3D vector table with one
+self-similar pointer and return one fake object from every `W3D_AllocTexObj`,
+so all 7,867 mesh faces carried an identical `+0x58` and an identical `+0x54`.
+It now writes a distinct stub per vector and a counting allocator, which turns
+those two fields back into the fan/strip discriminator and the texture ordinal
+they are. See the comment at the top of `runscene.py`.
 
 `node+0x28` is a SECOND chain and not part of that one: point sprites, walked on
 `+0x10`, each with a vertex pointer at `+0x00` and a half-extent at `+0x04`. The
@@ -119,6 +127,30 @@ class Arena:
 
     def raw(self, a, n):
         return self.d[a - self.base:a - self.base + n].hex()
+
+
+# The two vectors the geometry builder bakes into a face record, resolved
+# through runscene's per-vector stubs. Before those existed every face carried
+# the same pointer and this distinction did not survive the export at all.
+PRIMS = {
+    runscene.stub_addr(runscene.FAN_LVO // 6 - 1): 'trifan',
+    runscene.stub_addr(runscene.STRIP_LVO // 6 - 1): 'linestrip',
+}
+
+
+def primitive(v):
+    """'trifan' or 'linestrip' for a mesh face; None where the field is not a
+    draw vector at all, which is every node type except 5."""
+    return PRIMS.get(v)
+
+
+def texture_index(v):
+    """The AllocTexObj call ordinal, which is how drawlog.py keys the recorded
+    draw stream's texture field — so the two exports can be joined on it."""
+    if v < runscene.FAKEOBJ:
+        return None
+    d = v - runscene.FAKEOBJ
+    return d // runscene.TEXSTRIDE if d % runscene.TEXSTRIDE == 0 else None
 
 
 def _fin(v):
@@ -231,7 +263,9 @@ def read_faces(A, obj, verts):
             'rgb': [_fin(x) for x in A.vec3(addr, 0x30)],
             'intensity': _fin(A.f32(addr, 0x50)),
             'texture': A.u32(addr, 0x54),
-            'at58': A.u32(addr, 0x58),
+            'textureIndex': texture_index(A.u32(addr, 0x54)),
+            'drawVector': A.u32(addr, 0x58),
+            'prim': primitive(A.u32(addr, 0x58)),
         })
         addr = A.u32(addr, 0x5c)
     return out
