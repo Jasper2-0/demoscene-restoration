@@ -2198,6 +2198,53 @@ The general lesson went to `METHOD.md`: count the population before naming a
 field, and prefer perturbing the running program to reading it once reading has
 produced two answers that disagree.
 
+## The capture, aligned — and two things that fell out of aligning it
+
+`alignmentOffsetMs` was null until `capalign.mjs` measured it. It is **120 ms**:
+our clock runs that far ahead of the capture, in lost-vegas's sign convention
+(ours minus the reference), because the recording begins a tenth of a second
+into the music rather than before it.
+
+The measurement is strong. All 27 of part one's 20-second windows lock, scoring
+r 0.53 to 0.96, and — the part that matters — **they agree with each other to a
+millisecond**: every window from t=10 s to t=230 s reports a lag between −0.117
+and −0.123 s. Drift over the whole part fits at 0 ppm. That is not a fitted
+number; it is the same number measured 27 times.
+
+Two facts came out of it that we had no other instrument for.
+
+**The parts do not run back to back.** Part one ends at 289.166 s of the capture
+and part three begins at 291.017 s, so the intro is **silent for 1,852 ms**
+between them. Nothing in the module data or the show timeline says this — both
+describe one part at a time — and a self-contained playback that starts part
+three when part one's last row finishes will be nearly two seconds early for the
+whole second half.
+
+**Part three's tempo is wrong by 2,640 ppm, and part one's is not.** Part
+three's windows also agree with each other, but along a ramp rather than a
+line: the lag grows monotonically from 291.005 s to 291.303 s across 14
+windows, which is 413 ms accumulated end to end — we play it 0.26% fast. Part
+one, measured the same way, drifts by nothing at all.
+
+Both sides are digital, so this is not the recording: it is our tick duration,
+and it is per-module, which points at BPM rather than at anything structural.
+Note what did **not** catch it. `dbmtime.mjs` checks our sequencer against
+`showorder.py`'s timeline and both agree on 156.563 s — but they are two
+implementations of the same arithmetic, which is exactly how the `0xEE` pattern
+delay stayed missing from both while the check stayed green. `dbmdiff.mjs`
+cannot see it either: libdigibooster3 computes tick duration the same way we do,
+so the oracle drifts along with us. **The capture is the first reference in this
+project with an independent clock**, and the first thing it did was find a
+defect two green checks were blind to.
+
+Left open deliberately. 413 ms over part three does not affect the audio's
+correctness — the notes are right and in the right order — but it does affect
+anything that maps our clock onto the capture's, which is every per-scene visual
+comparison in the second half. So `capalign.mjs` reports the slope rather than
+folding it into the offset, and prints the point lost-vegas's notes make: once
+the offset is not constant, a single constant is the wrong *model*, not merely
+the wrong value.
+
 ## Tools here
 
 | file | what |
@@ -2235,6 +2282,7 @@ produced two answers that disagree.
 | `oracle.sh` | fetches libdigibooster3 from Software Heritage (upstream is gone) and builds it |
 | `dbmdiff.mjs` | our replayer against that reference, as an envelope correlation per ten seconds |
 | `periodcheck.mjs` | the pitch table and note decode, against the dbplayer.library embedded as seg1 |
+| `capalign.mjs` | where our soundtrack sits inside the reference capture — windowed envelope correlation, Theil-Sen fit, `--record` writes `alignmentOffsetMs`. The one instrument here with a clock independent of ours |
 | `lvocheck.py` | the same reading, as a check that can fail: 88 vectors, and the four tag-taking functions on indices 4, 15, 69, 80 |
 | `export.py` | runs all of the above and writes the whole dataset |
 | `PORT_SPEC.md` | the current answer, organised for someone implementing it |

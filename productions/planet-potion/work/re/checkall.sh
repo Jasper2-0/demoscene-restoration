@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Nineteen checks accumulated over the work and there is no point in
-# remembering nineteen invocations. Each passes or names what drifted; none of them
+# Twenty checks accumulated over the work and there is no point in
+# remembering twenty invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -130,6 +130,13 @@ if [ -n "$MODS" ]; then
     node "$HERE/dbmdiff.mjs" "$MODS/part1_full.dbm" --min 0.96 --min-wave 0.90
   run "dbmdiff p3 — as played" \
     node "$HERE/dbmdiff.mjs" "$MODS/part3.dbm" --min 0.96 --min-wave 0.89
+  # The only check here with a clock that is not ours. dbmtime and dbmdiff both
+  # compare against implementations of the same tick arithmetic, so neither can
+  # see a tempo error; this one measured part three at 2,640 ppm fast. Needs the
+  # capture, which is gitignored — 77 = skip without it.
+  run "capalign — our soundtrack against the reference capture's own clock" \
+    node "$HERE/capalign.mjs" "$HERE/../reference/planet-potion_ref.mkv" \
+    "$MODS/part1_full.dbm" "$MODS/part3.dbm"
 elif [ -f "$DATA/audio.json" ]; then
   # No modules, but audio.json alone is worth checking: its chunk table has to
   # account for the size the generator declared, and that is what catches a
