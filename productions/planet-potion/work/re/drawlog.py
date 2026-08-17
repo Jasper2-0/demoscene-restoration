@@ -252,7 +252,7 @@ def run(stream, frames=(0,), txt_tab=0x2642, obj_tab=0x2706, timeout=240, stop=9
     open('/tmp/pp-draw.elf', 'wb').write(eh + phs + blob)
     os.chmod('/tmp/pp-draw.elf', 0o755)
     try:
-        p = subprocess.run([H.QEMU, '/tmp/pp-draw.elf'], capture_output=True, timeout=timeout)
+        p = subprocess.run([H.qemu(), '/tmp/pp-draw.elf'], capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return None, 'timeout'
     return p.stdout, p.stderr.decode('utf8', 'replace')

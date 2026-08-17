@@ -73,7 +73,7 @@ def run(flat, payload, dumps, timeout=90):
     open('/tmp/pp-texconv.elf', 'wb').write(eh + phs + blob)
     os.chmod('/tmp/pp-texconv.elf', 0o755)
     try:
-        out = subprocess.run([H.QEMU, '/tmp/pp-texconv.elf'],
+        out = subprocess.run([H.qemu(), '/tmp/pp-texconv.elf'],
                              capture_output=True, timeout=timeout).stdout
     except subprocess.TimeoutExpired:
         return None

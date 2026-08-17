@@ -30,7 +30,7 @@ def render(payload,timeout=15):
     phs=b''.join(struct.pack('>IIIIIIII',1,off,va,va,f,m,fl,AL) for va,f,m,off,fl in loads)
     open('/tmp/pp-t2.elf','wb').write(eh+phs+blob); os.chmod('/tmp/pp-t2.elf',0o755)
     try:
-        p=subprocess.run(['/usr/bin/qemu-ppc-static','/tmp/pp-t2.elf'],capture_output=True,timeout=timeout)
+        p=subprocess.run([H.qemu(),'/tmp/pp-t2.elf'],capture_output=True,timeout=timeout)
         return p.stdout
     except subprocess.TimeoutExpired: return b''
 def stats(img):

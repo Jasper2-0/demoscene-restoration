@@ -78,7 +78,7 @@ def run(stream, txt_tab=0x2642, obj_tab=0x2706, dump=0x20000, steps=99, want_all
     phs=b''.join(struct.pack('>IIIIIIII',1,off,va,va,f,m,fl,AL) for va,f,m,off,fl in loads)
     open('/tmp/pp-scene.elf','wb').write(eh+phs+blob); os.chmod('/tmp/pp-scene.elf',0o755)
     try:
-        p=subprocess.run(['/usr/bin/qemu-ppc-static','/tmp/pp-scene.elf'],capture_output=True,timeout=120)
+        p=subprocess.run([H.qemu(),'/tmp/pp-scene.elf'],capture_output=True,timeout=120)
         return p.stdout,p.stderr.decode('utf8','replace')
     except subprocess.TimeoutExpired:
         return b'',''

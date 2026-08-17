@@ -43,7 +43,7 @@ def run(prog):
     eh=(b'\x7fELF'+bytes([1,2,1,0])+b'\0'*8+struct.pack('>HHIIIIIHHHHHH',2,20,1,H.SCRATCH,EH,0,0,EH,PH,len(pieces),0,0,0))
     phs=b''.join(struct.pack('>IIIIIIII',1,off,va,va,f,m,fl,AL) for va,f,m,off,fl in loads)
     open('/tmp/pp-obj.elf','wb').write(eh+phs+blob); os.chmod('/tmp/pp-obj.elf',0o755)
-    p=subprocess.run(['/usr/bin/qemu-ppc-static','/tmp/pp-obj.elf'],capture_output=True,timeout=90)
+    p=subprocess.run([H.qemu(),'/tmp/pp-obj.elf'],capture_output=True,timeout=90)
     return p.stdout,p.stderr.decode('utf8','replace')
 if __name__=='__main__':
     d0=open(os.path.join(FLAT,'seg0_CODE_10000000.bin'),'rb').read()

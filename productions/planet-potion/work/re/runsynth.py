@@ -49,7 +49,7 @@ def run(target, dump_addr, dump_len, timeout=300):
     phs=b''.join(struct.pack('>IIIIIIII',1,off,va,va,f,m,fl,AL) for va,f,m,off,fl in loads)
     open('/tmp/pp-synth.elf','wb').write(eh+phs+blob); os.chmod('/tmp/pp-synth.elf',0o755)
     try:
-        p=subprocess.run(['/usr/bin/qemu-ppc-static','/tmp/pp-synth.elf'],capture_output=True,timeout=timeout)
+        p=subprocess.run([H.qemu(),'/tmp/pp-synth.elf'],capture_output=True,timeout=timeout)
         return p.stdout,p.stderr.decode('utf8','replace')
     except subprocess.TimeoutExpired:
         return b'','TIMEOUT'

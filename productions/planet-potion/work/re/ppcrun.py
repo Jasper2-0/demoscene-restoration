@@ -209,11 +209,39 @@ def build(flat, target, regs, out_addr, out_len, path):
     os.chmod(path, 0o755)
 
 
+def qemu():
+    """The emulator's path, checked — call this instead of naming QEMU.
+
+    Eight places in this directory spawn the emulator: this file, drawlog and
+    texconv through the QEMU constant, and rungeo, runscene, runsynth, texops
+    and texops2 writing '/usr/bin/qemu-ppc-static' out as a literal. So the
+    constant was a single definition that five of its eight users ignored, and
+    a check placed beside any one call guarded one eighth of the tools. Handing
+    back the path only after the check makes the guard unavoidable: a tool
+    cannot obtain the string without passing through here.
+
+    Unguarded, the failure is a FileNotFoundError from subprocess that names
+    the path but not the reason. The reason is that user-mode emulation is
+    Linux-only, so it is missing on every macOS host — which is where most of
+    this project is edited. Exit 77 is speccheck.py's ABSENT code, reported by
+    checkall.sh as SKIP rather than counted as a failure, exactly as a missing
+    flat/ already is: a suite that cannot run has not found anything.
+    """
+    if os.path.exists(QEMU):
+        return QEMU
+    why = ('macOS cannot provide it' if sys.platform == 'darwin'
+           else 'install qemu-user-static')
+    print(f'ppcrun: {QEMU} not found — {why}.\n'
+          f'ppcrun: run the tool through the container instead:\n'
+          f'ppcrun:     ./ppcbox.sh python3 <tool> <args>', file=sys.stderr)
+    sys.exit(77)
+
+
 def run(flat, target, regs, out_addr=DEST, out_len=128 * 128 * 4,
         tmp='/tmp/pp-harness.elf', timeout=120):
     """Call `target` with `regs` preloaded; return (stdout bytes, stderr text)."""
     build(flat, target, regs, out_addr, out_len, tmp)
-    p = subprocess.run([QEMU, tmp], capture_output=True, timeout=timeout)
+    p = subprocess.run([qemu(), tmp], capture_output=True, timeout=timeout)
     return p.stdout, p.stderr.decode('utf8', 'replace')
 
 

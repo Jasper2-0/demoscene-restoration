@@ -32,7 +32,7 @@ def render(payload):
     phs=b''.join(struct.pack('>IIIIIIII',1,off,va,va,f,m,fl,AL) for va,f,m,off,fl in loads)
     open('/tmp/pp-tex.elf','wb').write(eh+phs+blob); os.chmod('/tmp/pp-tex.elf',0o755)
     try:
-        p=subprocess.run(['/usr/bin/qemu-ppc-static','/tmp/pp-tex.elf'],capture_output=True,timeout=12)
+        p=subprocess.run([H.qemu(),'/tmp/pp-tex.elf'],capture_output=True,timeout=12)
         return p.stdout
     except subprocess.TimeoutExpired:
         return b''
