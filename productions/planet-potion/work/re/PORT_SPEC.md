@@ -1190,6 +1190,16 @@ per-channel**, appearing in ops 2, 3, 5 and 9 — twice over in 5 and 9.
 
 ## 8. Audio
 
+**PORTED, AND BYTE-EXACT.** `web/js/synth.js` implements all 32 primitives and
+`generateModule()` builds both modules in the browser; `work/re/synthdiff.mjs`
+checks each of the 94 samples against its own slice of the reference and both
+whole-module digests against `audio.json`. The page carries seg0 and seg4 —
+99 KB — instead of 8.3 MB of exported .dbm.
+
+Several claims below were written before the port and are wrong. They are
+corrected in place and the correction is marked, because each one was a
+plausible reading that cost time.
+
 Two DigiBooster Pro 2 modules, **generated, not shipped**: about 37 KB of seed
 data in seg 4 expands to 8.3 MB, so a web port has to run the generators. The
 buffer layout is `[u32 size][DBM0 module]` — `DBM0` is at offset 0 *of the
@@ -1224,7 +1234,7 @@ the work is entirely in the primitives.
 | union | 96 | **32 distinct**, only 5 shared |
 
 Spanning `0x10006ef0`–`0x10009a8c`. Larger than the renderer and animation
-together, and **the biggest unread subsystem in the intro**.
+together, and it was the biggest unread subsystem in the intro. It is read.
 
 `synthscript.py` extracts both scripts with each call's register setup, which is
 recoverable without understanding a single primitive. Four things it shows:
@@ -1257,7 +1267,7 @@ other 29 tractable:
 | routine | |
 |---|---|
 | `0x10006ef0(size, blob, dest)` | writes the u32 size prefix, then copies a literal header blob — the static `DBM0`/`NAME`/`INFO`/`SONG` bytes. Sets `r31`, the **module write cursor held across the entire script** |
-| `0x1000a23c(r19 = frames)` | starts a sample: writes `flags = 1` and the frame count, advances 8, zeroes the frame counter and four oscillator accumulators |
+| `0x1000a23c(r19 = frames)` | starts a sample: writes `flags = 1` and the frame count, advances 8, zeroes the frame counter and **every float register from f28 down to f5** — not four. That bound is load-bearing: f4 and below survive between samples, and four primitives read f4 at entry |
 | `0x1000a114()` | emits one frame: `float2int(f29)`, **clamp to [−128, 127]**, store one byte, advance, bump the frame and period counters |
 
 | register | role |
@@ -1385,10 +1395,16 @@ and `r19` and branch into the *next* routine's body. `0x10008adc` enters
 `0x10009aa4` with a step of 6,300. `synthlen.py` follows the branch, so they are
 no longer special cases.
 
-### 8f. The three table accessors
+### 8f. The table accessors — FOUR, not three
 
-Every voice reaches the lookup tables through exactly three routines, and each is
-four instructions:
+Every voice reaches the lookup tables through four routines, each four
+instructions. `0x1000a168` is sine WITHOUT the quarter-turn bias and is a
+separate entry point from the cosine below, so a port with only "cos" is missing
+a function the voices call. All four index through `fctiw`, which rounds to
+NEAREST — there is no `mtfs` anywhere in seg0, so FPSCR is the power-on default,
+and `fctiwz` appears zero times.
+
+| `0x1000a168` | **sine** | `idx = (int(x·k)·4) & 0x7ffc`, into `r30` |
 
 | | | |
 |---|---|---|
@@ -1407,8 +1423,10 @@ different quantisation, not a different spelling — see §0.
 
 ### 8g. `0x10009020` and `0x10009258` — the percussion pair
 
-Both hardcode their tables rather than taking them from the script, and both
-share one body: `f10` advances linearly while `f9` (rate) and `f5` (amplitude)
+`0x10009258` hardcodes its tables. **`0x10009020` DOES NOT** — it hardcodes one
+of four and takes the other three from the script, which is what §8b says two
+pages earlier and what lets eight calls cover eight instruments. Nor do they
+share a body; they are two routines of the same shape. Both: `f10` advances linearly while `f9` (rate) and `f5` (amplitude)
 are multiplied by constants **every frame**, so the cosine argument sweeps
 downward under an exponential decay. That is a drum.
 
@@ -1426,9 +1444,19 @@ glide or jump — on their own coefficients (`r2+0x2ac2` and `r2+0x2abe`).
 
 ### 8h. `0x1000742c` — part three's voice, read
 
-18 of part three's 39 calls, sixteen of them consecutive with no setup. Per call
-it reads **ten consecutive `u16`** from the tape at `r25+0x00…0x12` and runs each
-through a one-pole smoother toward that target:
+18 of part three's 39 calls. They look bare, and they are not: **each is preceded
+by its own `lwz r25, 0x372a+4k(r2)`**, a table of eighteen tape pointers.
+`synthscript.py` does not record `lwz`, which is what made them look like they
+inherited a cursor. The cursor advances within a call, across that call's
+blocks, and is reloaded for the next.
+
+The script contains one other instruction that extractor misses, and it matters:
+`fmr f0, f30` at `0x10006d10`, which is how the third `0x10008c9c` call gets its
+float argument. Run an instruction census over a script before trusting anything
+that walks it.
+
+Per call it reads **ten consecutive `u16`** from the tape at `r25+0x00…0x12` and
+runs each through a one-pole smoother toward that target:
 
 ```c
   state = state + (target - state) * k;   /* k = r2+0x2ad2 for the first nine */
@@ -1445,11 +1473,28 @@ Then four phase accumulators are advanced by
 ```
 
 with distinct `K` per oscillator at `r2+0x2ab6`, `0x2aba`, `0x2aca` and one more.
+**`trunc` is wrong there**: the instruction pair is `float2int` then `int2float`,
+and `float2int` is `fctiw`, which rounds to nearest. The two agree only while the
+phase stays in [0,1), and it does not.
 So this is a four-oscillator voice under ten smoothed controls, and the reason
 sixteen consecutive calls need no arguments is that `r25` is a **tape cursor the
 routine advances itself**.
 
-### 8i. The container
+### 8i. The container — NOT ASSEMBLED, COPIED
+
+Everything before the first sample — `DBM0`, `NAME`, `INFO`, `SONG`, `INST`,
+`VENV`, `DSPE`, `PATT` and the `SMPL` chunk header — is **one contiguous literal
+in seg4**, and it is not even found by a hardcoded offset: `r2` holds a pointer
+to a self-describing `[u32 length][bytes…]` descriptor per part
+(`r2+0x2f06` and `r2+0x2f02`), and `0x10006ef0` copies what it finds. 17,882
+bytes for part one, 12,656 for part three, both verified by `synthref.py` on
+every run.
+
+So there is no container to build, and the whole of the generation problem is
+PCM. That also settles the call arithmetic: part one's script is 57 calls of
+which the first is the blob copy, leaving 56 for 56 samples.
+
+The description below is of the bytes in that blob, which a READER still needs.
 
 Chunk order is `NAME, INFO, SONG, INST, VENV, DSPE, PATT, SMPL` — legal but not
 the traditional save order, so **key off chunk IDs, never position**. Version

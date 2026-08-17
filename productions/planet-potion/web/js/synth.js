@@ -39,7 +39,7 @@
 //     frames goes through it, so it is not a detail.
 //   * `fctiw` rounds to nearest, ties to even — tables.js. Not `Math.trunc`.
 import { f32, fma } from './fp.js';
-import { fctiw, sinLookup, cosLookup, powLookup, expLookup } from './tables.js';
+import { fctiw, sinLookup, cosLookup, powLookup, expLookup, buildAll } from './tables.js';
 
 const SEG0 = 0x10000000;
 const SEG4 = 0x10040000;
@@ -2421,3 +2421,31 @@ export const PRIMITIVES = {
   0x10009510: gen_10009510,
   0x1000742c: gen_1000742c,
 };
+
+/**
+ * Build one part's DigiBooster module from the binary — the whole point.
+ *
+ * Returns the module itself, without the u32 size prefix the original writes
+ * ahead of it, so the result goes straight into `parseDBM`.
+ *
+ * The page needs only seg0 and seg4 to call this: 99 KB of segments in place of
+ * 8.3 MB of exported audio, and the modules that come out are byte-identical to
+ * the ones the original builds — both digests checked by work/re/synthdiff.mjs.
+ */
+export function generateModule(seg0, seg4, part, tables = buildAll()) {
+  const spec = SCRIPTS[part];
+  if (!spec) throw new Error(`synth: no script for ${part}`);
+  const script = decodeScript(seg0, spec.lo, spec.hi);
+  if (script[0].call !== HEADER_ROUTINE) {
+    throw new Error(`synth: ${part} does not open with the blob copier`);
+  }
+  const c = new SynthContext(seg0, seg4, tables);
+  c.header(script[0].setup.r3, spec.descriptor);
+  for (const call of script.slice(1)) {
+    c.applySetup(call.setup);
+    const impl = PRIMITIVES[call.call];
+    if (!impl) throw new Error(`synth: no primitive for ${call.call.toString(16)}`);
+    impl(c);
+  }
+  return c.out.subarray(4);
+}

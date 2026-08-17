@@ -2198,6 +2198,83 @@ The general lesson went to `METHOD.md`: count the population before naming a
 field, and prefer perturbing the running program to reading it once reading has
 produced two answers that disagree.
 
+## The softsynth, ported — four ways it passes state where a call graph shows none
+
+All 32 primitives are in `web/js/synth.js` and both modules come out
+byte-identical. What made it hard was never the arithmetic; every routine is
+thirty to a hundred instructions of "compute f29, emit". It was that the
+routines are coupled through four channels, none of which appear in a call
+graph, and each one was found by a sample that was right for a while and then
+wrong.
+
+**1. seg0's small-data area.** The reverb keeps four cursors, four lengths, four
+feedback coefficients and two allpass states at `r2+0x2e72…0x2efe`, so seg0 is
+working memory rather than a constant. A port that maps it read-only appears to
+work until the second call.
+
+**2. The general registers.** `r8`, `r10`, `r19` and the parameter-block
+pointers are set once by the script and inherited by later calls; the script's
+authors knew, and re-set `r8` after every call that could clobber it.
+
+**3. The float registers.** `0x1000a23c` clears f28 down to f5, so **f0–f4
+survive between samples** — and f4 is both a scratch temp in half the primitives
+and a live input to four of them. `0x10007ddc` leaves its LFO phase in f4 for
+`0x10007c44` to pick up, so those two samples are joined through a register
+rather than through data. Separately, `0x10008c9c` takes a float ARGUMENT in f0.
+
+**4. The reverb's own working registers.** `0x1000a024` uses f0–f5 and exits
+with f5 holding the allpass coefficient and f4 the dry term. `0x10009aa4` keeps
+two oscillator phases in exactly those registers and calls the reverb every
+frame, so the phases are replaced rather than advanced — its second oscillator
+is `sin(0.7071)` forever. That is not a guess: `0x10006fc0` wraps its own reverb
+call in `stfdu f5, -8(r13)` / `lfd f5, 0(r13)`, so the author knew f5 does not
+survive and saved it there and not in the other.
+
+### What the disassembly said that the spec did not
+
+Four corrections went back into PORT_SPEC §8, and all four were plausible
+readings rather than carelessness:
+
+* the container is **copied, not assembled** — one contiguous literal in seg4,
+  located through a self-describing descriptor;
+* there are **four** table accessors, not three;
+* `0x10009020` takes three of its four tables from the script;
+* `0x1000742c`'s sixteen "bare" calls each carry their own
+  `lwz r25, 0x372a+4k(r2)`.
+
+The last one generalises. `synthscript.py` records `addi`, `li`, `lis`/`ori` and
+`lfs`, and the two scripts also contain one `mr`, one `fmr` and 28 `lwz`. The
+`fmr f0, f30` at `0x10006d10` is how the third `0x10008c9c` call gets its
+argument, and missing it made that sample right for 266 frames and then wrong.
+**Take an instruction census of a region before trusting an extractor over it**
+— it is one `awk` over the disassembly and it would have saved two of these.
+
+### Bugs in the original that the reference bytes contain
+
+Reproduced, not corrected, because the modules are the specification:
+
+* `0x10009aa4` advances `f5` where it means `f4`, so its third oscillator never
+  moves; hand-decoded from the instruction word after suspecting capstone.
+* `fmr f1, f31` in the same routine zeroes the ladder's input coefficient two
+  instructions after choosing it, so the `exp()` feeding it is computed and
+  discarded every frame.
+* `lfd` across two adjacent float32 constants, in `0x10009aa4` once and
+  `0x100070b0` twice — the divisors come out around 1e24 and annihilate the
+  corrections they scale.
+* `0x1000742c` advances the module cursor two bytes past what it emitted, so
+  each of its eighteen samples ends with two bytes the synth never wrote.
+
+### The shape of a wrong answer
+
+Worth keeping, because the failures were legible in a way that made them
+findable. A sample that is byte-exact for thousands of frames and then diverges
+is an **accumulation** — a float that should have gone through a truncating
+`stfs` and did not. One that is off by exactly one LSB about half the time is a
+**constant offset** — an uninitialised state that should have arrived from the
+previous sample. One that is wrong from frame 0 is a **formula**. One that
+tracks for a hundred frames and then grows an oscillation the reference does not
+have is a **register being clobbered by something you are not modelling**.
+
 ## The capture, aligned — and two things that fell out of aligning it
 
 `alignmentOffsetMs` was null until `capalign.mjs` measured it. It is **120 ms**:
@@ -2260,6 +2337,8 @@ the wrong value.
 | `runscene.py` | runs the scene interpreter; dumps the typed draw-node graph |
 | `drawlog.py` | runs `_show_scene` with recording vector stubs; dumps the draw stream and, with `nodes=True`, the per-frame scene graph |
 | `runsynth.py` | runs the softsynth; returns the generated DBM0 module |
+| `synthref.py` | slices both reference modules into one byte-exact target per call, and re-derives the positional rule and the literal header blob on every run |
+| `synthdiff.mjs` | the ported softsynth, primitive by primitive: unported routines are filled from the reference so each ported one runs in its true context, and the module always assembles for the digest check |
 | — | `export.py` also writes `tex_programs.json`: the 69 texture programs as bytecode, 3,407 payload bytes. Adding the 69 two-byte length prefixes gives 3,545, which is exactly the 2,780 + 765 in the program table above — the table counts the prefix, this export does not |
 | `docpatch.py` | replace text in a doc and **fail** if the anchor is missing or ambiguous — five PORT_SPEC edits silently did nothing before this existed |
 | `fpcheck.mjs` | the two PowerPC float semantics (`fp.js`) against references computed a different way — `fma` vs exact BigInt arithmetic, truncating `stfs` vs a `Math.fround`-derived characterisation. Needs no dataset and no binary |

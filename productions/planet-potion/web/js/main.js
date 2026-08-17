@@ -27,6 +27,7 @@ import { Warp3D, SCREEN_W, SCREEN_H } from './warp3d.js';
 import { buildTextures } from './textures.js';
 import { parseDBM } from './dbm.js';
 import { render } from './dbmplayer.js';
+import { generateModule } from './synth.js';
 
 const canvas = document.getElementById('screen');
 const statusEl = document.getElementById('status');
@@ -40,6 +41,25 @@ async function loadJSON(path) {
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
   return r.json();
 }
+
+async function loadBytes(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return new Uint8Array(await r.arrayBuffer());
+}
+
+/**
+ * seg0 and seg4, fetched once and kept: the softsynth's entire input.
+ *
+ * 99 KB, in place of the 8.3 MB of .dbm this page used to download. seg0 holds
+ * the two generator scripts, the float pool and the 42 parameter blocks; seg4
+ * holds the module header blobs and the tapes.
+ */
+let segments = null;
+const loadSegments = async () => (segments ??= {
+  seg0: await loadBytes('./data/seg0.bin'),
+  seg4: await loadBytes('./data/seg4.bin'),
+});
 
 /**
  * Textures are GENERATED, not loaded: the VM in texturevm.js runs the intro's
@@ -111,12 +131,14 @@ async function main() {
 
   // --- the show, driven by the audio clock ---------------------------------
   //
-  // The two modules are the softsynth's own output, exported by work/re/
-  // synthdump.py rather than generated here: §8b–8h of PORT_SPEC is the port
-  // of the 32 generator primitives, and it is not written yet.
+  // THE MODULES ARE GENERATED HERE. synth.js runs all 32 of the softsynth's
+  // primitives over the intro's own seed data and builds both DigiBooster
+  // modules at load time — 8.3 MB of samples out of 99 KB of segments, and
+  // byte-identical to what the original produces: work/re/synthdiff.mjs checks
+  // all 94 samples individually and both module digests against audio.json.
   const SHOW = [
-    { part: 'p1', file: './data/part1_full.dbm', label: 'part one' },
-    { part: 'p3', file: './data/part3.dbm', label: 'part three' },
+    { part: 'p1', label: 'part one' },
+    { part: 'p3', label: 'part three' },
   ];
   const TICKS_PER_SECOND = 50;
 
@@ -150,15 +172,14 @@ async function main() {
     return null;
   };
 
-  /** Fetch, sequence and mix one part, then show it against its own clock. */
+  /** Generate, sequence and mix one part, then show it against its own clock. */
   async function playPart(ctx, spec) {
-    say(`${spec.label}: reading the module …`);
-    const res = await fetch(spec.file);
-    if (!res.ok) {
-      throw new Error(`${spec.file}: ${res.status} — run work/re/synthdump.py `
-        + 'and copy mods/ into web/data/');
-    }
-    const mod = parseDBM(new Uint8Array(await res.arrayBuffer()));
+    say(`${spec.label}: running the softsynth …`);
+    const { seg0, seg4 } = await loadSegments();
+    // Yield so the line above paints: generating part one is about 1.6 seconds
+    // of straight-line arithmetic and it blocks the thread.
+    await new Promise((r) => setTimeout(r, 0));
+    const mod = parseDBM(generateModule(seg0, seg4, spec.part));
     say(`${spec.label}: mixing ${mod.info?.channels ?? '?'} channels …`);
     // render() is synchronous and takes about a second for part one, so yield
     // once and let the line above actually paint before the thread blocks.

@@ -336,6 +336,30 @@ def export_draws(flat, d0, r2, out, mods=()):
     return len(res), fails
 
 
+def export_segments(flat, out):
+    """Copy seg0 and seg4 out verbatim — the softsynth's whole input.
+
+    web/js/synth.js generates both DigiBooster modules at load time from these
+    two segments and nothing else: seg0 holds the generator scripts, the float
+    pool and the 42 parameter blocks, seg4 the header blobs and the tapes. That
+    is 99 KB in place of the 8.3 MB of .dbm the page used to download, and the
+    modules that come out are byte-identical — work/re/synthdiff.mjs checks both
+    digests against audio.json.
+
+    A copy rather than a slice. Trimming to the ranges the synth actually reads
+    is Stage 5's job, where the 64k budget makes it worth deriving the bounds
+    from the code that reads them; doing it here would only be a guess that
+    breaks quietly when another subsystem is ported.
+    """
+    n = 0
+    for pre in ('seg0_', 'seg4_'):
+        src = next(f for f in os.listdir(flat) if f.startswith(pre))
+        data = open(os.path.join(flat, src), 'rb').read()
+        open(f'{out}/{pre[:4]}.bin', 'wb').write(data)
+        n += len(data)
+    return n
+
+
 def main():
     flat = sys.argv[1] if len(sys.argv) > 1 else 'flat'
     out = sys.argv[2] if len(sys.argv) > 2 else 'out'
@@ -356,6 +380,7 @@ def main():
     # with sin = cos = 0 and rotating geometry collapses to a point.
     print('tables      ...', ', '.join(f'{a}:{n}' for a, n in
                                        H.preload_tables(d0).items()))
+    print('segments    ...', end=' ', flush=True); nb = export_segments(flat, out); print(f'{nb} bytes for the softsynth')
     print('font        ...', end=' ', flush=True); ng = export_font(d0, out); print(f'{ng} glyphs')
     print('render state...', end=' ', flush=True); nf = export_render_state(d0, r2, out); print(f'{nf} fog presets')
     print('font atlas  ...', end=' ', flush=True); na = export_font_atlas(flat, out); print(f'{na} set pixels')
@@ -372,6 +397,7 @@ def main():
 
     json.dump({'production': 'planet-potion',
                'source': 'planet-potion_dcr.exe, see prod.json for hashes',
+               'synth_segment_bytes': nb,
                'font_glyphs': ng, 'font_atlas_pixels': na, 'fog_presets': nf,
                'mesh_programs': nm, 'mesh_failures': mf,
                'scenes': ns, 'scene_failures': sf,

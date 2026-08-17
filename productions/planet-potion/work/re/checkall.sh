@@ -28,14 +28,16 @@
 #   ./ppcbox.sh python3 export.py flat/ out/ mods/part1_full.dbm mods/part3.dbm
 #   ./ppcbox.sh python3 texopsuite.py flat/ out/tex_programs.json out/opsuite/
 #   ./ppcbox.sh python3 animdump.py flat/ 0x100320b1 out/anim.json 92 200 400
-#   mkdir -p ../../web/data && cp -r out/* mods/*.dbm ../../web/data/
+#   python3 synthref.py flat/ mods/ out/synthref/
+#   mkdir -p ../../web/data && cp -r out/* ../../web/data/
 #
 # That last copy is not optional for rendercheck and soundcheck: both drive a
 # real browser against web/, so the data has to be where the PAGE loads it
 # from, and an unpopulated web/data/ fails as 404s rather than as a missing
-# input. The two .dbm modules go with it — the page plays the real soundtrack,
-# and until the softsynth is ported (PORT_SPEC §8b–8h) the modules are exported
-# by synthdump.py rather than generated in the browser.
+# input. The modules do NOT go with it any more: the softsynth is ported, so the
+# page builds both from out/seg0.bin and out/seg4.bin at load time. mods/ is
+# still built because dbmcheck, dbmtime, dbmdiff and synthref all compare
+# against a reference module.
 #
 # Modules first: without them export.py rebuilds both under emulation to get
 # the show timeline, which is the slowest step in the whole pipeline.

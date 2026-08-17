@@ -1,8 +1,8 @@
 # Planet Potion — browser restoration
 
-Work in progress. **The textures and the Warp3D shim are computed; the engine is
-not.** Everything between them — scene build, animation, draw emission — still
-comes from the original's recorded stream.
+Work in progress. **The textures, the soundtrack and the Warp3D shim are
+computed; the engine is not.** Everything between them — scene build, animation,
+draw emission — still comes from the original's recorded stream.
 
 ## What is here
 
@@ -57,11 +57,24 @@ them — each renders one still or nothing at all.
 
 ## What "Start with sound" is, and is not
 
-The **audio is a port**: `dbm.js` reads the module and `dbmplayer.js` sequences
-and mixes it with the DSP echo, so what plays is generated here rather than
-streamed from a recording. `work/re/soundcheck.mjs` presses the button in a real
-browser and measures the samples that reach the output — part one's full 289.286
-seconds, stereo, and not silence.
+The **audio is a port all the way down**, and as of the softsynth it is
+generated rather than loaded. `js/synth.js` runs all 32 of the original's
+generator primitives over its own seed data and builds both DigiBooster modules
+in the page — 8.3 MB of samples out of 99 KB of segments — and then `dbm.js`
+reads what it built and `dbmplayer.js` sequences and mixes it with the DSP echo.
+
+The modules are **byte-identical** to the ones the original produces:
+`work/re/synthdiff.mjs` checks all 94 samples individually against slices of the
+reference and both whole-module SHA-256 digests against `audio.json`, which
+`synthhash.py` wrote independently.
+
+    part 1   5,324,378 B   dfd0826755b81fba…
+    part 3   3,015,404 B   460939ceb5d2bbbd…
+
+It costs about 1.6 seconds for part one and 1.1 for part three, taken when each
+part starts rather than up front. `work/re/soundcheck.mjs` presses the button in
+a real browser and measures the samples that reach the output — part one's full
+289.286 seconds, stereo, and not silence.
 
 The **visuals are still recorded**, and sampled sparsely: five frames per scene,
 140 in all. So the show is stills changing in time with the music, not
@@ -78,10 +91,13 @@ recovered the timeline in the first place.
 The recorded stream and textures are **not committed**; they are regenerable:
 
 ```sh
-cd ../work/re && ./ppcbox.sh python3 export.py flat/ out/ \
-  && ./ppcbox.sh python3 synthdump.py flat/ mods/ \
-  && cp -r out/* mods/*.dbm ../../web/data/
+cd ../work/re && ./ppcbox.sh python3 export.py flat/ out/ && cp -r out/* ../../web/data/
 ```
+
+`synthdump.py` is no longer part of the recipe: the page generates the modules
+rather than loading them, and `export.py` writes the two segments it needs. The
+harness still builds the .dbm files under `mods/` because `dbmcheck`, `dbmtime`,
+`dbmdiff` and `synthref` all want a reference module to compare against.
 
 `ppcbox.sh` is there because both tools generate their data by running the
 original under `qemu-user`, which does not exist on macOS. The full recipe,
@@ -94,7 +110,9 @@ between recorded and computed per stage, and only the last one is computed today
 
 | stage | state |
 |---|---|
+| lookup tables | **computed — byte-exact** |
 | textures | **computed — byte-exact, all 69 programs** |
+| **softsynth** | **computed — byte-exact, all 94 samples** |
 | scene build | recorded |
 | per-frame animation | recorded |
 | draw emission | recorded |
@@ -182,5 +200,3 @@ Still missing:
   point; the reference does the same in 16.16 fixed point with an eight-sample
   lead-in, which is one sample of latency and a hair of shape. Worth the last
   0.014 on a held note.
-* The two **softsynth generators** that build the modules (`PORT_SPEC.md`
-  §8b–8h); the modules are still exported by the harness.
