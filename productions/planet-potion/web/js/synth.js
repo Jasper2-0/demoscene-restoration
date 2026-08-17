@@ -195,13 +195,21 @@ export class SynthContext {
     this.power = tables.power;
     this.mexp = tables.mexp;
 
-    // The six delay lines the reverb runs on live in seg6's BSS at
-    // 0x1114c760 on 80,000-byte centres. Their addresses are read out of
-    // `r2+0x2eea…0x2efe` rather than assumed, so this allocation only has to
-    // cover the span those pointers describe.
-    this.delayBase = this.w(0x2eea);
+    // ONE ARRAY FOR ALL OF THE SYNTH'S SCRATCH, because the pieces overlap.
+    //
+    // The six reverb delay lines live in seg6's BSS at 0x1114c760 on
+    // 80,000-byte centres. `0x10009a8c`'s eight scratch floats live at
+    // r2+0x2f0a plus 0x68 — which resolves to 0x1114c760 EXACTLY, the first
+    // delay line's base. That is not a coincidence to tidy away: when that
+    // routine runs with the reverb enabled, the comb filter's cursor sweeps
+    // over the same words it keeps its oscillator signs and filter history in.
+    // Two separate arrays would silently produce different audio.
+    //
+    // Base is the lower of the two, so the 0x68 bytes below the delay lines
+    // that `0x1000a2f0` clears are inside the array too.
+    this.memBase = Math.min(this.w(0x2f0a), this.w(0x2eea));
     const last = this.w(0x2efe);
-    this.delay = new Float32Array((last - this.delayBase + 80000) / 4);
+    this.mem = new Float32Array((last - this.memBase + 80000) / 4);
 
     // THE GENERAL REGISTERS ARE MACHINE STATE, not per-call arguments, and
     // `0x1000742c` is why. Sixteen of its eighteen calls carry no setup at all,
@@ -231,6 +239,12 @@ export class SynthContext {
     this.r16 = 0;         // steps done
     this.r17 = 0;         // frame within the step
     this.r15 = 0;
+    // EVERY float register, because the clear in `0x1000a23c` stops at f5 and
+    // `0x10009aa4` reads f4. So f4 and below are NOT per-sample state: they
+    // hold whatever the previous routine left, and at the start of the script
+    // that is the machine's power-on zero. Leaving them undefined here made
+    // one voice read NaN out of a lookup table.
+    for (let i = 0; i <= 31; i++) this[`f${i}`] = 0;
     this.f29 = 0;         // the value the emitter is about to write
     this.f30 = 1;         // constant 1.0, from r2+0x2ce2
     this.f31 = 0;         // constant 0.0
@@ -243,6 +257,15 @@ export class SynthContext {
 
   /** u32 at `r2 + disp` — `lwz`, used for the relocated pointers. */
   w(disp) { return this.d0.getUint32(R2 + disp, false); }
+
+  /**
+   * float64 at `r2 + disp` — an `lfd`.
+   *
+   * Only one instruction in the synth uses this and it is a mistake: the float
+   * pool holds float32s, so reading eight bytes takes two of them and calls the
+   * pair a double. `0x2e36` comes out as 3.82e24. Reproduced, not corrected.
+   */
+  kd(disp) { return this.d0.getFloat64(R2 + disp, false); }
 
   /** `stw rN, disp(r2)`. */
   setw(disp, v) { this.d0.setUint32(R2 + disp, v >>> 0, false); }
@@ -436,8 +459,8 @@ export function reverbInit(c, entry) {
     c.setw(COMB[i].length, p.len[i]);
   }
   for (const line of LINES) {
-    const base = (c.w(line) - c.delayBase) >> 2;
-    c.delay.fill(0, base, base + 5000);
+    const base = (c.w(line) - c.memBase) >> 2;
+    c.mem.fill(0, base, base + 5000);
   }
   for (const d of [0x2ec2, 0x2ec6, 0x2eca, 0x2ece, 0x2ed2, 0x2ed6, 0x2e72, 0x2e76]) {
     c.setw(d, 0);
@@ -456,12 +479,12 @@ export function reverbInit(c, entry) {
  */
 function comb(c, tap, input) {
   const cursor = c.w(tap.cursor);
-  const base = (c.w(tap.buffer) - c.delayBase) >> 2;
+  const base = (c.w(tap.buffer) - c.memBase) >> 2;
   const length = c.w(tap.length);
   const feedback = c.k(tap.feedback);
   let next = cursor + 4;
-  const delayed = c.delay[base + ((next % length) >> 2)];
-  c.delay[base + (cursor >> 2)] = f32(fma(delayed, feedback, input));
+  const delayed = c.mem[base + ((next % length) >> 2)];
+  c.mem[base + (cursor >> 2)] = f32(fma(delayed, feedback, input));
   if (next >= length) next = 0;
   c.setw(tap.cursor, next);
   return delayed;
@@ -486,7 +509,14 @@ export function reverb(c, input, mix) {
     c.setk(state, kAll * (v + s));
     v = outv;
   }
-  return (c.f30 - mix) * input + v * mix;
+  // IT CLOBBERS f4 AND f5, and that is not an implementation detail here —
+  // `0x10009aa4` keeps two oscillator phases in exactly those registers and
+  // calls this every frame. On exit f5 holds the allpass coefficient it last
+  // loaded and f4 holds the dry term, so the caller's phases are replaced
+  // rather than advanced. Recording them is what makes that voice reproducible.
+  c.f5 = kAll;
+  c.f4 = (c.f30 - mix) * input;
+  return c.f4 + v * mix;
 }
 
 // --- the primitives ---------------------------------------------------------
@@ -1309,9 +1339,189 @@ export function gen_10008af4(c) {
   bandBody(c, c.g.r10 ?? 0, c.g.r21);
 }
 
+/**
+ * `0x10009aa4` — the body behind `0x10009a68` and `0x10009a8c`. Four samples.
+ *
+ *     0x10009a68  r10 = 3, step 6,300, so 100,800 frames
+ *     0x10009a8c  r10 from the script (0, 1, 2), step 2,584, so 41,344
+ *
+ * `r19 = r18 * 0x10` — the length is the step times sixteen rather than an
+ * immediate, which is why `synthlen.py` had to follow the branch to find it.
+ *
+ * Three sine oscillators with sign flags into a four-pole ladder, pitched by
+ * three separate 2^x lookups off the same note. `r10` is a voice selector
+ * threaded through eleven conditionals; 3 is the part-one voice and is the only
+ * one that runs the reverb.
+ *
+ * THREE ORIGINAL BUGS, all reproduced because the reference bytes contain them:
+ *
+ *  1. THE THIRD OSCILLATOR NEVER MOVES. Its phase is `f4`, but the code that
+ *     should advance it advances `f5` — the second oscillator's phase — a
+ *     second time. So `sin(f4)` is `sin(0)` for every frame of every sample and
+ *     `f26` is identically zero, while `f5` runs at the sum of two rates.
+ *
+ *  2. `fmr f1, f31` ZEROES THE COEFFICIENT the two instructions above it have
+ *     just chosen between, so the ladder's input gain is always 0.0 and the
+ *     `fnmsub` that uses it degenerates to passing `f2` through unchanged. The
+ *     exp() feeding it is computed and discarded every frame.
+ *
+ *  3. `lfd f1, 0x2e36(r2)` READS TWO FLOAT32 CONSTANTS AS ONE DOUBLE. The
+ *     divisor comes out as 3.82e24 instead of anything sensible, so the
+ *     correction it scales is annihilated and `f19 = f0 + f19` is a no-op. The
+ *     author almost certainly meant `lfs`.
+ *
+ * ITS SCRATCH SITS JUST BELOW DELAY LINE 0 AND DOES NOT ALIAS IT — which is
+ * worth stating because it looks as though it does. `0x1000a2f0`'s clearing
+ * loop advances r7 across 0x68 bytes, and r7 + 0x68 is EXACTLY the first delay
+ * line's base, so a reading that stops at the loop concludes the scratch is
+ * inside the reverb's buffer. It is not: the instruction after the loop
+ * reloads r7 from r2+0x2f0a. Getting this wrong let the comb filter overwrite
+ * the oscillator sign flags, and the sample diverged at frame 14.
+ */
+function ladder3Body(c, r10, r21, r23, r24, r25) {
+  // 0x1000a2f0: zero 0x68 bytes at the pointer. The loop advances r7 as it
+  // goes, but the routine RELOADS it from r2+0x2f0a before returning, so r7 is
+  // the base and all eight scratch floats live inside the range just cleared.
+  const r7 = c.w(0x2f0a);
+  const base = (r7 - c.memBase) >> 2;
+  c.mem.fill(0, base, base + 0x1a);
+  const s = (off) => c.mem[base + (off >> 2)];
+  const setS = (off, v) => { c.mem[base + (off >> 2)] = f32(v); };
+  const is3 = r10 === 3;
+
+  let f19 = c.k(0x2bd6), f12 = c.k(0x2afa);
+  let f7 = c.k(0x2afa) * c.u8(r21);
+  setS(0x10, c.f30); setS(0x14, c.f30); setS(0x18, c.f30); setS(0x1c, c.f30);
+  let f16 = is3 ? c.k(0x2bbe)
+    : r10 === 0 ? c.k(0x2bf2) : r10 === 1 ? c.k(0x2b9e) : c.k(0x2b32);
+
+  let f4 = c.f4, f5 = c.f5, f6 = c.f6, f8 = c.f8;
+  let f10 = c.f10, f11 = c.f11, f13 = c.f13, f14 = c.f14;
+  let f15 = c.f15, f20 = c.f20, f21 = c.f21;
+  let f22 = c.f22, f23 = c.f23, f24 = c.f24, f28 = c.f28;
+
+  const wrap = c.k(0x2e52), gate = c.k(0x2e56);
+
+  do {
+    if (c.u8(r24 + c.r16) !== 0) f23 = fmadd(f24 - f23, c.k(0x2abe), f23);
+    else f23 = f24;
+    if (f23 !== f22) {
+      f21 = c.pow2(f23 - (is3 ? c.k(0x2b7a) : c.k(0x2b72)));
+      f20 = c.pow2(f23 - (is3 ? c.k(0x2b8e) : c.k(0x2b6a)));
+      f15 = c.pow2(f23 - c.k(0x2b6e));
+    }
+    f22 = f23;
+
+    // Oscillator 1, phase f6.
+    f28 = c.sin(f6) * s(0x10);
+    f6 = f6 + (f21 / wrap) / (is3 ? c.k(0x2df2) : c.k(0x2db2));
+    f6 = fsel(f6 - wrap, f6 - wrap, f6);
+    if (f6 > gate) {
+      if (f6 < c.k(0x2c1a) * wrap) setS(0x10, -c.f30);
+    } else setS(0x10, c.f30);
+
+    // Oscillator 2, phase f5.
+    const f27 = c.sin(f5) * s(0x14);
+    f5 = f5 + (f20 / wrap) / (is3 ? c.k(0x2df2) : c.k(0x2db2));
+    f5 = fsel(f5 - wrap, f5 - wrap, f5);
+    if (f5 > gate) {
+      if (f5 < c.k(0x2c1a) * wrap) setS(0x14, -c.f30);
+    } else setS(0x14, c.f30);
+
+    // Oscillator 3 reads f4 and then advances f5 AGAIN — bug 1 above. f4 is
+    // never written anywhere in the routine, so this term is always sin(0).
+    const f26 = c.sin(f4) * s(0x18);
+    f5 = f5 + (f15 / wrap) / c.k(0x2db2);
+    f5 = fsel(f5 - wrap, f5 - wrap, f5);
+    if (f5 > gate) {
+      if (f5 < c.k(0x2c1a) * wrap) setS(0x18, -c.f30);
+    } else setS(0x18, c.f30);
+
+    if (c.r17 === 0) {
+      f24 = (c.u8(r25 + c.r16) + (is3 ? 0 : 0xc)) / c.k(0x2d82);
+      f8 = c.u8(r21 + c.r16) * c.k(0x2afa);
+      if (c.u8(r23 + c.r16) === 0) c.r15 = 0;
+    }
+    if (c.r16 !== 0) f7 = fmadd(f8 - f7, is3 ? c.k(0x2abe) : c.k(0x2ad2), f7);
+    else f7 = f8;
+
+    let f2 = fmadd(f26, s(0x1c), f28 - f27) * c.k(0x2c1a);
+    if (is3) f2 = f28 + f27;
+
+    if (r10 !== 0) {
+      f16 = f16 * c.k(0x2ce6);
+      f16 = fsel(f16 - c.f30, c.f30, f16);
+    }
+    let f18 = f7 * f19 * f16;
+    f18 = fsel(f18 - c.f30, c.f30, f18);
+
+    const f3 = fnmsub(c.k(0x2d22) * f18, f18, fmsub(c.k(0x2d56), f18, c.f30));
+    const f29 = fmadd(f3, c.k(0x2bd6), c.k(0x2bd6));
+    c.exp(fnmsub(f29, c.k(0x2d16), c.k(0x2d16)));   // computed, then discarded
+
+    // Bug 2: the coefficient is zeroed, so this is `f18 = f2`.
+    f18 = fnmsub(0, f10, f2);
+    f14 = fnmsub(f3, f14, fmadd(s(0x58), f29, f18 * f29));
+    f13 = fnmsub(f3, f13, fmadd(s(0x5c), f29, f14 * f29));
+    f11 = fnmsub(f3, f11, fmadd(s(0x60), f29, f13 * f29));
+    f10 = fnmsub(f3, f10, fmadd(s(0x64), f29, f11 * f29));
+    f10 = f10 - c.k(0x2b5a) * f10 * f10 * f10;
+    setS(0x58, f18); setS(0x5c, f14); setS(0x60, f13); setS(0x64, f11);
+
+    if (c.r17 === (is3 ? 0x1275 : 0x184)
+      && c.u8(r23 + ((c.r16 + 1) & 0xf)) !== 1) c.r15 = 2;
+
+    if (c.r15 === 0) {
+      f19 = fmadd(f19, c.k(0x2d0e), is3 ? c.k(0x2b3e) : c.k(0x2c1a));
+      f19 = fsel(f19 - c.f30, c.f30, f19);
+      f12 = f12 * (is3 ? c.k(0x2d0a) : c.k(0x2d12));
+      if (f12 > c.f30) { f12 = c.f30; c.r15 = 1; }
+    } else if (c.r15 === 1) {
+      f19 = f19 * (is3 ? c.k(0x2caa) : c.k(0x2cd2));
+    } else if (c.r15 === 2) {
+      if (is3) {
+        f28 = f28 * c.k(0x2c72);
+        f12 = f12 * c.k(0x2c86);
+      } else {
+        // Bug 3: an lfd across two float32 constants, so the divisor is 3.8e24
+        // and the whole correction vanishes.
+        f19 = fmsub(f19, c.k(0x2b96), f19) / c.kd(0x2e36) + f19;
+        f12 = f12 * c.k(0x2c76);
+      }
+    }
+
+    c.f29 = c.k(0x2d4e) * (f11 - f10) * f12 * c.k(0x2dd2);
+    if (is3) {
+      const f9 = f10 * c.k(0x2df2) * f12;
+      const wet = reverb(c, f9, c.k(0x2c1a));
+      c.f29 = fmadd(wet, c.k(0x2baa), f9 * c.k(0x2c06));
+      // …and take back the two phases it just overwrote. See reverb().
+      f5 = c.f5;
+      f4 = c.f4;
+    }
+  } while (c.emit());
+}
+
+export function gen_10009a68(c) {
+  reverbInit(c, 0x10009f68);
+  c.r18 = 0x189c;
+  c.startSample(0x189c * 0x10);
+  ladder3Body(c, 3, SEG0 + R2 + 0x325a, SEG0 + R2 + 0x302a,
+    SEG0 + R2 + 0x2f9a, SEG0 + R2 + 0x308a);
+}
+
+export function gen_10009a8c(c) {
+  const r24 = SEG0 + R2 + 0x300a;
+  c.r18 = 0xa18;
+  c.startSample(0xa18 * 0x10);
+  ladder3Body(c, c.g.r10 ?? 0, SEG0 + R2 + 0x34ca, r24, r24, SEG0 + R2 + 0x314a);
+}
+
 /** Address -> implementation. Everything absent is filled from the oracle. */
 export const PRIMITIVES = {
   0x10008430: gen_10008430,
+  0x10009a68: gen_10009a68,
+  0x10009a8c: gen_10009a8c,
   0x10008ac4: gen_10008ac4,
   0x10008adc: gen_10008adc,
   0x10008af4: gen_10008af4,
