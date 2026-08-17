@@ -229,22 +229,24 @@ ok('the builder leaves every source colour at zero', colourBad === 0,
 // with the node's bounding box as the divisor — and kind 4 then overwrites two
 // of the three pairs with a different formula. Named here with a count so that
 // "the material is exact" is not read as covering the texture coordinates.
-// A RATCHET, not a pass. 0x100036e8 has seven projection modes; five of them
-// reproduce exactly and two do not, so the number below is what has been earned
-// rather than what is right. It is asserted so a regression in the five that
-// work fails the suite, and the per-mode split is printed so the two that do
-// not cannot be averaged into looking fine.
-const UV_FLOOR = 18082;
+// A RATCHET, not a pass. Five of the seven projection modes reproduce exactly;
+// 0x30 and 0x40 leave 136 triangles, so the number below is what has been
+// earned rather than what is right. Asserted, so a regression in the five that
+// work fails the suite, and split per mode so the two that do not cannot be
+// averaged into looking fine.
+const UV_FLOOR = 18938;
 ok('the UV projection reproduces at least what it did', uvOK >= UV_FLOOR,
   `${uvOK}/${uvOK + uvBad} triangles, floor ${UV_FLOOR}`);
 for (const [k, v] of [...uvBySub].sort()) {
   console.log(`     ${k}  ${v.ok} exact${v.bad ? `, ${v.bad} NOT reproduced` : ''}`);
 }
 if (uvBad) {
-  console.log('     modes 0x30 and 0x40 are unsolved: a vertex whose box '
-    + 'coordinate is 0 projects to 0 in a triangle\'s FIRST slot and to '
-    + 'something else in the others, so the routine carries state across '
-    + 'corners that this port does not model');
+  console.log('     what is left in 0x30 and 0x40 is narrow: u matches on '
+    + 'every corner, and so does v except on the ONE corner whose box '
+    + 'coordinate is zero, where the original writes 91.6019 and every '
+    + '(point, box) pairing available gives 0. So v there is not '
+    + 'n.y * span + size at all, and no register carried from the previous '
+    + 'corner accounts for it either');
 }
 ok('every vertex in the intro is covered', skipped === 0,
   `${vOK} of ${vOK + vBad + skipped}`);

@@ -318,7 +318,7 @@ function sinCos(v, table) {
  * a pass-per-transform reading would do — leaves 74 of 76 nodes exact and two
  * out by 1.5e-5, so the wrong answer here is very nearly the right one.
  */
-export function transformVertex(v, rec, table) {
+export function transformVertex(v, rec, table, keepDouble) {
   let [x, y, z] = v;
   x *= rec.scale[0]; y *= rec.scale[1]; z *= rec.scale[2];
   const [sx, cx] = sinCos(rec.rotate[0], table);
@@ -327,8 +327,13 @@ export function transformVertex(v, rec, table) {
   if (rec.rotate[0]) { const Y = y * cx - z * sx; z = y * sx + z * cx; y = Y; }
   if (rec.rotate[1]) { const X = x * cy + z * sy; z = -x * sy + z * cy; x = X; }
   if (rec.rotate[2]) { const X = x * cz + y * sz; y = -x * sz + y * cz; x = X; }
-  return [f32(x + rec.translate[0]), f32(y - rec.translate[1]),
-    f32(z - rec.translate[2])];
+  const out = [x + rec.translate[0], y - rec.translate[1], z - rec.translate[2]];
+  // THE BOUNDING BOX SEES THE UNTRUNCATED VALUE. `0x10003b48` folds each
+  // transformed vertex into the running min and max straight out of the
+  // registers, and only `0x10003b78` stores it through `stfs`. So the box is
+  // built from doubles while everything that later reads +0x00 gets the
+  // rounded ones — a one-ulp difference that reaches a few hundred UVs.
+  return keepDouble ? out : out.map(f32);
 }
 
 // ---------------------------------------------------------------------------
@@ -368,8 +373,20 @@ function bounds(points) {
  */
 function projectUV(pSrc, pOut, gen, rec, b1, b2, state, atanTable) {
   const HALF = HALFISH;
-  const box = rec.flag ? b2 : b1;
-  const p = rec.flag ? pOut : pSrc;
+  // THE FLAG IS `state.r3`, NOT `rec.flag`, AND THAT IS A BUG IN THE ORIGINAL.
+  // `lbz r3, 3(r20)` reads it ONCE per triangle, before the three corners are
+  // projected — and `atan` returns its table index in r3. So the moment one
+  // corner takes an angular mode, every later corner of that face sees a
+  // non-zero flag and silently switches to the transformed frame.
+  //
+  // It is exactly visible in the data: in p1[15]n1 the first corner's u comes
+  // out of the SOURCE position and the second and third out of the TRANSFORMED
+  // one, same record, same triangle. Reproducing it means carrying r3 rather
+  // than re-reading the flag, and modelling atan's return value, since an index
+  // that happens to be zero leaves the flag clear.
+  const flag = state.r3;
+  const box = flag ? b2 : b1;
+  const p = flag ? pOut : pSrc;
   let n = [(p[0] - box.lo[0]) / box.ext[0], (p[1] - box.lo[1]) / box.ext[1],
     (p[2] - box.lo[2]) / box.ext[2]];
   let u = fma(n[0], rec.span[0], rec.size[0]);
@@ -400,13 +417,16 @@ function projectUV(pSrc, pOut, gen, rec, b1, b2, state, atanTable) {
   if (sub === 0x10) return [u, fma(n[2], rec.span[1], rec.size[1])];
   if (sub === 0x30) {
     v = fma(n[0], rec.span[1], rec.size[1]);
-    ang = atanTurns(p[2], p[1], atanTable); angled = true;
+    ({ turns: ang, r3: state.r3 } = atanTurns(p[2], p[1], atanTable));
+    angled = true;
   } else if (sub === 0x40) {
     v = fma(n[1], rec.span[1], rec.size[1]);
-    ang = atanTurns(p[0], p[2], atanTable); angled = true;
+    ({ turns: ang, r3: state.r3 } = atanTurns(p[0], p[2], atanTable));
+    angled = true;
   } else if (sub === 0x50) {
     v = fma(n[2], rec.span[1], rec.size[1]);
-    ang = atanTurns(p[0], p[1], atanTable); angled = true;
+    ({ turns: ang, r3: state.r3 } = atanTurns(p[0], p[1], atanTable));
+    angled = true;
   }
   void angled;
   if (state.seen) {
@@ -430,9 +450,10 @@ function applyUVs(triangles, positions, gen, records, atanTable) {
   const rec = records[0];
   if (!rec || !positions.built.length) return;
   const b1 = bounds(positions.source);
-  const b2 = bounds(positions.built);
+  const b2 = bounds(positions.box ?? positions.built);
   for (const t of triangles) {
-    const state = { seen: false, u: 0, v: 0 };
+    // r3 starts as the record's flag and is clobbered by any atan call.
+    const state = { seen: false, u: 0, v: 0, r3: rec.flag };
     t.uv = t.idx.map((i) => projectUV(positions.source[i], positions.built[i],
       gen ? gen[i] : null, rec, b1, b2, state, atanTable).map(f32));
     if (rec.kind === 4) {
@@ -743,7 +764,9 @@ export function buildOp0(node, table) {
         return t;
       })());
   const tris = materialise(triangles, node.records);
-  applyUVs(tris, { source: src, built: out }, null, node.records, atanTable());
+  const raw = rec ? src.map((v) => transformVertex(v, rec, table, true)) : src;
+  applyUVs(tris, { source: src, built: out, box: raw }, null, node.records,
+    atanTable());
   return { vertices: out, triangles: tris, normals: computeNormals(out, triangles) };
 }
 
@@ -906,7 +929,10 @@ function atanTurns(y, x, atanTable) {
   if (x >= 0) { if (!(y >= 0)) v = (PI_C + PI_C) - v; }
   else if (y >= 0) v = PI_C - v;
   else v = v + PI_C;
-  return v / (PI_C + PI_C);
+  // THE INDEX COMES BACK TOO, and it is not a diagnostic. The routine leaves it
+  // in r3, which is the same register the caller is holding the record's flag
+  // in — see `projectUV`.
+  return { turns: v / (PI_C + PI_C), r3: i };
 }
 
 /**
@@ -1016,11 +1042,11 @@ export function buildOp4(node, table, atanTab) {
     const A = V[nr * sides].sp, B = V[pr * sides].sp;
     const dx = A[0] - B[0], dy = A[1] - B[1], dz = A[2] - B[2];
 
-    const a = fctiw(atanTurns(dz, dx, atanTab) * 32768.0);
+    const a = fctiw(atanTurns(dz, dx, atanTab).turns * 32768.0);
     const yaw = (-a) & 0x7ffc, flat = a & 0x7ffc;
     const s1 = table[flat >>> 2], c1 = table[(flat >>> 2) + 2048];
     const horiz = fma(dx, c1, dz * s1);
-    const b = fctiw(atanTurns(dy, horiz, atanTab) * 32768.0);
+    const b = fctiw(atanTurns(dy, horiz, atanTab).turns * 32768.0);
     const pitch = (-b) & 0x7ffc;
     const s2 = table[pitch >>> 2], c2 = table[(pitch >>> 2) + 2048];
     const s3 = table[yaw >>> 2], c3 = table[(yaw >>> 2) + 2048];
@@ -1041,7 +1067,8 @@ export function buildOp4(node, table, atanTab) {
   const vertices = V.map((v) => (rec ? transformVertex(v.p, rec, table) : v.p));
   const triangles = tubeFaces(sides, rings, closed);
   const tris = materialise(triangles, node.records);
-  applyUVs(tris, { source: src, built: vertices },
+  const raw = rec ? src.map((v) => transformVertex(v, rec, table, true)) : src;
+  applyUVs(tris, { source: src, built: vertices, box: raw },
     V.map((v) => [v.u, f32(v.arc * invArc)]), node.records, atanTab);
   return {
     vertices,
