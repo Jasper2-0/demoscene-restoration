@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Twenty checks accumulated over the work and there is no point in
-# remembering twenty invocations. Each passes or names what drifted; none of them
+# Twenty-two checks accumulated over the work and there is no point in
+# remembering twenty-two invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -28,6 +28,7 @@
 #   ./ppcbox.sh python3 export.py flat/ out/ mods/part1_full.dbm mods/part3.dbm
 #   ./ppcbox.sh python3 texopsuite.py flat/ out/tex_programs.json out/opsuite/
 #   ./ppcbox.sh python3 animdump.py flat/ 0x100320b1 out/anim.json 92 200 400
+#   ./ppcbox.sh python3 arenadump.py flat/ out/arena.json
 #   python3 synthref.py flat/ mods/ out/synthref/
 #   mkdir -p ../../web/data && cp -r out/* ../../web/data/
 #
@@ -156,6 +157,12 @@ fi
 
 [ -n "$ANIM" ] && run "animcheck — the keyframe evaluator against real motion" \
   node "$HERE/animcheck.mjs" "$ANIM"
+
+# The structural export: every node, face, vertex, sprite and keyframe track in
+# all 29 scenes, as the scene VM leaves them. Cross-checked against scenes.json,
+# which a different tool produced by a different walk. 77 = skip without it.
+run "arenacheck — the structural export, and scenes.json agreeing with it" \
+  node "$HERE/arenacheck.mjs" "$HERE/out/arena.json" "$DATA/scenes.json"
 
 # Every Warp3D name in PORT_SPEC rests on this ordering, and it was measured
 # once and written up as prose. Re-derives it from the shipped libraries.
