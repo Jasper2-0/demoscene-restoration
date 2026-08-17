@@ -1791,8 +1791,200 @@ export function gen_10008880(c) {
   } while (c.emit());
 }
 
+/**
+ * `0x10006fc0` — 65,536 frames, one call in part three.
+ *
+ * A runaway sine into a one-pole pair, reverberated inverted. Two decays again,
+ * `f12` geometric and `f11` by subtracting a 1/16384th of itself, and both stop
+ * changing rate at frame 0x7333.
+ *
+ * IT SAVES f5 ACROSS THE REVERB CALL — `stfdu f5, -8(r13)` before and
+ * `lfd f5, 0(r13)` after — which is the author telling us the reverb clobbers
+ * f5. `0x10009aa4` keeps an oscillator phase there and does NOT save it, which
+ * is why that voice comes out the way it does. See reverb().
+ */
+export function gen_10006fc0(c) {
+  reverbInit(c, 0x10009f40);
+  c.startSample(0x10000);
+  let f12 = c.f30, f11 = c.f30;
+  let f21 = c.k(0x2afa), f5 = c.k(0x2dde);
+  let f16 = c.f16, f17 = c.f17;
+  do {
+    const f19 = f12 * f11;
+    const f20 = c.sin(-f5);
+    f21 = f21 * c.k(0x2d0e);
+    f21 = fsel(f21 - c.f30, c.f30, f21);
+    const f9 = f20 * c.k(0x2d72) * f21 * f19;
+    const f18 = f9 - fmadd(c.k(0x2c4e), f17, f16);
+    f17 = fmadd(f18 * c.k(0x2c2e), f12, f17);
+    f16 = fmadd(f17, c.k(0x2afa), f16);
+    const saved = f5;
+    const wet = reverb(c, -f16, c.k(0x2c5e));
+    f5 = saved;
+    const f6 = fmadd(c.f10, c.k(0x2bba), c.k(0x2bea) * wet) * c.k(0x2bb6);
+    c.f29 = f6 * c.k(0x2dd2);
+    const more = c.emit();
+    f5 = f5 * c.k(0x2cca);
+    if (c.r20 <= 0x7333) {
+      f12 = f12 * c.k(0x2cda);
+      f11 = f11 - f11 / c.k(0x2e42);
+    } else {
+      f12 = f12 * c.k(0x2c9e);
+    }
+    if (!more) break;
+  } while (true);
+}
+
+/**
+ * `0x10007a68` — read one signed byte of the sample being built, as a float.
+ *
+ * The only reason it exists is the second pass below, which reads back what the
+ * first pass already emitted.
+ */
+const tap = (c, addr) => (c.out[addr] << 24) >> 24;
+
+/**
+ * The three-tap smoother `0x10007654` and `0x10007860` both run as a SECOND
+ * PASS over the sample they have just written, in place.
+ *
+ * This is the only place in the synth where a routine reads its own output
+ * back. It walks the PCM with a 3-tap FIR — taps at p, p+2 and p+1, in that
+ * order — into a two-pole recursive section, and stores the result back at p
+ * before moving on. Reading ahead and writing behind is what keeps it from
+ * feeding on itself: every byte is read before the pass reaches it.
+ *
+ * The coefficients come from a resonator design done at RUN TIME:
+ * `cos(2*pi*303/22050)` sets the pole angle and the rest falls out of it, so
+ * 303 Hz at 22,050 is written into the binary as a filter rather than as
+ * numbers.
+ *
+ * It stops FOUR frames short of the end (`addic. r19, r19, 0xfffc`), so the
+ * last four bytes of both samples are whatever the first pass left.
+ */
+function smoothPass(c, start, frames, perFrame) {
+  const angle = c.cos(c.k(0x2e5a) * c.k(0x2dfa) / c.k(0x2e3e));
+  const two = c.k(0x2d36);
+  const f11 = c.k(0x2a9a) / fmadd(Math.abs(angle), two, two) + c.k(0x2c5e);
+  const f18 = angle * f11 * -two;
+  const poleA = (angle * -two) * c.k(0x2c5e);
+  const poleB = c.k(0x2c56);
+  let f13 = 0, f14 = 0;
+  let r24 = start;
+  for (let n = frames - 4; n > 0; n--) {
+    let f15 = tap(c, r24);
+    r24 += 2;
+    f15 += tap(c, r24);
+    r24 -= 1;
+    f15 = fmadd(f15, f11, tap(c, r24) * f18);
+    f15 = f15 - fmadd(poleB, f13, poleA * f14);
+    f13 = f14;
+    f14 = f15;
+    let v = fctiw(perFrame(f15, f18));
+    c.out[r24 - 1] = v & 0xff;
+  }
+}
+
+/**
+ * `0x10007654` — 16,000 frames, one call in part three.
+ *
+ * Noise into a resonator with a swept `f6`, then the smoothing pass — whose
+ * output stage here adds a decaying sine and runs a further one-pole pair, so
+ * the second pass is not only a filter but the instrument's tail.
+ */
+export function gen_10007654(c) {
+  c.startSample(0x3e80);
+  c.srand();
+  const start = c.r31;
+  let f6 = c.k(0x2d3a), f12 = c.k(0x2b3e);
+  let f16 = c.f16, f17 = c.f17, f22 = c.f22, f23 = c.f23;
+  do {
+    const f3 = (c.rand() * c.k(0x2d92)) * c.k(0x2a6e);
+    const f11 = f6;
+    if (c.r20 < 0xaa0) {
+      f12 = f12 * c.k(0x2d0a);
+      f12 = fsel(f12 - c.k(0x2d66), c.k(0x2d66), f12);
+    }
+    if (c.r20 > 0x12c0) f12 = f12 * c.k(0x2c9e);
+    f6 = fmadd(f6, c.k(0x2aaa), c.k(0x2d32) - f6);
+    let f0 = f3 - fmadd(f16, c.k(0x2bae), c.k(0x2ba6) * f17);
+    f17 = fmadd(c.k(0x2d12) * f0, f11, f17);
+    f16 = fmadd(f17, c.k(0x2d0e) * f11, f16);
+    f0 = ((f0 - f17) * c.k(0x2d6e)) * f12;
+    f0 = fnmsub(c.k(0x2b4e), f23, f0);
+    const f24 = fnmsub(c.k(0x2b96), f22, f0);
+    f23 = fmadd(f24, c.k(0x2bae), f23);
+    f22 = fmadd(f23, c.k(0x2bae), f22);
+    c.f29 = (f24 - f23) * c.k(0x2bfa);
+  } while (c.emit());
+
+  let f27 = c.k(0x2afa), f28 = c.k(0x2dc6);
+  let g16 = 0, g17 = 0;
+  smoothPass(c, start, 0x3e80, (f15, f18) => {
+    let f0 = c.sin(-f28);
+    f27 = f27 * c.k(0x2d0e);
+    f27 = fsel(f27 - c.f30, c.f30, f27);
+    f0 = c.k(0x2d82) * ((f0 * c.k(0x2d72)) * f27);
+    f0 = fmadd(c.k(0x2c1a), f15, f0) * c.k(0x2bae);
+    f0 = fnmsub(g17, c.k(0x2b06), f0 - g16);
+    g17 = fmadd(f0, c.k(0x2c52), g17);
+    g16 = fmadd(g17, c.k(0x2afa), g16);
+    f27 = f27 * c.k(0x2cd2);
+    f28 = f28 * c.k(0x2c9e);
+    return g17 - f18;
+  });
+}
+
+/**
+ * `0x10007860` — 9,900 frames, one call in part three.
+ *
+ * The same shape as `0x10007654`, but its noise is coloured by the six-filter
+ * bank `0x10008b00` uses, and its second pass writes the smoother's output
+ * straight out with no tail stage.
+ */
+export function gen_10007860(c) {
+  c.startSample(0x26ac);
+  c.srand();
+  const start = c.r31;
+  let f6 = c.k(0x2d3a), f12 = c.k(0x2b3e);
+  let f13 = c.f13, f14 = c.f14, f15 = c.f15, f16 = c.f16, f17 = c.f17;
+  let f19 = c.f19, f22 = c.f22, f23 = c.f23, f25 = c.f25, f26 = c.f26;
+  do {
+    const n = c.rand() * c.k(0x2db2);
+    f15 = fmadd(f15, c.k(0x2c6e), c.k(0x2b02) * n);
+    f14 = fmadd(f14, c.k(0x2c5a), c.k(0x2b0a) * n);
+    f13 = fmadd(f13, c.k(0x2c4e), c.k(0x2b16) * n);
+    f26 = fmadd(f26, c.k(0x2c3e), c.k(0x2b3a) * n);
+    f25 = fmadd(f25, c.k(0x2bee), c.k(0x2b46) * n);
+    f19 = fmadd(f19, c.k(0x2b96), c.k(0x2b9a) * n);
+    const f3 = (f15 - f14 - f13 - f26 - f25 - f19) * c.k(0x2a6e);
+    const f11 = f6;
+    if (c.r20 < 0x693) {
+      f12 = f12 * c.k(0x2d0a);
+      f12 = fsel(f12 - c.k(0x2d66), c.k(0x2d66), f12);
+    }
+    if (c.r20 > 0x1167) {
+      f12 = f12 * c.k(0x2c86);
+      f6 = fmadd(f6, c.k(0x2aaa), c.k(0x2d32) - f6);
+    }
+    let f0 = f3 - fmadd(f16, c.k(0x2bae), c.k(0x2ba6) * f17);
+    f17 = fmadd(c.k(0x2d12) * f0, f11, f17);
+    f16 = fmadd(f17, c.k(0x2d0e) * f11, f16);
+    f0 = ((f0 - f17) * c.k(0x2d62)) * f12;
+    f0 = fnmsub(c.k(0x2b4e), f23, f0);
+    const f24 = fnmsub(c.k(0x2b96), f22, f0);
+    f23 = fmadd(f24, c.k(0x2bae), f23);
+    f22 = fmadd(f23, c.k(0x2bae), f22);
+    c.f29 = (f24 - f23) * c.k(0x2bfa);
+  } while (c.emit());
+
+  smoothPass(c, start, 0x26ac, (v) => v);
+}
+
 /** Address -> implementation. Everything absent is filled from the oracle. */
 export const PRIMITIVES = {
+  0x10006fc0: gen_10006fc0,
+  0x10007654: gen_10007654,
+  0x10007860: gen_10007860,
   0x10008430: gen_10008430,
   0x10008568: gen_10008568,
   0x10008880: gen_10008880,
