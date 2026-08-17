@@ -567,28 +567,67 @@ For a port the lesson is unchanged: the glyph scan is the *renderer's* character
 lookup, the text content itself is ordinary scene data, and a port must bound
 that scan rather than translate it literally.
 
-**Geometry.** Opcode byte, then operands — but **do not try to model the
-widths**. Three attempts failed and the reason is instructive:
+**Geometry.** Opcode byte, then operands. This section used to say **do not try
+to model the widths**, on the strength of three failed attempts. That was wrong,
+and the way it was wrong is worth more than the conclusion was.
 
-* the five build handlers' own reads give `op0` 6-or-8, `op1` `2+6·popcount`,
-  `op2` fixed 3 (with an *unaligned* halfword at `r31+1`, which is why stream
-  pointers are often odd), `op3` `3+6·`(nonzero 2-bit groups), `op4` `2+8n`;
-* `op0` and `op4` additionally call a shared prologue `FUN_100030f8` with seven
-  conditional `addi r31,r31,n` sites;
-* that prologue indexes a table in **BSS, built at runtime**, so its consumption
-  is not a function of the stream alone. Measured on synthetic input it consumes
-  26–32 bytes; on real streams, 12–18 — and the same flags byte gives different
-  answers in different programs.
+The handlers' own reads were read correctly: `op0` 6-or-8, `op1` `2+6·popcount`,
+`op2` fixed 3 (with an *unaligned* halfword at `r31+1`, which is why stream
+pointers are often odd), `op3` `3+6·`(nonzero 2-bit groups), `op4` `2+8n`, and
+`op0` and `op4` additionally call a shared prologue `FUN_100030f8` with seven
+conditional `addi r31,r31,n` sites.
 
-`rungeo.py` sidesteps all of it. Run `_generate_obj` itself under qemu with
-`_Warp3DBase` pointed at a table of no-op vectors, and read back the linked list
-it builds — opcode·4 at node+0x10, next at node+0x14. **38 of the 39 programs
-decode this way.** Measurement beats modelling here, and the harness makes it
-cheap.
+The mistake was in the prologue. It does index a table built at runtime — but
+that table is `_generate_obj`'s **second argument, the texture table**, and it is
+indexed for two POINTER VALUES that land at record+0x14 and +0x18:
 
-Result: opcode counts across the shipped data are **op0 ×62, op3 ×56, op4 ×24 —
-and opcodes 1 and 2 are never used at all.** 17 distinct shapes; the commonest
-are `[4]`, `[0]`, `[4,3,3]`, `[0,0]`. A port needs three of the five handlers.
+```
+  lbz   r3, 1(r31)        /* one byte, always one byte */
+  slwi  r3, r3, 3
+  lwzx  r3, r28, r3       /* -> +0x18 */
+  lwzx  r25, r28, r25     /* -> +0x14 */
+```
+
+Reading a value out of a runtime table is not the same as having a
+runtime-dependent grammar, and conflating the two is half the error. The other
+half is the observation that "the same flags byte gives different answers in
+different programs" — which is true and is not evidence of anything, because
+**there are three flag words, not one**. Byte 0 gates the colour quad and the
+cull override; the halfword at +4 gates the translate triple, the cull sense and
+whether another record is chained; the halfword at +6 gates the rotate triple,
+the scale triple and one more bit. Tracking only the first of the three leaves
+five gates unaccounted for, and the consumption then looks unpredictable exactly
+as reported. The measured 26–32 bytes on synthetic input and 12–18 on real
+streams is the same fact seen from outside.
+
+Every width in the prologue and in all five handlers is gated by a bit read from
+the stream a few instructions earlier, so the whole program decodes from the
+bytes alone. `web/js/geom.js` is that decoder and `work/re/geocheck.mjs` holds
+it to all 39 programs against what the interpreter actually built: the opcode
+sequence, all 136 material records field for field, every node's stored
+operands, and op4's point arrays. It also lands on **exactly** `length + 1`
+bytes in every program — the extra byte is the opcode the walk reads before
+testing `cmpw r31, r30`, so the bound is asserted rather than approximated, and
+a decoder wrong about one width by one byte fails.
+
+`geodump.py` remains the oracle for what the handlers BUILD, which is a separate
+question from what the stream SAYS: run `_generate_obj` under qemu and read back
+the three chains each node carries. **All 39 programs decode this way** — 181
+nodes, 136 records, 11,723 vertices, 19,074 triangles.
+
+`rungeo.py` and `export_meshes` manage only 38, and the missing one is worth
+recording. Both point every Warp3D vector at one shared no-op and fill nothing
+into the texture table, so p1[26] `0x100317bb` faults on its twelfth opcode: at
+least one path **dereferences** a texture pointer rather than merely storing it.
+`geodump.py` gives every table slot a distinct address in real mapped memory,
+which keeps the slot identifiable AND safe to follow — the same arrangement
+`runscene.py` reached for its texture objects, for the same reason.
+
+Result: opcode counts across the shipped data are **op0 ×76, op3 ×72, op4 ×33 —
+and opcodes 1 and 2 are never used at all.** A port needs three of the five
+handlers, and the two dead ones are ported from the instructions and marked
+unverified, because no shipped program can exercise them: mutating op2's operand
+width by a byte changes nothing any check can see.
 
 **And the mesh comes out too, not just the opcode sequence.** The nodes carry the
 generated geometry: an `op4` node holds a vertex count at `+0x1a` and a pointer

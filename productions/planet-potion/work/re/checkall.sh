@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Twenty-seven checks accumulated over the work and there is no point in
-# remembering twenty-seven invocations. Each passes or names what drifted; none of them
+# Twenty-eight checks accumulated over the work and there is no point in
+# remembering twenty-eight invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -29,6 +29,7 @@
 #   ./ppcbox.sh python3 texopsuite.py flat/ out/tex_programs.json out/opsuite/
 #   ./ppcbox.sh python3 animdump.py flat/ 0x100320b1 out/anim.json 92 200 400
 #   ./ppcbox.sh python3 arenadump.py flat/ out/arena.json
+#   ./ppcbox.sh python3 geodump.py flat/ out/geo.json
 #   python3 synthref.py flat/ mods/ out/synthref/
 #   mkdir -p ../../web/data && cp -r out/* ../../web/data/
 #
@@ -196,6 +197,14 @@ run "pass2check — the compose pass, every node of every scene" \
 # rather than passed over.
 run "pass3check — the publish pass and the mesh vertex transform" \
   node "$HERE/pass3check.mjs" "$HERE/out/anim_all.json"
+
+# The geometry program's stream grammar, against what the interpreter built.
+# NOTES.md recorded these operand widths as unmodellable after three failed
+# attempts; this decodes all 39 programs statically and lands on exactly the
+# stream's own length every time. It reads the segments straight out of flat/
+# because seg3 is not part of the exported dataset.
+run "geocheck — the geometry stream decodes without running the program" \
+  node "$HERE/geocheck.mjs" "$FLAT" "$HERE/out/geo.json"
 
 # Every Warp3D name in PORT_SPEC rests on this ordering, and it was measured
 # once and written up as prose. Re-derives it from the shipped libraries.
