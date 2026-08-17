@@ -264,6 +264,140 @@ function op4(c, textures) {
 
 const HANDLERS = [op0, op1, op2, op3, op4];
 
+// ---------------------------------------------------------------------------
+// The generators. Only op0 is here; op3 clones an earlier node and op4 sweeps a
+// spline, and both are still to do.
+
+/**
+ * The sine and cosine of one of a record's rotation values.
+ *
+ * The stored integer is degrees times 91 — `32768 / 360` is 91.02, and the
+ * table's 8,192 entries of four bytes span exactly one turn. The rotate routine
+ * masks with `0x7ffc`, which both wraps and clears the low two bits, so the
+ * index is a BYTE offset and the entry is that over four. Cosine is the same
+ * table read `0x2000` bytes further on — 2,048 entries, a quarter turn.
+ *
+ * DO NOT SUBSTITUTE Math.sin. The 45-degree rotations in the shipped data land
+ * on index 1023 of 8,192, which is 44.96 degrees, and the difference shows up
+ * in the fourth decimal of every vertex.
+ */
+function sinCos(v, table) {
+  const i = (v & 0x7ffc) >>> 2;
+  return [table[i], table[i + 2048]];
+}
+
+/**
+ * Apply a material record's scale, rotation and translation to one vertex.
+ *
+ * THE ROTATION SENSES ARE NOT UNIFORM. X and Y turn one way and Z the other:
+ *
+ *     x, y, z  <-  x*sx, y*sy, z*sz
+ *     y, z     <-  y*cx - z*sx,  y*sx + z*cx
+ *     x, z     <-  x*cy + z*sy, -x*sy + z*cy
+ *     x, y     <-  x*cz + y*sz, -x*sz + y*cz
+ *
+ * Solved from the data rather than read off, by recovering the 3x3 from a
+ * node's raw and built corners and then searching the six axis orders against
+ * both signs per axis. Only one of the 96 combinations fits.
+ *
+ * THE TRANSLATION IS (+tx, -ty, -tz), which is the other half of the same
+ * handedness and is why a node with no rotation at all can still come out
+ * wrong: three of the failures that led here had an identity rotation and a
+ * pure translation, off by exactly twice the offset in y and z.
+ *
+ * ONE STORE, NOT FIVE. The arithmetic runs in double and only the result is
+ * rounded through `stfs`. Truncating after each stage instead — which is what
+ * a pass-per-transform reading would do — leaves 74 of 76 nodes exact and two
+ * out by 1.5e-5, so the wrong answer here is very nearly the right one.
+ */
+export function transformVertex(v, rec, table) {
+  let [x, y, z] = v;
+  x *= rec.scale[0]; y *= rec.scale[1]; z *= rec.scale[2];
+  const [sx, cx] = sinCos(rec.rotate[0], table);
+  const [sy, cy] = sinCos(rec.rotate[1], table);
+  const [sz, cz] = sinCos(rec.rotate[2], table);
+  if (rec.rotate[0]) { const Y = y * cx - z * sx; z = y * sx + z * cx; y = Y; }
+  if (rec.rotate[1]) { const X = x * cy + z * sy; z = -x * sy + z * cy; x = X; }
+  if (rec.rotate[2]) { const X = x * cz + y * sz; y = -x * sz + y * cz; x = X; }
+  return [f32(x + rec.translate[0]), f32(y - rec.translate[1]),
+    f32(z - rec.translate[2])];
+}
+
+/**
+ * op0's generator — a subdivided box, or a plane when one extent is zero.
+ *
+ * THE HALF-EXTENT IS 128/255, NOT ONE HALF. `fnmadd f16, f26, f29, f31` with
+ * f29 = 128.0/255.0 puts the low corner at `-(extent * 128/255)` while the step
+ * is `extent / steps`, so the primitive is very slightly off centre — a 256
+ * unit plane runs from -128.502 to 127.498. Using 0.5 puts every vertex within
+ * half a unit of the right place, which no eyeball would catch.
+ *
+ * THE ACCUMULATOR STAYS DOUBLE. `stfs` rounds on the way to memory and the
+ * running sum in the register does not, so `x += dx` must not be truncated per
+ * step. Doing so leaves the first vertex of every node exactly right and the
+ * rest one ulp out, which reads as a rounding-mode problem rather than as the
+ * structural one it is.
+ *
+ * The box is a front plane, then one ring per interior z layer — the interior
+ * of each layer is skipped, which is what makes it a surface rather than a
+ * solid — and then a back plane. That gives `2(pq+qr+rp) + 2` vertices.
+ */
+export function buildOp0(node, table) {
+  const [a, b, d] = node.extent;
+  const [s0, s1, s2] = node.steps;
+  const x0 = -(a * HALFISH), y0 = -(b * HALFISH), z0 = -(d * HALFISH);
+  const dx = a / s0, dy = b / s1, dz = d / s2;
+  const rec = node.records[0];
+  const out = [];
+  const V = (x, y, z) => out.push(rec
+    ? transformVertex([f32(x), f32(y), f32(z)], rec, table)
+    : [f32(x), f32(y), f32(z)]);
+  const plane = (z) => {
+    let y = y0;
+    for (let j = 0; j <= s1; j++) {
+      let x = x0;
+      for (let i = 0; i <= s0; i++) { V(x, y, z); x += dx; }
+      y += dy;
+    }
+  };
+
+  if (node.mode === 1) {
+    let y = y0;
+    for (let j = 0; j <= s1; j++) {
+      let z = z0;
+      for (let k = 0; k <= s2; k++) { V(x0, y, z); z += dz; }
+      y += dy;
+    }
+  } else if (node.mode === 2) {
+    let z = z0;
+    for (let k = 0; k <= s2; k++) {
+      let x = x0;
+      for (let i = 0; i <= s0; i++) { V(x, y0, z); x += dx; }
+      z += dz;
+    }
+  } else {
+    plane(z0);
+    if (node.mode === 0) {
+      let z = z0 + dz;
+      for (let layer = s2 - 1; layer > 0; layer--) {
+        let y = y0;
+        for (let j = 0; j <= s1; j++) {
+          let x = x0;
+          for (let i = 0; i <= s0; i++) {
+            const interior = (i !== 0 && i !== s0) && (j !== 0 && j !== s1);
+            if (!interior) V(x, y, z);
+            x += dx;
+          }
+          y += dy;
+        }
+        z += dz;
+      }
+      plane(z);
+    }
+  }
+  return out;
+}
+
 /**
  * Decode one geometry program.
  *

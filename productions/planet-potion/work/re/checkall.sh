@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Twenty-eight checks accumulated over the work and there is no point in
-# remembering twenty-eight invocations. Each passes or names what drifted; none of them
+# Twenty-nine checks accumulated over the work and there is no point in
+# remembering twenty-nine invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -205,6 +205,12 @@ run "pass3check — the publish pass and the mesh vertex transform" \
 # because seg3 is not part of the exported dataset.
 run "geocheck — the geometry stream decodes without running the program" \
   node "$HERE/geocheck.mjs" "$FLAT" "$HERE/out/geo.json"
+
+# And the other half: where each vertex actually IS. Only op0's box and plane
+# generator is ported; op3's clone and op4's spline sweep are named by vertex
+# count in the output rather than skipped quietly.
+run "geovertcheck — op0's generator, vertex positions bit for bit" \
+  node "$HERE/geovertcheck.mjs" "$FLAT" "$HERE/out/geo.json"
 
 # Every Warp3D name in PORT_SPEC rests on this ordering, and it was measured
 # once and written up as prose. Re-derives it from the shipped libraries.
