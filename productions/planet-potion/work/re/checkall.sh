@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Twenty-two checks accumulated over the work and there is no point in
-# remembering twenty-two invocations. Each passes or names what drifted; none of them
+# Twenty-three checks accumulated over the work and there is no point in
+# remembering twenty-three invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
@@ -163,6 +163,12 @@ fi
 # which a different tool produced by a different walk. 77 = skip without it.
 run "arenacheck — the structural export, and scenes.json agreeing with it" \
   node "$HERE/arenacheck.mjs" "$HERE/out/arena.json" "$DATA/scenes.json"
+
+# The per-stage recorded/computed switch: that it resolves, that it REFUSES a
+# side that does not exist rather than substituting one, and that it reaches the
+# page. Needs no dataset argument — it drives web/ itself.
+run "stagecheck — the pipeline switch, and the adapter reporting it" \
+  node "$HERE/stagecheck.mjs"
 
 # Every Warp3D name in PORT_SPEC rests on this ordering, and it was measured
 # once and written up as prose. Re-derives it from the shipped libraries.

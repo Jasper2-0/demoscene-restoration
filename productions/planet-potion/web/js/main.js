@@ -10,6 +10,9 @@
 //   ?scene=N&t=M     one recorded frame, deterministically
 //   ?inspect=1       install window.__demo and draw nothing on its own
 //   ?octave=N        transpose the soundtrack, to settle the pitch question by ear
+//   ?<stage>=computed|recorded   pick a side per pipeline stage — see stages.js
+//                    for the list. Asking for a side that does not exist is an
+//                    error on the status line, not a silent fallback.
 //
 // AUDIO is the one subsystem that is ported rather than recorded, so "Start
 // with sound" plays the real soundtrack: dbm.js reads the module the softsynth
@@ -24,10 +27,11 @@
 // stills step in time with the music because the engine does not exist yet.
 
 import { Warp3D, SCREEN_W, SCREEN_H } from './warp3d.js';
-import { buildTextures } from './textures.js';
+import { buildTextures, loadTextures } from './textures.js';
 import { parseDBM } from './dbm.js';
 import { render } from './dbmplayer.js';
 import { generateModule } from './synth.js';
+import { resolveStages, provenance } from './stages.js';
 
 const canvas = document.getElementById('screen');
 const statusEl = document.getElementById('status');
@@ -72,11 +76,13 @@ const loadSegments = async () => (segments ??= {
  * when the part changes. Uploading is cheap; regenerating is not, so the pixels
  * are built once and kept.
  */
-function textureBinder(w3d, programs, kernels) {
-  const { byPart, failures } = buildTextures(programs, kernels);
+async function textureBinder(w3d, programs, kernels, side) {
+  const { byPart, failures } = side === 'recorded'
+    ? await loadTextures(programs)
+    : buildTextures(programs, kernels);
   let live = null;
   return {
-    failures,
+    failures, side,
     counts: Object.fromEntries(Object.entries(byPart).map(([k, v]) => [k, v.length])),
     use(part) {
       if (part === live || !byPart[part]) return;
@@ -98,6 +104,11 @@ async function main() {
   // ?texenv=0|1|2 — replace, modulate, decal. Undecided; see warp3d.js.
   if (params.has('texenv')) w3d.texEnv = Number(params.get('texenv'));
 
+  // Which side of each pipeline stage to run. Reported through __demo.state()
+  // whatever happens, so an inspector sweep records the provenance of the
+  // picture it is looking at rather than assuming it.
+  const { choice: stages, errors: stageErrors } = resolveStages(params);
+
   let dataset = null;
   let textures = null;
   try {
@@ -110,7 +121,7 @@ async function main() {
   try {
     const [programs, kernels] = await Promise.all([
       loadJSON('./data/tex_programs.json'), loadJSON('./data/tex_kernels.json')]);
-    textures = textureBinder(w3d, programs, kernels);
+    textures = await textureBinder(w3d, programs, kernels, stages.textures);
   } catch {
     // Without the bytecode there is nothing to generate FROM. The draw stream
     // still replays, untextured, which is worth saying rather than showing.
@@ -251,11 +262,18 @@ async function main() {
           captureTime: ((s.startTick ?? 0) + f.t) / 50, _scene: i, _frame: k,
         }))),
       render: async (e) => renderRecorded(e._scene ?? 0, e._frame ?? 0),
+      // EVERY STAGE, not two of them. An inspector comparing a frame against
+      // the capture needs to know which halves of the pipeline produced it,
+      // and `draws: 'recorded'` said that for one stage and implied nothing
+      // about the other six.
       state: () => ({
-        draws: 'recorded',
-        textures: textures
-          ? `generated from bytecode (${JSON.stringify(textures.counts)})`
-          : 'absent',
+        ...provenance(stages, {
+          textures: textures
+            ? `${JSON.stringify(textures.counts)}` +
+              (textures.failures.length ? `, ${textures.failures.length} failed` : '')
+            : 'absent',
+        }),
+        stageErrors,
       }),
     };
     window.__demoReady = true;
@@ -275,10 +293,16 @@ async function main() {
   }
 
   const tex = textures
-    ? `textures generated from bytecode (${Object.entries(textures.counts)
+    ? `textures ${textures.side === 'recorded' ? 'loaded from the exported PNGs'
+      : 'generated from bytecode'} (${Object.entries(textures.counts)
       .map(([k, v]) => `${k}:${v}`).join(', ')}${textures.failures.length
       ? `, ${textures.failures.length} failed` : ''})`
     : 'no texture bytecode present';
+
+  // A rejected stage request is said out loud. The page still renders — with
+  // the side that exists — but it must not look as though it did what it was
+  // asked, which is the one failure mode a switch like this can introduce.
+  if (stageErrors.length) say(`stage request refused: ${stageErrors.join('; ')}`);
 
   if (startEl) {
     startEl.hidden = false;

@@ -68,3 +68,49 @@ export function buildTextures(programsDoc, kernelsDoc) {
   }
   return { byPart, failures, size: SIZE };
 }
+
+/**
+ * The same 69 textures, LOADED from the exported PNGs instead of generated.
+ *
+ * These are the oracle `work/re/texvmdiff.mjs` holds the VM to, so their colour
+ * is the original's own. Having them selectable is what makes the texture stage
+ * a real switch rather than a label: a wrong-looking frame can be shown with
+ * recorded textures and computed raster, which says whether the fault is in the
+ * VM or below it.
+ *
+ * THEY CARRY NO ALPHA. `rendertex.py` writes PNG colour type 2 — it takes the
+ * ARGB surface and emits only R, G and B — so this side comes back opaque
+ * everywhere while the VM's textures have a real alpha channel, and the shim
+ * blends on `SRC_ALPHA`. The two therefore render DIFFERENTLY on any scene that
+ * uses transparency, and that is the dataset's limit rather than a fault in
+ * either path. It also means the texture VM's alpha has never been checked
+ * against anything: `texvmdiff` compares three channels of four, and says so.
+ *
+ * Same shape as `buildTextures` so the two are interchangeable, and the same
+ * failure convention — a PNG that will not load leaves null in its slot and a
+ * line in `failures` rather than taking the page down.
+ */
+export async function loadTextures(programsDoc) {
+  const byPart = {};
+  const failures = [];
+  await Promise.all(programsDoc.programs.map(async (p) => {
+    const list = byPart[p.part] ?? (byPart[p.part] = []);
+    const name = `${p.part}_${String(p.index).padStart(2, '0')}.png`;
+    try {
+      const r = await fetch(`./data/textures/${name}`);
+      if (!r.ok) throw new Error(`${r.status}`);
+      const bmp = await createImageBitmap(await r.blob());
+      const c = new OffscreenCanvas(SIZE, SIZE);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(bmp, 0, 0);
+      // An RGB PNG decodes with alpha 255 everywhere, so the canvas round trip
+      // is exact — there is no premultiplication to lose here, precisely
+      // because there is no alpha to premultiply by.
+      list[p.index] = new Uint8Array(g.getImageData(0, 0, SIZE, SIZE).data.buffer);
+    } catch (e) {
+      list[p.index] = null;
+      failures.push(`${name}: ${e.message}`);
+    }
+  }));
+  return { byPart, failures, size: SIZE, noAlpha: true };
+}
