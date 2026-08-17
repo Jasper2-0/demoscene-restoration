@@ -45,11 +45,12 @@ const flag = (name, def) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : def;
 };
-const WITH_VALUES = ['--min', '--only'];
+const WITH_VALUES = ['--min', '--only', '--audio'];
 const positional = argv.filter((a, i) => !a.startsWith('--') && !WITH_VALUES.includes(argv[i - 1]));
 const flat = positional[0] ?? path.join(HERE, 'flat');
 const refdir = positional[1] ?? path.join(HERE, 'out', 'synthref');
 const minExact = Number(flag('--min', '0'));
+const audioFile = flag('--audio', path.join(HERE, 'out', 'audio.json'));
 const only = flag('--only', null);
 
 const indexFile = path.join(refdir, 'index.json');
@@ -71,6 +72,22 @@ const seg0 = new Uint8Array(fs.readFileSync(seg0File));
 const seg4 = new Uint8Array(fs.readFileSync(seg4File));
 const tables = buildAll();
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
+const audio = fs.existsSync(audioFile)
+  ? JSON.parse(fs.readFileSync(audioFile, 'utf8')) : null;
+let rc = 0;
+
+/** (id, payload offset, size) per chunk; the DBM0 header is 8 bytes. */
+function chunksOf(mod) {
+  const dv = new DataView(mod.buffer, mod.byteOffset, mod.byteLength);
+  const out = [];
+  for (let p = 8; p + 8 <= mod.length;) {
+    const id = String.fromCharCode(...mod.subarray(p, p + 4));
+    const size = dv.getUint32(p + 4, false);
+    out.push([id, p + 8, size]);
+    p += 8 + size + (size & 1);
+  }
+  return out;
+}
 
 /** First differing byte, or -1. */
 function firstDiff(a, b) {
@@ -161,6 +178,29 @@ for (const [part, spec] of Object.entries(index.parts)) {
   const okAll = got === spec.moduleSha256;
   console.log(`  module ${mod.length} B  sha256 ${got.slice(0, 16)}…  ` +
     `${okAll ? 'MATCHES' : 'differs from'} the reference`);
+  if (!okAll) rc = 1;
+
+  // PORT_SPEC §8a's acceptance test, which `synthhash.py` wrote and this has
+  // no other reason to agree with: the same module broken down per chunk. It
+  // adds localisation rather than confidence — "SMPL differs" instead of "the
+  // module differs" — and it is the artefact the spec names, so the check that
+  // claims the softsynth is done should be the one that reads it.
+  if (audio?.parts?.[part]) {
+    const want = audio.parts[part];
+    if (want.sha256 !== got) {
+      console.log(`  audio.json disagrees: expected ${want.sha256.slice(0, 16)}…`);
+      rc = 1;
+    }
+    let bad = 0;
+    for (const [id, at, size] of chunksOf(mod)) {
+      const w = want.chunks?.[id];
+      if (!w) continue;
+      const d = sha(mod.subarray(at, at + size));
+      if (d !== w.sha256) { console.log(`  chunk ${id} differs from audio.json`); bad++; }
+    }
+    console.log(`  audio.json: ${bad ? `${bad} chunk(s) differ` : 'every chunk matches'}`);
+    if (bad) rc = 1;
+  }
   if (!okAll && filled === producers.length) {
     console.log('  ...and everything was filled from the reference, so the HARNESS is wrong,');
     console.log('     not the port. Check header() and the sample framing first.');
@@ -173,6 +213,10 @@ for (const [routine, s] of [...byRoutine].sort()) {
   console.log(`  ${routine}  ${s.exact}/${s.total}`);
 }
 
+if (rc) {
+  console.log('\nthe assembled module does not match its reference');
+  process.exit(1);
+}
 if (totalExact < minExact) {
   console.log(`\nREGRESSION: ${totalExact} exact, ratchet is ${minExact}`);
   process.exit(1);

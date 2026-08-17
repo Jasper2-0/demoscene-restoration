@@ -1651,7 +1651,7 @@ export function gen_10008568(c) {
   let f19 = c.k(0x2afa);
   let f20 = c.f20, f25 = c.f25, f27 = c.f27;
   let f6 = c.f6, f7 = c.f7, f8 = c.f8, f11 = c.f11;
-  let f13 = c.f13, f14 = c.f14, f15 = c.f15, f22 = c.f22;
+  let f13 = c.f13, f14 = c.f14, f15 = c.f15, f22 = c.f22, f4 = c.f4;
   const wrap = c.k(0x2e52), gate = c.k(0x2e56);
   const upper = fmadd(gate, c.k(0x2bd6), gate);
 
@@ -1675,7 +1675,7 @@ export function gen_10008568(c) {
 
     let f3 = c.k(0x2bfa) * (f21 + f28 + f26);
     const cut = f19 * c.k(0x2c16);
-    const f4 = cut * c.k(0x2d56) - fmadd(cut * cut, c.k(0x2d22), c.f30);
+    f4 = cut * c.k(0x2d56) - fmadd(cut * cut, c.k(0x2d22), c.f30);
     const f5 = fmadd(f4, c.k(0x2bd6), c.k(0x2bd6));
     const f2 = c.exp(fnmsub(f5, c.k(0x2d16), c.k(0x2d16))) * c.k(0x2c4a);
 
@@ -1691,6 +1691,7 @@ export function gen_10008568(c) {
     f15 = f3; f14 = f8; f13 = f11; f22 = f7;
     f6 = f6 - (f6 * f6 * f6) / c.k(0x2d72);
     c.f29 = f6 * f12 * c.k(0x2df2);
+    c.f4 = f4;
   } while (c.emit());
 }
 
@@ -1785,9 +1786,10 @@ export function gen_10008880(c) {
     }
 
     c.f29 = f27 * ee;
+    c.f4 = ee;
     if (r10 !== 0) c.f29 = f5 * ee;
-    if (r10 === 2) c.f29 = f5 * c.k(0x2dd2);
-    if (r10 === 3) c.f29 = f26 * c.k(0x2d1a);
+    if (r10 === 2) { c.f4 = c.k(0x2dd2); c.f29 = f5 * c.f4; }
+    if (r10 === 3) { c.f4 = c.k(0x2d1a); c.f29 = f26 * c.f4; }
   } while (c.emit());
 }
 
@@ -1980,9 +1982,420 @@ export function gen_10007860(c) {
   smoothPass(c, start, 0x26ac, (v) => v);
 }
 
+/**
+ * `0x100070b0` — 82,688 frames in 32 steps of 2,584, one call in part three.
+ *
+ * Three decaying ramps reset on their own phase wraps — a three-oscillator
+ * sawtooth stack — into a two-pole filter whose coefficient is the product of a
+ * per-step amplitude byte and `f4`, itself under the three-state envelope. Its
+ * three tables are hardcoded rather than taken from the script.
+ *
+ * Its `r15 == 2` branch reads BOTH its coefficients with `lfd` across pairs of
+ * float32 constants, the same mistake `0x10009aa4` makes once. The values are
+ * meaningless as doubles and the multiplications they drive are effectively
+ * annihilations; reproduced because the reference contains them.
+ */
+export function gen_100070b0(c) {
+  const r21 = SEG0 + R2 + 0x360a, r25 = SEG0 + R2 + 0x35ca, r24 = SEG0 + R2 + 0x35ea;
+  c.r18 = 0xa18;
+  c.startSample(0xa18 * 0x20);
+  let f28 = c.f30, f27 = c.f30, f19 = c.f30, f4 = c.k(0x2d2a);
+  let f7 = c.f7, f11 = c.f11, f12 = c.f12, f13 = c.f13, f14 = c.f14;
+  let f20 = c.f20, f21 = c.f21, f22 = c.f22, f23 = c.f23, f24 = c.f24;
+  let f25 = c.f25, f26 = c.f26;
+  do {
+    const f8 = c.u8(r21 + c.r16) * c.k(0x2afa);
+    const decay = c.k(0x2bba);
+    f28 = fnmsub(f28, decay, f28);
+    f27 = fnmsub(f27, decay, f27);
+    f19 = fnmsub(f19, decay, f19);
+    const f6 = (f28 + f27 + f19) * c.k(0x2c1a);
+
+    if (c.u8(r24 + c.r16) !== 0) f23 = fmadd(f24 - f23, c.k(0x2af2), f23);
+    else f23 = f24;
+    if (f23 !== f22) {
+      f21 = c.pow2(f23 - c.k(0x2bde));
+      f20 = c.pow2(f23 - c.k(0x2bce));
+      f11 = c.pow2(f23 - c.k(0x2bd6));
+    }
+    f22 = f23;
+    f26 += f21; f25 += f20; f7 += f11;
+    const w = c.k(0x2e0e);
+    if (f26 >= w) { f26 -= w; f28 = c.f30; }
+    if (f25 >= w) { f25 -= w; f27 = c.f30; }
+    const w2 = w + w;
+    if (f7 >= w2) { f7 -= w2; f19 = c.f30; }
+
+    if (c.r17 === 0) {
+      f24 = c.u8(r25 + c.r16) / c.k(0x2d82);
+      f4 = c.k(0x2d2a);
+      if (c.u8(r24 + c.r16) === 0) c.r15 = 0;
+    }
+
+    const f15 = f6 - fmadd(c.k(0x2b76), f14, f13);
+    f14 = fmadd(f15 * f8 * f4, f12, f14);
+    f13 = fmadd(f14 * f8 * f4, f12, f13);
+
+    if (c.r17 === 0x6a9 && c.u8(r24 + ((c.r16 + 1) & 0x1f)) !== 1) c.r15 = 2;
+    if (c.r15 === 0) {
+      f12 = fmadd(f12, c.k(0x2d0e), c.k(0x2afa));
+      if (f12 >= c.f30) { f12 = c.f30; c.r15 = 1; }
+    } else if (c.r15 === 1) {
+      f4 = f4 * c.k(0x2c7e);
+    } else if (c.r15 === 2) {
+      f4 = f4 * c.kd(0x2c7a);
+      f12 = f12 * c.kd(0x2c66);
+    }
+
+    c.f29 = f13 * (f12 * c.k(0x2df2));
+    c.f4 = f4;
+  } while (c.emit());
+}
+
+/**
+ * `0x10007284` — 82,688 frames in 32 steps of 2,584, one call in part three.
+ *
+ * Two ramps decaying by half every frame and stepping DOWN by 1.0 on each phase
+ * wrap rather than resetting — so they run away downward, which is what makes
+ * this the bass. `f7` and `f12` start at 2.0, not 1.0.
+ *
+ * Its three byte tables come from the script (`r21`, `r24`, `r25`), and it is
+ * the call that sets `r25` — the same register `0x1000742c` then reloads per
+ * call from its own table.
+ */
+export function gen_10007284(c) {
+  const { r21, r24, r25 } = c.g;
+  c.r18 = 0xa18;
+  c.startSample(0xa18 * 0x20);
+  let f28 = c.f30, f27 = c.f30;
+  let f7 = c.f30 + c.f30, f12 = c.f30 + c.f30;
+  let f16 = c.f16, f17 = c.f17, f20 = c.f20, f21 = c.f21;
+  let f22 = c.f22, f23 = c.f23, f24 = c.f24, f25 = c.f25, f26 = c.f26;
+  do {
+    const h = c.k(0x2bd6);
+    f28 = f28 - f28 * h;
+    f27 = f27 - f27 * h;
+    const f6 = f28 + f27;
+
+    if (c.u8(r24 + c.r16) !== 0) f23 = fmadd(f24 - f23, c.k(0x2ae6), f23);
+    else f23 = f24;
+    if (f23 !== f22) {
+      f21 = c.pow2(f23 - c.k(0x2bca));
+      f20 = c.pow2(f23 - c.k(0x2be2));
+    }
+    f22 = f23;
+    f26 += f21; f25 += f20;
+    const w = c.k(0x2df2);
+    if (f26 >= w) { f26 -= w; f28 -= c.f30; }
+    if (f25 >= w) { f25 -= w; f27 -= c.f30; }
+
+    if (c.r17 === 0) {
+      f24 = (c.u8(r25 + c.r16) + 0xc) / c.k(0x2d82);
+      if (c.u8(r24 + c.r16) === 0) c.r15 = 0;
+    }
+
+    const f8 = c.u8(r21 + c.r16) * c.k(0x2afa);
+    const f18 = f6 - c.k(0x2bea) * f17 - f16;
+    f17 = fmadd(f18 * f8, f12, f17);
+    f16 = fmadd(f17 * f8, f7, f16);
+
+    if (c.r17 === 0x384 && c.u8(r24 + ((c.r16 + 1) & 0x1f)) !== 1) c.r15 = 2;
+    if (c.r15 === 0) {
+      f12 = fmadd(f12, c.k(0x2d0e), c.k(0x2afa));
+      if (f12 >= c.f30) { f12 = c.f30; c.r15 = 1; }
+    } else if (c.r15 === 1) {
+      f12 = f12 * c.k(0x2c86);
+      f7 = f7 / c.k(0x2cc6);
+    } else {
+      // No cr2 guard here, unlike its siblings: anything that is not 0 or 1
+      // lands in this branch. r15 is only ever 0, 1 or 2, so it is the same
+      // thing — but it is written differently and worth not "fixing".
+      f12 = f12 * c.k(0x2c72);
+      f7 = f7 * c.k(0x2cc6);
+    }
+
+    c.f29 = c.k(0x2e12) * f12 * f16;
+    if (c.r17 === 0xa17) { f7 = c.f30; f27 = c.f30; }
+  } while (c.emit());
+}
+
+/**
+ * `0x10007a84` — 82,688 frames in 32 steps of 2,584, one call in part three.
+ *
+ * A single ramp under a soft-knee waveshaper: the filter's feedback term is
+ * passed through a piecewise-quadratic limiter — beyond ±`0x2b2a` the excess is
+ * doubled and squared back in, in one direction with `fmadd` and in the other
+ * with `fnmsub`. That is distortion written as arithmetic rather than as a
+ * table, and it is the only one in the synth.
+ *
+ * Its step table is read with `cmpwi r3, 1` and `cmpwi r3, 2` rather than
+ * against zero, so its flag byte carries three states where the other voices'
+ * carry two.
+ */
+export function gen_10007a84(c) {
+  const r25 = SEG0 + R2 + 0x36ca, r21 = SEG0 + R2 + 0x370a, r23 = SEG0 + R2 + 0x36ea;
+  c.r18 = 0xa18;
+  c.startSample(0xa18 * 0x20);
+  let f27 = c.f30, f7 = c.f30, f11 = c.f30;
+  const f19 = c.k(0x2b2a);
+  let f12 = c.k(0x2d36);
+  let f16 = c.f16, f17 = c.f17, f21 = c.f21;
+  let f22 = c.f22, f23 = c.f23, f24 = c.f24, f26 = c.f26;
+  do {
+    f27 = fnmsub(f27, c.k(0x2b62), f27);
+    if (f27 < -c.f30) f27 = c.f30;
+
+    f23 = fmadd(f24 - f23, c.k(0x2af2), f23);
+    if (f23 !== f22) f21 = c.pow2(f23 - c.k(0x2bd6));
+    f22 = f23;
+    f26 += f21;
+    const w = c.k(0x2df2);
+    if (f26 > w) { f26 -= w; f27 = c.f30; }
+
+    if (c.r17 === 0) {
+      f24 = c.u8(r25 + c.r16) / c.k(0x2d82);
+      if (c.u8(r23 + c.r16) === 1) c.r15 = 0;
+    }
+
+    const amp = c.u8(r21 + c.r16) * c.k(0x2afa);
+    const f8 = fmadd(c.k(0x2b4e), f12 * amp, amp);
+
+    // The soft knee, both sides.
+    let f0 = f19 * f17;
+    const knee = c.k(0x2b2a);
+    if (f0 > knee) {
+      const e = (f0 - knee) + (f0 - knee);
+      f0 = fmadd(e, e, f0);
+    } else if (f0 < -knee) {
+      const e = (f0 - -knee) + (f0 - -knee);
+      f0 = fnmsub(e, e, f0);
+    }
+
+    f0 = (f27 - (f0 + f16)) * f8;
+    f17 = fmadd(f0, f11, f17);
+    f16 = fmadd(f17 * f8, f7, f16);
+
+    if (c.r17 === 0x4e2 && c.u8(r23 + ((c.r16 + 1) & 0x1f)) !== 2) c.r15 = 2;
+    if (c.r15 === 0) {
+      f12 = fmadd(f12, c.k(0x2d0e), c.k(0x2afa));
+      if (f12 > c.f30) { f12 = c.f30; c.r15 = 1; }
+    } else if (c.r15 === 1) {
+      f12 = f12 * c.k(0x2c86);
+      f11 = f11 * c.k(0x2c8a);
+      f7 = f7 * c.k(0x2c92);
+    } else if (c.r15 === 2) {
+      f12 = f12 * c.k(0x2c9e);
+    }
+
+    c.f29 = f12 * c.k(0x2e06) * f16;
+    if (c.r17 >= c.r18 - 1) { f7 = c.f30; f11 = c.f30; }
+  } while (c.emit());
+}
+
+/**
+ * `0x10007c44` — 120,000 frames, one call in part three.
+ *
+ * Three pulse oscillators whose DUTY CYCLE is modulated: each compares its ramp
+ * against a threshold `f6` that is itself a sine of a slower ramp, so the pulse
+ * width breathes. Two integrators and a one-pole after them, and the final
+ * coefficient is another sine — five ramps of five different rates, and no
+ * tables at all.
+ */
+export function gen_10007c44(c) {
+  c.startSample(0x1d4c0);
+  let f28 = c.f30, f27 = c.f30, f21 = c.f30;
+  let f25 = c.k(0x2df2);
+  let f4 = c.f4, f11 = c.f11, f13 = c.f13, f14 = c.f14;
+  let f16 = c.f16, f17 = c.f17, f20 = c.f20, f23 = c.f23, f24 = c.f24, f26 = c.f26;
+  const w = c.k(0x2e0e);
+  do {
+    f20 += c.k(0x2aaa);
+    f24 += c.k(0x2aa2);
+    f23 += c.k(0x2aa6);
+    f4 += c.k(0x2a9e);
+
+    let f6 = fmadd(w, c.sin(f24) * c.k(0x2b96), c.k(0x2df2));
+    f26 += fmadd(c.sin(f24), c.k(0x2b1a), c.k(0x2d5e));
+    if (f26 > f6) f28 = -c.f30;
+    if (f26 > w) { f26 -= w; f28 = c.f30; }
+
+    f6 = fnmsub(w, c.sin(f23) * c.k(0x2b96), c.k(0x2df2));
+    f25 += fnmsub(c.sin(f23), c.k(0x2b1a), c.k(0x2d5e));
+    if (f25 > f6) f27 = -c.f30;
+    if (f25 > w) { f25 -= w; f27 = c.f30; }
+
+    f6 = fmadd(c.sin(f4) * c.k(0x2b96), c.k(0x2d0e), c.k(0x2bd6)) * w;
+    f11 += c.k(0x2d5e);
+    if (f11 > f6) f21 = -c.f30;
+    if (f11 > w) { f11 -= w; f21 = c.f30; }
+
+    f17 += (f28 - f27 + f21) - fmadd(c.k(0x2c06), f17, f16);
+    f16 = fmadd(f17, c.k(0x2bd6), f16);
+    f14 += f16 - fmadd(c.k(0x2c2a), f14, f13);
+    const kf = fmadd(c.sin(f20), c.k(0x2b3e), c.k(0x2b3e)) + c.k(0x2b76);
+    f13 = fmadd(f14, kf, f13);
+    c.f29 = c.k(0x2d9a) * f13;
+    c.f4 = f4;
+  } while (c.emit());
+}
+
+/**
+ * `0x10007ddc` — 120,000 frames, one call in part three.
+ *
+ * Three pulse oscillators whose duty cycles are all driven from ONE slow LFO
+ * in `f4`: `f6 = sin(f4) * k` widens the first, narrows the second by the same
+ * amount, and shifts the third — so the three pulses breathe against each
+ * other rather than independently.
+ *
+ * `f4` IS NOT CLEARED BY startSample and it is not local to this routine
+ * either: `0x10007c44`, the very next call in the script, reads it as its own
+ * LFO phase and never initialises it. The two samples are joined through a
+ * register.
+ */
+export function gen_10007ddc(c) {
+  c.startSample(0x1d4c0);
+  let f28 = c.f30, f27 = c.f30, f11 = c.f30;
+  let f4 = c.f4, f12 = c.f12, f13 = c.f13, f14 = c.f14;
+  let f16 = c.f16, f17 = c.f17, f25 = c.f25, f26 = c.f26;
+  const w = c.k(0x2e26), half = c.k(0x2bd6);
+  do {
+    f4 += c.k(0x2a9a);
+    f4 = fsel(f4 - c.k(0x2e5a), c.f31, f4);      // wrap a full turn to zero
+    const f6 = c.sin(f4) * c.k(0x2b66);
+
+    f26 += c.k(0x2d5a);
+    f25 += fmadd(c.k(0x2afa), c.sin(c.k(0x2d1e) * f4), c.k(0x2d5e));
+    f12 += fnmsub(c.k(0x2afa), c.sin(f4), c.k(0x2d5e));
+
+    if (f26 > (half + f6) * w) f28 = -c.f30;
+    if (f25 > (half - f6) * w) f27 = -c.f30;
+    if (f12 > fnmsub(f6, c.k(0x2d0e), half) * w) f11 = -c.f30;
+    if (f26 > w) { f26 -= w; f28 = c.f30; }
+    if (f25 > w) { f25 -= w; f27 = c.f30; }
+    if (f12 > w) { f12 -= w; f11 = c.f30; }
+
+    f17 += (f28 - f27 - f11) - fmadd(c.k(0x2bba), f17, f16);
+    f16 = fmadd(f17, c.k(0x2b06), f16);
+    f14 += f16 - fmadd(f14, c.k(0x2b76), f13);
+    f13 = fmadd(f14, c.k(0x2baa), f13);
+    c.f29 = c.k(0x2d9a) * f13;
+  } while (c.emit());
+  c.f4 = f4;
+}
+
+/** `fres` — the reciprocal ESTIMATE, which is a float32 divide. See texturevm.js. */
+const fres = (x) => Math.fround(1 / x);
+
+/**
+ * `0x10008044` — 201,600 frames in 32 steps of 6,300, one call in part one.
+ *
+ * The largest primitive at 251 instructions, and the only one that keeps its
+ * whole state in the scratch block rather than in registers: four oscillator
+ * phases at `0x20`, four signs at `0x10`, four outputs at `0x00`, two spare
+ * pitches at `0x48`, and four filter states at `0x38`. It runs out of registers
+ * because it is four oscillators into FOUR two-pole sections, each with its own
+ * coefficient — `f8`, `f7` and the two smoothed values at `0x50`/`0x54`, all
+ * derived from the same per-step amplitude byte on four different time
+ * constants.
+ *
+ * It is also the only primitive that uses `fres`. The phase increment divides
+ * by 128*pi, and it does so with the reciprocal ESTIMATE — which is a float32
+ * divide under this harness, settled by `fpest.py` and already relied on by the
+ * texture VM. A `double` divide here is a different number.
+ */
+export function gen_10008044(c) {
+  c.r18 = 0x189c;
+  c.startSample(0x31380);
+  const r7 = c.w(0x2f0a);
+  const base = (r7 - c.memBase) >> 2;
+  c.mem.fill(0, base, base + 0x1a);
+  const s = (o) => c.mem[base + (o >> 2)];
+  const setS = (o, v) => { c.mem[base + (o >> 2)] = f32(v); };
+
+  const r24 = SEG0 + R2 + 0x2f7a, r25 = SEG0 + R2 + 0x304a, r21 = SEG0 + R2 + 0x352a;
+  let f4 = c.k(0x2c1a), f8 = f4;
+  const half = c.k(0x2bd6);
+  let f7 = fmadd(f4, half, half);
+  setS(0x54, fnmsub(f4, half, half));
+  for (const o of [0x10, 0x14, 0x18, 0x1c]) setS(o, c.f30);
+  setS(0x50, c.f30 - f4);
+  let f12 = c.f30;
+  let f13 = c.f13, f14 = c.f14, f16 = c.f16, f17 = c.f17;
+  let f20 = c.f20, f21 = c.f21, f22 = c.f22, f23 = c.f23, f24 = c.f24;
+
+  do {
+    const glide = c.u8(r24 + c.r16) === 0 ? c.k(0x2ad2) : c.k(0x2afa);
+    f23 = fmadd(f24 - f23, glide, f23);
+    if (f23 !== f22) {
+      f21 = c.pow2(f23 - c.k(0x2b8a));
+      f20 = c.pow2(f23 - c.k(0x2b82));
+      setS(0x48, c.pow2(f23 - c.k(0x2b92)));
+      setS(0x4c, c.pow2(f23 - c.k(0x2b7e)));
+    }
+    f22 = f23;
+
+    const f3 = c.k(0x2e52);
+    const inv = fres(c.k(0x2dd2) * f3);
+    const rates = [f21, f20, s(0x48), s(0x4c)];
+    for (let i = 0; i < 4; i++) {
+      const ph = s(0x20 + i * 4);
+      setS(i * 4, c.sin(ph) * s(0x10 + i * 4));
+      let p = fmadd(rates[i], inv, ph);
+      p = fsel(p - f3, p - f3, p);
+      setS(0x20 + i * 4, p);
+      if (p > c.k(0x2e56)) {
+        if (p < f3 * c.k(0x2c1a)) setS(0x10 + i * 4, -c.f30);
+      } else setS(0x10 + i * 4, c.f30);
+    }
+
+    if (c.r17 === 0) {
+      f4 = c.u8(r21 + c.r16) * c.k(0x2afa);
+      f24 = (c.u8(r25 + c.r16) + 0xc) / c.k(0x2d82);
+      if (c.u8(r24 + c.r16) === 0) c.r15 = 0;
+    }
+
+    f8 = fmadd(f4 - f8, c.k(0x2aae), f8);
+    f7 = fmadd(fmadd(f4, half, half) - f7, c.k(0x2aaa), f7);
+    setS(0x50, fmadd((c.f30 - f4) - s(0x50), c.k(0x2aa2), s(0x50)));
+    setS(0x54, fmadd(c.k(0x2aaa), half - fmadd(f4, half, s(0x54)), s(0x54)));
+
+    const f2 = (s(0) + s(4) + s(8) + s(0xc)) * c.k(0x2b96);
+    f17 = fmadd(f2 - fmadd(half, f17, f16), f8, f17);
+    f16 = fmadd(f17, f8, f16);
+    f14 = fmadd(f2 - fmadd(half, f14, f13), f7, f14);
+    f13 = fmadd(f14, f7, f13);
+
+    for (const [ka, lo, hi, q] of [[0x2b56, 0x38, 0x40, 0x50], [0x2b96, 0x3c, 0x44, 0x54]]) {
+      const a0 = s(lo), b0 = s(hi), coef = s(q);
+      const a = fmadd(f2 - fmadd(c.k(ka), a0, b0), coef, a0);
+      setS(lo, a);
+      setS(hi, fmadd(a, coef, b0));
+    }
+
+    if (c.r17 === 0xd89 && c.u8(r24 + ((c.r16 + 1) & 0x1f)) !== 1) c.r15 = 2;
+    if (c.r15 === 0) {
+      f12 = fmadd(f12, c.k(0x2d0e), c.k(0x2afa));
+      if (f12 >= c.f30) { f12 = c.f30; c.r15 = 1; }
+    } else if (c.r15 === 2) {
+      f12 = f12 * c.k(0x2c4e);
+    }
+
+    const f3o = (((s(0x3c) - s(0x38)) - f14) - f17) * c.k(0x2db2) * f12;
+    const f2o = clampSym(f3o, c.k(0x2d5e));
+    c.f29 = fmadd(c.k(0x2be6), f3o, c.k(0x2d8a) * f2o);
+    c.f4 = f4;
+  } while (c.emit());
+}
+
 /** Address -> implementation. Everything absent is filled from the oracle. */
 export const PRIMITIVES = {
   0x10006fc0: gen_10006fc0,
+  0x10007ddc: gen_10007ddc,
+  0x10008044: gen_10008044,
+  0x10007a84: gen_10007a84,
+  0x10007c44: gen_10007c44,
+  0x100070b0: gen_100070b0,
+  0x10007284: gen_10007284,
   0x10007654: gen_10007654,
   0x10007860: gen_10007860,
   0x10008430: gen_10008430,
