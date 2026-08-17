@@ -9,9 +9,24 @@
 //   ?oracle=1        play recorded frames from data/draws.json
 //   ?scene=N&t=M     one recorded frame, deterministically
 //   ?inspect=1       install window.__demo and draw nothing on its own
+//   ?octave=N        transpose the soundtrack, to settle the pitch question by ear
+//
+// AUDIO is the one subsystem that is ported rather than recorded, so "Start
+// with sound" plays the real soundtrack: dbm.js reads the module the softsynth
+// built and dbmplayer.js sequences and mixes it, echo included. The visuals
+// follow the AUDIO CLOCK rather than requestAnimationFrame — METHOD.md §8 —
+// which is also the only clock that means anything here, since the show's
+// schedule is defined by effect-7 signals in the music.
+//
+// What that gets you is the intro at FIVE FRAMES PER SCENE. The recorded stream
+// samples each scene's own span five times; real playback of the 438-second
+// show would be 21,915 frames, and draws.json is already 19 MB for 140. The
+// stills step in time with the music because the engine does not exist yet.
 
 import { Warp3D, SCREEN_W, SCREEN_H } from './warp3d.js';
 import { buildTextures } from './textures.js';
+import { parseDBM } from './dbm.js';
+import { render } from './dbmplayer.js';
 
 const canvas = document.getElementById('screen');
 const statusEl = document.getElementById('status');
@@ -94,6 +109,113 @@ async function main() {
     return { ...info, slot: scene.slot, part: scene.part, t: frame.t };
   };
 
+  // --- the show, driven by the audio clock ---------------------------------
+  //
+  // The two modules are the softsynth's own output, exported by work/re/
+  // synthdump.py rather than generated here: §8b–8h of PORT_SPEC is the port
+  // of the 32 generator primitives, and it is not written yet.
+  const SHOW = [
+    { part: 'p1', file: './data/part1_full.dbm', label: 'part one' },
+    { part: 'p3', file: './data/part3.dbm', label: 'part three' },
+  ];
+  const TICKS_PER_SECOND = 50;
+
+  /** One part's scenes in schedule order, with the tick span each occupies. */
+  const spansFor = (part) => (dataset?.scenes ?? [])
+    .map((s, i) => ({
+      scene: i, frames: s.frames ?? [], slot: s.slot,
+      start: s.startTick ?? 0, end: (s.startTick ?? 0) + (s.durTicks ?? 0),
+      part: s.part,
+    }))
+    .filter((s) => s.part === part && s.frames.length)
+    .sort((a, b) => a.start - b.start);
+
+  /**
+   * The recorded frame to show at `tick`, or null to hold the previous one.
+   *
+   * Null happens in the sub-second tail after the last scene of a part, and
+   * would happen in any schedule slot that reuses an already-exported scene.
+   * Holding beats blanking: a black frame would read as a rendering failure.
+   */
+  const frameAt = (spans, tick) => {
+    for (const s of spans) {
+      if (tick < s.start) break;
+      if (tick < s.end) {
+        const local = tick - s.start;
+        let k = 0;
+        for (let j = 1; j < s.frames.length; j++) if (s.frames[j].t <= local) k = j;
+        return { scene: s.scene, frame: k, slot: s.slot };
+      }
+    }
+    return null;
+  };
+
+  /** Fetch, sequence and mix one part, then show it against its own clock. */
+  async function playPart(ctx, spec) {
+    say(`${spec.label}: reading the module …`);
+    const res = await fetch(spec.file);
+    if (!res.ok) {
+      throw new Error(`${spec.file}: ${res.status} — run work/re/synthdump.py `
+        + 'and copy mods/ into web/data/');
+    }
+    const mod = parseDBM(new Uint8Array(await res.arrayBuffer()));
+    say(`${spec.label}: mixing ${mod.info?.channels ?? '?'} channels …`);
+    // render() is synchronous and takes about a second for part one, so yield
+    // once and let the line above actually paint before the thread blocks.
+    await new Promise((r) => setTimeout(r, 0));
+    // ?octave=N transposes playback, for settling by ear the one thing the two
+    // reference implementations disagree about. dbplayer.library puts the
+    // instrument's own rate on note 0x60; libdigibooster3 puts it two octaves
+    // lower, so it plays this module two octaves higher than we do. The
+    // disassembly favours dbplayer and the correlation favours the oracle,
+    // which is a disagreement an ear can settle and a metric cannot.
+    const octaveShift = Number(params.get('octave') ?? 0) || 0;
+    const { pcm, sampleRate, seconds } = render(mod,
+      { sampleRate: ctx.sampleRate, octaveShift });
+
+    const frames = pcm.length / 2;
+    const buf = ctx.createBuffer(2, frames, sampleRate);
+    const [L, R] = [buf.getChannelData(0), buf.getChannelData(1)];
+    for (let i = 0; i < frames; i++) { L[i] = pcm[i * 2]; R[i] = pcm[i * 2 + 1]; }
+
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    const spans = spansFor(spec.part);
+    const t0 = ctx.currentTime + 0.06;   // a beat of slack so frame 0 is not late
+    src.start(t0);
+
+    await new Promise((done) => {
+      let shown = '';
+      const step = () => {
+        const elapsed = ctx.currentTime - t0;
+        if (elapsed >= seconds) { src.stop(); src.disconnect(); done(); return; }
+        if (elapsed >= 0) {
+          const hit = frameAt(spans, elapsed * TICKS_PER_SECOND);
+          const key = hit && `${hit.scene}:${hit.frame}`;
+          if (hit && key !== shown) {
+            shown = key;
+            const info = renderRecorded(hit.scene, hit.frame);
+            say(`${spec.label} ${hit.slot} — ${elapsed.toFixed(1)}s / `
+              + `${seconds.toFixed(0)}s, ${info?.objects ?? 0} draws`);
+          }
+        }
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+  }
+
+  // THE BUTTON IS HIDDEN EVERYWHERE IT CANNOT WORK, and these three modes are
+  // all such places: the inspector must draw only what it is asked to draw, and
+  // the single-frame modes render one still and stop, so starting five minutes
+  // of music over them would be a lie about what the page is doing. Until now
+  // the only line touching #start hid it on the DEFAULT path — the one mode
+  // where it now does something — leaving a control that promised sound and had
+  // no click handler at all visible in exactly the modes that render.
+  const soundless = params.has('inspect') || params.has('oracle') || params.has('scene');
+  if (startEl && soundless) startEl.hidden = true;
+
   if (params.has('inspect')) {
     // The shared inspector contract. Assign __demo LAST, then the ready flag.
     window.__demo = {
@@ -131,14 +253,36 @@ async function main() {
     return;
   }
 
-  if (startEl) startEl.hidden = true;
   const tex = textures
     ? `textures generated from bytecode (${Object.entries(textures.counts)
       .map(([k, v]) => `${k}:${v}`).join(', ')}${textures.failures.length
       ? `, ${textures.failures.length} failed` : ''})`
     : 'no texture bytecode present';
+
+  if (startEl) {
+    startEl.hidden = false;
+    // `once` matters: a second AudioContext would play the show over itself.
+    startEl.addEventListener('click', async () => {
+      startEl.hidden = true;
+      // The context has to be constructed inside the gesture, or the autoplay
+      // policy starts it suspended and the whole show plays to a muted output
+      // while the clock runs — silence that looks like a rendering bug.
+      const ctx = new AudioContext();
+      if (ctx.state === 'suspended') await ctx.resume();
+      try {
+        for (const spec of SHOW) await playPart(ctx, spec);
+        say('the show is over — reload to run it again');
+      } catch (e) {
+        say(`sound failed: ${e.message}`);
+      } finally {
+        ctx.close();
+      }
+    }, { once: true });
+  }
+
   say(`Warp3D shim ready (${SCREEN_W}x${SCREEN_H}); ${tex}. `
-    + 'No engine yet — add ?oracle=1 to replay the original’s recorded stream.');
+    + 'Press “Start with sound” for the real soundtrack with the recorded '
+    + 'frames locked to it, or add ?scene=N&t=M for one frame.');
 }
 
 main();
