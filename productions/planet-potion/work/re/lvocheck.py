@@ -68,9 +68,12 @@ BLR = 0x4E800020
 fails = 0
 
 
-def ok(cond, label, detail=''):
+def ok(cond, label, detail=None):
+    """`detail is None`, not a falsy test: a count of 0 is exactly the detail a
+    failing check most needs to print, and `if detail` swallows it."""
     global fails
-    print(f'{"ok  " if cond else "FAIL"}  {label}{"  " + str(detail) if detail else ""}')
+    print(f'{"ok  " if cond else "FAIL"}  {label}'
+          f'{"" if detail is None else "  " + str(detail)}')
     if not cond:
         fails += 1
 
@@ -148,6 +151,17 @@ def libraries_in(root):
     return sorted(found)
 
 
+def archives_in(root):
+    """A directory of the DISTRIBUTIONS, which is how they actually arrive.
+
+    Handed ~/Downloads this found nothing until it looked for .lha too: the
+    archives are the thing on disk, and expecting them unpacked made the check
+    skip in the one situation it was written for.
+    """
+    return sorted(os.path.join(root, f) for f in os.listdir(root)
+                  if f.lower().endswith('.lha') and 'warp3d' in f.lower())
+
+
 def main():
     args = sys.argv[1:]
     if not args:
@@ -157,11 +171,25 @@ def main():
               '*.library | dir>', file=sys.stderr)
         return ABSENT
 
-    libs, tmp = [], tempfile.mkdtemp(prefix='lvocheck-')
+    # Expand directories first: a directory may hold the distributions as
+    # archives, already-unpacked libraries, or both.
+    targets = []
     for a in args:
         if not os.path.exists(a):
             print(f'lvocheck: {a} does not exist', file=sys.stderr)
             return ABSENT
+        if os.path.isdir(a):
+            found = archives_in(a) + libraries_in(a)
+            if not found:
+                print(f'lvocheck: no Warp3D archives or .library files under {a}',
+                      file=sys.stderr)
+                return ABSENT
+            targets += found
+        else:
+            targets.append(a)
+
+    libs, tmp = [], tempfile.mkdtemp(prefix='lvocheck-')
+    for a in targets:
         if a.lower().endswith('.lha'):
             digest = hashlib.sha256(open(a, 'rb').read()).hexdigest()
             known = ARCHIVES.get(digest)
@@ -179,8 +207,6 @@ def main():
                       file=sys.stderr)
                 return ABSENT
             libs += libraries_in(d)
-        elif os.path.isdir(a):
-            libs += libraries_in(a)
         else:
             libs.append(a)
 
