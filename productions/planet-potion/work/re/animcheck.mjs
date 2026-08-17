@@ -61,10 +61,12 @@ const nodeCount = doc.frames[0]?.nodes.length ?? 0;
 console.log(`${doc.frames.length} frames, ${nodeCount} nodes with an animation object`);
 
 const NIL = 0xffffffff;
+let checked = 0;
 for (let n = 0; n < nodeCount; n++) {
   const node0 = doc.frames[0].nodes[n];
   const track = node0.track;
   if (!track?.length) continue;
+  checked++;
   const parented = node0.anim && node0.anim.parent !== NIL;
   console.log(`\nnode ${node0.addr}  ${track.length} keyframes`
     + `  ticks ${track.map((k) => k.tick).join(' ')}`
@@ -132,5 +134,20 @@ for (let n = 0; n < nodeCount; n++) {
   console.log(`    block -> channel+9 holds for ${offset.length}/15: ${offset.join(' ')}`);
 }
 
-console.log(bad === 0 ? '\nall checks passed' : `\n${bad} checks FAILED`);
+// A NODE LIST OF ZERO IS NOT A PASS. The node list comes from frames[0], and
+// animdump's default times start at t=0 — where the scene has not drawn yet, so
+// that frame is empty and every assertion below is skipped. This script then
+// printed "all checks passed" having checked nothing, which is the failure
+// METHOD.md names: a check that cannot exit non-zero is a report. Give animdump
+// times inside the scene's own span instead:
+//
+//   animdump.py flat/ <stream> out/anim.json 92 200 400
+if (checked === 0) {
+  console.log('\nFAIL  no node with a keyframe track was checked — frames[0] '
+    + `has ${nodeCount} nodes. Sample times inside the scene's span, not t=0.`);
+  process.exit(1);
+}
+
+console.log(bad === 0 ? `\nall checks passed  (${checked} tracked nodes)`
+  : `\n${bad} checks FAILED`);
 process.exit(bad ? 1 : 0);

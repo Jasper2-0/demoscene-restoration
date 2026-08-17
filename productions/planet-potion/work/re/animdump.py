@@ -32,6 +32,7 @@ Structures are PORT_SPEC section 3a:
       +0x70 u16 music trigger   +0x100 u32 prev
 """
 import json
+import os
 import struct
 import sys
 
@@ -95,6 +96,16 @@ def read_track(snap, head, arena, limit=512):
 
 def dump(flat, stream, times, txt_tab=0x2642, obj_tab=0x2706):
     drawlog.setflat(flat)
+    # The same two steps export.py takes before it runs anything, and this file
+    # took neither: the documented invocation died on a qemu SIGSEGV rather than
+    # writing anything. seg 5 is BSS, so a PowerPC-only harness starts with the
+    # four lookup tables all zero — the 68K bootstrap is what fills them — and
+    # `_calc_matrix` is entirely built on them. The glyph-scan patch is the
+    # original's own bug, which bites a harness that runs scenes out of order.
+    seg0 = next(f for f in os.listdir(flat) if f.startswith('seg0_'))
+    d0 = open(os.path.join(flat, seg0), 'rb').read()
+    H.fix_glyph_scan(d0)
+    H.preload_tables(d0)
     out, err = drawlog.run(stream, frames=times, txt_tab=txt_tab,
                            obj_tab=obj_tab, nodes=True)
     if not out:
