@@ -965,8 +965,188 @@ export function gen_1000742c(c) {
   c.g.r25 = r25;
 }
 
+/**
+ * `0x10008f38` and `0x10008f64` — 128,000 frames each, one call apiece.
+ *
+ * Two entry points into one body at `0x10008f8c`: filtered noise through the
+ * reverb. The LCG drives a two-pole resonator whose coefficient `f26` is itself
+ * swept, and `r10` chooses how — a plain decay, or (0x10008f38) a RISE clamped
+ * at 1.0 for the first 19,200 frames and a decay after, which opens the filter
+ * and then closes it. A cymbal against a hiss.
+ */
+function noiseBody(c, r10, f22, f23, f24, f25, f26) {
+  reverbInit(c, 0x10009f68);
+  c.srand();
+  const f12 = c.f30;
+  let f16 = c.f16, f17 = c.f17;
+  do {
+    let f28 = c.rand() * f22;
+    if (r10 === 0) {
+      f26 = f26 * c.k(0x2cc2);
+    } else if (c.r20 < 0x4b00) {
+      f26 = f26 * c.k(0x2cfa);
+      f26 = fsel(c.f30 - f26, f26, c.f30);       // min against 1.0
+    } else {
+      f26 = f26 * c.k(0x2cbe);
+    }
+    f28 = fnmsub(f23, f17, f28);
+    f28 = fnmsub(f16, f24, f28);
+    f17 = fmadd(f28, f26, f17);
+    f16 = fmadd(f17, f26, f16);
+    const f9 = (f17 - f16) * f25 * f12;
+    const f10 = c.k(0x2bea) * reverb(c, f9, c.k(0x2c4e));
+    c.f29 = fmsub(c.k(0x2bba), f9, f10);
+  } while (c.emit());
+}
+
+export function gen_10008f38(c) {
+  c.startSample(0x1f400);
+  noiseBody(c, 1, c.k(0x2a72), c.k(0x2bd6), c.k(0x2c1a), c.k(0x2d76), c.k(0x2afa));
+}
+
+export function gen_10008f64(c) {
+  c.startSample(0x1f400);
+  noiseBody(c, 0, c.k(0x2a76), c.k(0x2b76), c.k(0x2bd6), c.f30, c.f30);
+}
+
+/**
+ * `0x1000977c`, `0x100097d8` and `0x10009834` — 65,536 frames, one call each.
+ *
+ * Three entry points into one body at `0x10009890`. Two sine oscillators whose
+ * phases advance by a fixed increment derived through the 2^x table — so the
+ * two entry points that differ only in their `r2` constants are the same voice
+ * at different pitches — summed into a FOUR-POLE ladder filter. The cubic
+ * `f10 - k*f10^3` after it is the ladder's saturation.
+ *
+ * `r10` is not a pitch selector but a shape one: at 1 each oscillator is
+ * multiplied by a sign that flips with the phase, turning the sine pair into a
+ * harder waveform; at 3 the sweep coefficient changes.
+ *
+ * THE FIVE STACK SLOTS ARE STATE, not scratch. `stfs f0, 0x74(r1)` holds a sign
+ * that survives across frames, and the routine reserves 0x98 bytes for them —
+ * so they are locals here rather than anything to do with the register file.
+ * The stores TRUNCATE, like every other `stfs`.
+ */
+function ladderBody(c, r10, s70, s68, s6c) {
+  let f28 = c.f30, f24 = c.f30, f23 = c.f30, f20 = c.f30;
+  let s74 = c.f30, s78 = c.f30;
+  let f21 = c.f21, f22 = c.f22;
+  let f6 = c.f6, f7 = c.f7, f8 = c.f8, f9 = c.f9;
+  let f10 = c.f10, f11 = c.f11, f12 = c.f12, f13 = c.f13;
+  const wrap = c.k(0x2e52), gate = c.k(0x2e56);
+  do {
+    if (c.r20 > 0xc000) f20 = f20 * c.k(0x2c9a);
+
+    let f27 = f24 * c.sin(f22);
+    if (r10 === 1) f27 = f27 * s74;
+    f22 = f22 + s68;
+    if (f22 > wrap) f22 = f22 - wrap;
+    if (f22 > gate) {
+      if (f22 < c.k(0x2d42)) { f24 = -c.f30; s74 = f32(-s74); }
+    } else {
+      f24 = c.f30;
+    }
+
+    let f26 = f23 * c.sin(f21);
+    if (r10 === 1) f26 = f26 * s78;
+    f21 = f21 + s6c;
+    if (f21 > wrap) f21 = f21 - wrap;
+    if (f21 > gate) {
+      if (f21 < c.k(0x2d3e)) { f23 = -c.f30; s78 = f32(-s78); }
+    } else {
+      f23 = c.f30;
+    }
+
+    const f14 = (f27 + f26) * c.k(0x2bd6);
+    const f19 = c.k(0x2c12) * f28;
+    let f17 = fmsub(c.k(0x2d56), f19, c.k(0x2d22) * (f19 * f19));
+    f17 = f17 - c.f30;
+    const f18 = (f17 + c.f30) * c.k(0x2bd6);
+    const f15 = c.exp((c.f30 - f18) * c.k(0x2d16));
+    const f16 = s70 * f15;
+    f28 = f28 * (r10 === 3 ? c.k(0x2cbe) : c.k(0x2caa));
+
+    const f25 = fnmsub(f16, f10, f14);
+    f13 = fmadd(f25, f18, fmsub(f9, f18, f17 * f13));
+    f12 = fmadd(f13, f18, fmsub(f8, f18, f17 * f12));
+    f11 = fmadd(f12, f18, fmsub(f7, f18, f17 * f11));
+    f10 = fmadd(f11, f18, fmsub(f6, f18, f17 * f10));
+    f10 = f10 - f10 * f10 * f10 * c.k(0x2b5a);
+    f9 = f25; f8 = f13; f7 = f12; f6 = f11;
+
+    c.f29 = f10 * f20 * c.k(0x2e0e);
+  } while (c.emit());
+}
+
+/**
+ * The phase increment: 2^k, then divided down twice, then TRUNCATED.
+ *
+ * The `stfs f0, 0x68(r1)` that parks it on the stack is a truncating store, and
+ * the loop reads it back with `lfs` every frame. Leaving the value in double
+ * costs a fraction of an ulp per frame, which is invisible until it tips a
+ * phase-wrap comparison — these three samples then came out byte-exact for
+ * 2,294, 2,441 and 4,360 frames and diverged after.
+ */
+const ladderStep = (c, note, div) => f32(c.pow2(c.k(note)) / c.k(0x2e52) / c.k(div));
+
+export function gen_1000977c(c) {
+  c.startSample(0x10000);
+  ladderBody(c, 3, c.k(0x2c46),
+    ladderStep(c, 0x2c26, 0x2dd2), ladderStep(c, 0x2c32, 0x2dd2));
+}
+
+export function gen_100097d8(c) {
+  c.startSample(0x10000);
+  ladderBody(c, 0, c.k(0x2c46),
+    ladderStep(c, 0x2c22, 0x2dd2), ladderStep(c, 0x2c36, 0x2dd2));
+}
+
+export function gen_10009834(c) {
+  c.startSample(0x10000);
+  ladderBody(c, 1, c.k(0x2bfa),
+    ladderStep(c, 0x2c1e, 0x2db2), ladderStep(c, 0x2c3a, 0x2db2));
+}
+
+/**
+ * `0x10008e8c` — 32,768 frames, one call in part one.
+ *
+ * Two sines beating against each other, both sweeping: `f26` and `f27` are
+ * multiplied by constants every frame so their arguments run away, and one is
+ * read negated. Under it `f24` decays and `f12` decays with it until frame
+ * 0x2a30, after which only `f24` does — a two-stage fall.
+ *
+ * `f25` RISES rather than falls, clamped at 1.0 by an `fsel`: the attack.
+ */
+export function gen_10008e8c(c) {
+  c.startSample(0x8000);
+  let f12 = c.f30, f24 = c.f30;
+  let f25 = c.k(0x2afa), f26 = c.k(0x2dba), f27 = c.k(0x2dca);
+  do {
+    f25 = f25 * c.k(0x2d0e);
+    f25 = fsel(f25 - c.f30, c.f30, f25);          // min against 1.0
+    let f22 = c.sin(-f26) + c.sin(f27);
+    const f23 = f25 * f24;
+    f22 = f22 * c.k(0x2d4a) * f23 * f12;
+    f26 = f26 * c.k(0x2ca2);
+    f27 = f27 * c.k(0x2cce);
+    if (c.r20 < 0x2a30) {
+      f24 = f24 * c.k(0x2cae);
+      f12 = fnmsub(f12, c.k(0x2a8e), f12);
+    } else {
+      f24 = f24 * c.k(0x2cb2);
+    }
+    c.f29 = f22 * c.k(0x2db2);
+  } while (c.emit());
+}
+
 /** Address -> implementation. Everything absent is filled from the oracle. */
 export const PRIMITIVES = {
+  0x10008e8c: gen_10008e8c,
+  0x10008f38: gen_10008f38,
+  0x10008f64: gen_10008f64,
+  0x1000977c: gen_1000977c,
+  0x100097d8: gen_100097d8,
+  0x10009834: gen_10009834,
   0x10006f38: gen_10006f38,
   0x10006f4c: gen_10006f4c,
   0x10009020: gen_10009020,
