@@ -46,7 +46,12 @@ def run(prog):
     p=subprocess.run([H.qemu(),'/tmp/pp-obj.elf'],capture_output=True,timeout=90)
     return p.stdout,p.stderr.decode('utf8','replace')
 if __name__=='__main__':
-    d0=open(os.path.join(FLAT,'seg0_CODE_10000000.bin'),'rb').read()
+    try:
+        d0=open(os.path.join(FLAT,'seg0_CODE_10000000.bin'),'rb').read()
+    except FileNotFoundError:
+        print('rungeo: no segment dump under ' + repr(FLAT) + ' — see '
+              'speccheck.py for the rehydration steps.', file=sys.stderr)
+        sys.exit(77)
     ptr=[struct.unpack_from('>I',d0,R2+0x2706-BASE+i*4)[0] for i in range(28)]
     okc=0
     for i,prog in enumerate(ptr[:6]):

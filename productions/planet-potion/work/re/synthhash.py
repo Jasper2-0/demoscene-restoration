@@ -33,19 +33,32 @@ import runsynth
 SIZES = {'p1': 5_324_378, 'p3': 3_015_404}
 
 
+# Same convention as speccheck.py: 77 means the original is not unpacked here,
+# which is not the same news as a generator that produced the wrong bytes.
+ABSENT = 77
+
+
 def main():
     flat = sys.argv[1] if len(sys.argv) > 1 else 'flat'
     dest = sys.argv[2] if len(sys.argv) > 2 else None
     H.FLAT = flat
-    d0 = open(f'{flat}/seg0_CODE_10000000.bin', 'rb').read()
+    try:
+        d0 = open(f'{flat}/seg0_CODE_10000000.bin', 'rb').read()
+    except FileNotFoundError:
+        print(f'synthhash: no segment dump at {flat}/seg0_CODE_10000000.bin — '
+              'see speccheck.py for the rehydration steps.', file=sys.stderr)
+        sys.exit(ABSENT)
     H.preload_tables(d0)
     runsynth.setflat(flat)
 
     out = {}
+    bad = []
     for part, size in SIZES.items():
         raw = runsynth.module(part, n=size + 8)
         if not raw:
-            print(f'{part}: generator produced nothing'); continue
+            print(f'{part}: generator produced nothing')
+            bad.append(f'{part}: no output')
+            continue
         declared = struct.unpack_from('>I', raw, 0)[0]
         mod = raw[4:4 + declared]
         ver, cs = dbmpatt.chunks(raw)
@@ -60,6 +73,8 @@ def main():
         }
         print(f'{part}: {declared} bytes (expected {size}, '
               f'{"match" if declared == size else "MISMATCH"})')
+        if declared != size:
+            bad.append(f'{part}: declared {declared}, expected {size}')
         print(f'    sha256 {out[part]["sha256"]}')
         for c, v in chunks.items():
             print(f'      {c}  {v["bytes"]:9}  {v["sha256"][:16]}…')
@@ -72,6 +87,27 @@ def main():
                    'parts': out}, open(dest, 'w'), indent=2)
         print(f'wrote {dest}')
 
+    # A SIZE MISMATCH HAS TO BE A NON-ZERO EXIT, and this is not hypothetical.
+    # This script printed "MISMATCH", wrote the JSON anyway and exited 0 — and a
+    # dataset exported that way is exactly what shipped in web/data/audio.json,
+    # carrying `sizeMatches: false` against a generator that was correct. The
+    # constant here was wrong at the time, so the artifact recorded a red flag
+    # nobody had to act on because nothing failed.
+    #
+    # The JSON is still written on a mismatch, deliberately: the per-chunk
+    # digests are how a failure gets localised, and throwing them away to punish
+    # the failure would be the wrong trade. What changes is that a pipeline
+    # calling this stops.
+    if bad:
+        print('\nSIZE MISMATCH — the JSON was written for diagnosis, but this is '
+              'a failure:', file=sys.stderr)
+        for b in bad:
+            print(f'  {b}', file=sys.stderr)
+        print('  Check SIZES against the binary first: speccheck.py re-derives '
+              'part one\'s 5,324,378 from the lis/ori pair at r2+0x6b88.',
+              file=sys.stderr)
+    return 1 if bad else 0
+
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -51,7 +51,12 @@ def main():
     flat = sys.argv[1] if len(sys.argv) > 1 else 'flat'
     dest = sys.argv[2] if len(sys.argv) > 2 else None
     H.FLAT = flat
-    d0 = open(f'{flat}/seg0_CODE_10000000.bin', 'rb').read()
+    try:
+        d0 = open(f'{flat}/seg0_CODE_10000000.bin', 'rb').read()
+    except FileNotFoundError:
+        print('texprobe: no segment dump under ' + repr(flat) + ' — see '
+              'speccheck.py for the rehydration steps.', file=sys.stderr)
+        sys.exit(77)
     H.preload_tables(d0)
     cur = struct.unpack_from('>I', d0, R2 + G_CUR - BASE)[0]
     counts = [d0[G_OPCOUNT - BASE + i] for i in range(20)]

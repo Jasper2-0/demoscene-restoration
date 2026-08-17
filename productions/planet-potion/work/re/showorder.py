@@ -79,7 +79,12 @@ def scan(d0, lo, hi):
 
 def schedule(flat, mods=()):
     """-> {part: {matched, totalSeconds, totalRows, schedule[]}}"""
-    d0 = open(f'{flat}/seg0_CODE_10000000.bin', 'rb').read()
+    try:
+        d0 = open(f'{flat}/seg0_CODE_10000000.bin', 'rb').read()
+    except FileNotFoundError:
+        print(f'showorder: no segment dump under {flat!r} — see speccheck.py for '
+              'the rehydration steps.', file=sys.stderr)
+        sys.exit(77)
     runsynth.setflat(flat)
     out = {}
     for i, (part, lo, hi, txt, obj) in enumerate(PARTS):
