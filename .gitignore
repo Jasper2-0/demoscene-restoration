@@ -17,9 +17,36 @@ originals/*
 # -- per-production exclusions ---------------------------------------------
 # Planet Potion's web/data/ is the export of the original's own output — the
 # draw stream, the texture bytecode, the reference PNGs. Regenerate it with
-# `cd productions/planet-potion/work/re && python3 export.py flat/ out/`
-# and copy out/ across. Derived from the binary, so it does not live here.
+# `./ppcbox.sh python3 export.py flat/ out/` in work/re, then copying out/
+# across — the browser's rendercheck serves this directory, so an empty one
+# shows up as 404s on draws.json rather than as a missing dataset. The full
+# recipe is in checkall.sh. Derived from the binary, so it does not live here.
 productions/planet-potion/web/data/
+# The same rule one step upstream: `hunkload.py` writes the relocated segments
+# as raw .bin, so flat/ IS the original's code, and export.py / rendertex.py
+# write their derived trees beside it. checkall.sh already told readers flat/
+# was ignored; until now it was not, and the pre-commit guard only knew the
+# "MZ" header, which an Amiga hunk executable does not have.
+productions/planet-potion/work/re/flat/
+productions/planet-potion/work/re/out/
+productions/planet-potion/work/re/tex/
+# synthdump.py's two modules: 8.3 MB the softsynth builds from the binary, and
+# each one is under the pre-commit hook's 10 MB limit on its own.
+productions/planet-potion/work/re/mods/
+# libdigibooster3, fetched and built by oracle.sh. Third-party BSD-2 source
+# plus binaries; the script that reproduces it is what belongs in git.
+productions/planet-potion/work/re/oracle/
+# hunkload.py output for the dbplayer.library embedded in seg1 — relocated
+# segments of somebody else's copyrighted 68K, with no header for the
+# pre-commit guard to recognise. Rebuild it with
+# `python3 hunkload.py flat/seg1_DATA_10010000.bin dbp/`.
+productions/planet-potion/work/re/dbp/
+# And the unpack target itself. Energia's unpacked/ holds extracted ASSETS and
+# is committed file by file; planet-potion's holds nothing but the pristine
+# release — two executables and the release .txt — so it goes out whole, as
+# lapsus's does. Rehydrate: `node tools/fetch/originals.mjs planet-potion`
+# then `bsdtar -xf originals/potion/potionplanet_potion.lha -C <here>`.
+productions/planet-potion/work/unpacked/
 
 # Ghidra project databases embed the analyzed original binary.
 productions/*/work/ghidra/
