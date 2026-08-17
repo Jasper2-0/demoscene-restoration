@@ -57,6 +57,33 @@ so is every branch of the publish pass's type dispatch. What is verified against
 the running program is a smaller set than what is read, and the difference
 matters, so it is stated once here rather than inferred from the prose:
 
+**PASS 1 IS PORTED AND VERIFIED.** `web/js/anim.js` implements the whole of it —
+the loop-mode walk, all fifteen coefficient blocks, the four matrix builders and
+both concatenations — and `work/re/pass1check.mjs` runs it over all 29 scenes at
+three times each: **687 of 687 root evaluations reproduce all 24 channels
+exactly**, and the skip decision agrees on all 723 nodes. Seven of the eight loop
+modes occur in the shipped data and all seven are covered; only `0x20` restart
+never appears.
+
+Five things below were read wrongly before the port and are corrected in place:
+
+* **the five per-group skip flags do not exist.** `0x10004ff8` masks `flags2`
+  with `0xe0` four instructions after loading it, so the five later tests
+  (`andi. r3, r20, 1` through `0x10`) all test bits that are already zero.
+  Every group always runs, and both condition registers derived from them are
+  always false, so the matrix composition is unconditional too;
+* **the rotation angles are channels 9–11 and the translation 12–14**, not the
+  other way round. §3b's table below reads "+0x30 … +0x38 | channels 9–11", and
+  0x30/4 is 12;
+* **`anim+0x6c` is a SIGNED integer tick**, not a float. Origins are genuinely
+  negative — the overlay scene's is −50 — and reading it unsigned puts local
+  time at −4.29 billion, which clamps a colour channel to 1.0 instead of 0.0 on
+  90 of 105 mode-0 evaluations;
+* **`anim+0x70` is a byte**, read with `lbz`;
+* **`anim+0x01` is a transform mode** and mode 2 is exercised. It composes the
+  three rotations through `0x10005c10`, the LEFT-multiplying transpose of
+  `0x10005b34`, and part one's scene 14 has a camera node using it.
+
 | | |
 |---|---|
 | **verified** against the original's own answers, via `animdump.py` + `animcheck.mjs` | the keyframe search; `u = (t − t₀)·invSpan`; the polynomial `c0 + c1·u + c2·u³ − c3·u²` on a scene whose scale really moves; the end-of-track clamp; the publish of channels 21–23 as `cx`, `cy`, `scale`; §3b's `0x20\|0x10` copy and `0x80` add |

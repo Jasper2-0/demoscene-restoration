@@ -82,14 +82,20 @@ for (let n = 0; n < nodeCount; n++) {
     //
     // That last group is cx, cy and scale — which is why a child inherits its
     // parent's projection outright instead of scaling it.
-    const parent = doc.frames[0].nodes.find((x) => x.anim
+    // BY INDEX, not by position 0. This located the parent correctly and then
+    // read `nodes[0]` anyway, which happened to be the same node while the dump
+    // only contained the two that drew. animdump now walks the whole list from
+    // the head, so index 0 is the type-7 root and the shortcut compared the
+    // child against the wrong node — the check went red on a change that made
+    // the DUMP more complete, not the port less correct.
+    const pi = doc.frames[0].nodes.findIndex((x) => x.anim
       && parseInt(x.anim.addr, 16) === node0.anim.parent);
-    if (!parent) { console.log('    parent not in this dump'); continue; }
+    if (pi < 0) { console.log('    parent not in this dump'); continue; }
     const f3 = node0.anim.flags3;
     if ((f3 & 0x30) === 0x30) {
       let worst = 0;
       for (const f of doc.frames) {
-        const c = f.nodes[n].anim.channels, p = f.nodes[0].anim.channels;
+        const c = f.nodes[n].anim.channels, p = f.nodes[pi].anim.channels;
         for (let k = 21; k <= 23; k++) worst = Math.max(worst, Math.abs(c[k] - p[k]));
       }
       say(worst === 0, 'flags3 0x20|0x10 copies channels 21..23 from the parent',

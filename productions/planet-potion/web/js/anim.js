@@ -36,7 +36,8 @@
 // Dekker implementation, identical to the texture VM's — two copies of the one
 // primitive the whole port's exactness rests on, and two places to fix a bug in
 // one of them. One definition now, in fp.js, pinned by work/re/fpcheck.mjs.
-import { fma } from './fp.js';
+import { f32, fma } from './fp.js';
+import { fctiw } from './tables.js';
 
 export { fma };
 
@@ -124,4 +125,275 @@ export function clearColour(ch) {
     return n < 0 ? 0 : (n > 255 ? 255 : n);
   };
   return [b(ch[0]), b(ch[1]), b(ch[2])];
+}
+
+// --- pass 1, in full ---------------------------------------------------------
+//
+// `0x10004fdc`. Everything above this line was the innermost arithmetic; this is
+// the pass around it — the loop modes, the fifteen coefficient blocks, and the
+// four matrix builders they feed.
+//
+// TWO THINGS THE FLAGS BYTE DOES NOT DO, both of which a reader reconstructs
+// from the branch structure and both of which are wrong.
+//
+// `flags2` LOOKS like a loop mode in the top three bits and five per-group skip
+// flags in the bottom five: the pass tests bit 0 before the translation group,
+// bit 1 before the rotations, bit 2 before the colours, bit 3 and bit 4 before
+// the last two. But `0x10004ff8` is `andi. r20, r20, 0xe0` — the low bits are
+// masked off four instructions after the byte is loaded and before any of those
+// tests run. All five are testing bits that are always zero, so EVERY GROUP
+// ALWAYS RUNS and the two condition registers derived from them (`cr5`, `cr6`)
+// are always false, which makes the matrix composition unconditional too.
+//
+// The sampled scene confirms it from the data side: `flags2 = 0xa8` has bit 3
+// set, which would skip channels 19 and 20 — and those channels hold -0.0 in
+// the dump, not the +0.0 the identity builder would have left. They were
+// written by the evaluator.
+//
+// So the five tests are dead, and they are transcribed as unconditional rather
+// than reproduced as branches on a constant.
+
+/** `flags2 & 0xe0`. Eight modes; they differ only at the end of a track. */
+export const LOOP = {
+  CLAMP: 0x00, RESTART: 0x20, CLAMP_ALT: 0x40, MOD_TRACK: 0x60,
+  MOD_SPAN: 0x80, MOD_TWO_SPANS: 0xa0, SKIP: 0xc0, PINGPONG: 0xe0,
+};
+
+/**
+ * The fifteen coefficient blocks, grouped as the pass consumes them.
+ *
+ * `dst` is the byte offset into the channel block, so `dst/4` is the channel
+ * index. That numbering puts the ROTATION ANGLES at channels 9-11 and the
+ * TRANSLATION at 12-14 — PORT_SPEC §3b's table has those two swapped, giving
+ * "+0x30 … +0x38 | channels 9–11" where +0x30/4 is 12.
+ *
+ * Only the colour group clamps (`0x10005970` rather than `0x10005944`), which
+ * is why position and scale are free to leave [0,1].
+ */
+const GROUPS = [
+  { blocks: [0, 1, 2], dst: [0x30, 0x34, 0x38], clamp: false },   // translation
+  { blocks: [3, 4, 5], dst: [0x24, 0x28, 0x2c], clamp: false },   // Euler angles
+  { blocks: [6, 7, 8, 9], dst: [0x3c, 0x40, 0x44, 0x48], clamp: true },
+  { blocks: [10, 11], dst: [0x4c, 0x50], clamp: false },
+  { blocks: [12, 13, 14], dst: [0x54, 0x58, 0x5c], clamp: false }, // cx, cy, scale
+];
+
+/**
+ * The sine table as the builders index it: `fctiw(angle) & 0x7ffc` is a BYTE
+ * offset, and cosine is the same table read from `r28 + 0x2000`.
+ *
+ * Note there is no `slwi` here, unlike the synth's accessors in §8f — the angle
+ * value IS the byte offset, so a full turn is 0x8000 of whatever unit the
+ * keyframes are in rather than 2*pi.
+ */
+const angleIndex = (a) => (fctiw(a) & 0x7ffc) >>> 2;
+const sinOf = (sinus, a) => sinus[angleIndex(a)];
+const cosOf = (sinus, a) => sinus[angleIndex(a) + 0x800];
+
+/** A 3x4 as the channel block holds it: rows 0-8, translation 9-11. */
+const mat = (m00, m01, m02, m10, m11, m12, m20, m21, m22, tx, ty, tz) =>
+  [m00, m01, m02, m10, m11, m12, m20, m21, m22, tx, ty, tz];
+
+/** `0x100059b4`, `0x10005a08`, `0x10005a5c`, `0x10005ab0` — the four builders. */
+const rotY = (s, a) => mat(cosOf(s, a), 0, -sinOf(s, a), 0, 1, 0,
+  sinOf(s, a), 0, cosOf(s, a), 0, 0, 0);
+const rotX = (s, a) => mat(1, 0, 0, 0, cosOf(s, a), sinOf(s, a),
+  0, -sinOf(s, a), cosOf(s, a), 0, 0, 0);
+const rotZ = (s, a) => mat(cosOf(s, a), sinOf(s, a), 0, -sinOf(s, a), cosOf(s, a), 0,
+  0, 0, 1, 0, 0, 0);
+const translate = (x, y, z) => mat(1, 0, 0, 0, 1, 0, 0, 0, 1, x, y, z);
+
+/**
+ * `0x10005b34` — concatenate, `node = node x M`, row-vector convention.
+ *
+ * Each of the three rows is multiplied through M's 3x3 and its own translation
+ * component accumulates `row . M.t`. The first product of each column is a bare
+ * `fmul` and the next two are `fmadd`, so the rounding pattern is
+ * `fma(c, m, fma(b, m, a*m))` and not a sum of three products.
+ *
+ * Every result goes back through a `stfs`, so it truncates.
+ */
+function concat(ch, m) {
+  for (let r = 0; r < 3; r++) {
+    const a = ch[r * 3], b = ch[r * 3 + 1], c = ch[r * 3 + 2], tw = ch[12 + r];
+    const c0 = fma(c, m[6], fma(b, m[3], a * m[0]));
+    const c1 = fma(c, m[7], fma(b, m[4], a * m[1]));
+    const c2 = fma(c, m[8], fma(b, m[5], a * m[2]));
+    const t = fma(c, m[11], fma(b, m[10], fma(a, m[9], tw)));
+    ch[r * 3] = f32(c0); ch[r * 3 + 1] = f32(c1); ch[r * 3 + 2] = f32(c2);
+    ch[12 + r] = f32(t);
+  }
+}
+
+/**
+ * `0x10005c10` — the other one: LEFT-multiply, `node = M x node`.
+ *
+ * Where `0x10005b34` takes the node's ROWS through M, this takes its COLUMNS —
+ * `node[0x00]`, `node[0x0c]` and `node[0x18]` are loaded together, which is
+ * column zero — and the translation becomes `M.R . t + M.t` rather than
+ * `t . M`. The two routines are transposes of each other and compose on
+ * opposite sides.
+ *
+ * PORT_SPEC says this transform "has no example yet". It has one: transform
+ * mode 2 uses it, and part one's scene 14 has a camera node running it.
+ * Stubbing it out left that node with an unrotated matrix and eleven wrong
+ * channels at every sampled time while its raw evaluated channels were all
+ * correct — which is what a composition fault looks like as distinct from an
+ * evaluation one.
+ */
+function leftConcat(ch, m) {
+  for (let j = 0; j < 3; j++) {
+    const a = ch[j], b = ch[3 + j], c = ch[6 + j];
+    const r0 = fma(c, m[2], fma(b, m[1], a * m[0]));
+    const r1 = fma(c, m[5], fma(b, m[4], a * m[3]));
+    const r2 = fma(c, m[8], fma(b, m[7], a * m[6]));
+    ch[j] = f32(r0); ch[3 + j] = f32(r1); ch[6 + j] = f32(r2);
+  }
+  const a = ch[12], b = ch[13], c = ch[14];
+  const t0 = fma(c, m[2], fma(b, m[1], fma(a, m[0], m[9])));
+  const t1 = fma(c, m[5], fma(b, m[4], fma(a, m[3], m[10])));
+  const t2 = fma(c, m[8], fma(b, m[7], fma(a, m[6], m[11])));
+  ch[12] = f32(t0); ch[13] = f32(t1); ch[14] = f32(t2);
+}
+
+/** `0x10005ae8` — identity into the node, with the compose groups reset. */
+function identity(ch) {
+  ch.fill(0);
+  ch[0] = 1; ch[4] = 1; ch[8] = 1;
+  // +0x3c..+0x48: the multiply group's unit. +0x4c/+0x50: the add group's.
+  ch[15] = 1; ch[16] = 1; ch[17] = 1; ch[18] = 1;
+}
+
+/**
+ * The track walk, all eight loop modes. Returns the chosen keyframe and the
+ * local time to evaluate it at, or null when the node is not evaluated at all.
+ *
+ * `ticks` and `time` are the SAME quantity carried twice — the original keeps an
+ * integer copy in r11 for the tick comparisons and a float copy in f15 for the
+ * arithmetic, and every mode adjusts both. Keeping only one and converting
+ * works until a mode subtracts a span, after which the two drift.
+ */
+export function walkTrack(anim, keys, byAddr, ticks, time, musicSignal, now) {
+  const mode = anim.flags2 & 0xe0;
+  const head = byAddr.get(anim.track) ?? keys[0];
+  let key = head, r11 = ticks, f15 = time;
+  if (!key) return null;
+
+  for (;;) {
+    if (mode === LOOP.CLAMP) {
+      // THE TRIGGER IS CHECKED ONLY HERE, in mode 0 — beat sync and looping are
+      // alternatives, not layers.
+      if (musicSignal === anim.trigger) {
+        anim.origin = now;
+        r11 = 0; f15 = 0;
+      }
+      for (;;) {
+        const next = byAddr.get(key.next);
+        if (!next) return { key, time: key.t0 };          // clamp: u = 0
+        if (next.tick >= r11) return { key, time: f15 };
+        key = next;
+      }
+    }
+
+    // The track has not started: publish nothing and leave the children alone.
+    if (key.tick > r11) return null;
+    if (!byAddr.get(key.next)) return { key, time: f15 };
+
+    let atEnd = false;
+    for (;;) {
+      const next = byAddr.get(key.next);
+      if (!next) { atEnd = true; break; }
+      if (next.tick >= r11) return { key, time: f15 };
+      key = next;
+    }
+    if (!atEnd) continue;
+
+    if (mode === LOOP.RESTART) return { key: head, time: 0 };
+    if (mode === LOOP.CLAMP_ALT) return { key, time: key.t0 };
+    if (mode === LOOP.MOD_TRACK) {
+      r11 -= key.tick; f15 -= key.t0; key = head; continue;
+    }
+    if (mode === LOOP.MOD_SPAN || mode === LOOP.MOD_TWO_SPANS) {
+      const tick = key.tick, t0 = key.t0;
+      let back = byAddr.get(key.prev);
+      if (mode === LOOP.MOD_TWO_SPANS) back = byAddr.get(back?.prev);
+      if (!back) return null;
+      r11 -= tick - back.tick; f15 -= t0 - back.t0; key = back; continue;
+    }
+    if (mode === LOOP.PINGPONG) {
+      let tick = key.tick, t0 = key.t0;
+      r11 -= tick; f15 -= t0;
+      let k = byAddr.get(key.prev);
+      for (;;) {
+        if (!k) { key = head; break; }
+        const span = tick - k.tick, dspan = t0 - k.t0;
+        if (span >= r11) {
+          // REFLECT within this span (0x100051b8): the remaining time is
+          // measured backwards from the far end and added to this keyframe's
+          // origin, which is what turns the walk around instead of wrapping it.
+          return { key: k, time: k.t0 + (dspan - f15) };
+        }
+        r11 -= span; f15 -= dspan;
+        tick = k.tick; t0 = k.t0;
+        k = byAddr.get(k.prev);
+      }
+      continue;
+    }
+    return null;                                          // 0xc0 — skip
+  }
+}
+
+/**
+ * Pass 1 for one node. Returns the 24 evaluated channels, or null if the node
+ * was skipped — which is the `r26 = 0` the compose pass then reads back out of
+ * `anim+0x00`.
+ */
+export function evaluateNode(anim, keys, tick, musicSignal, sinus) {
+  const byAddr = new Map(keys.map((k) => [k.addr, k]));
+  const found = walkTrack(anim, keys, byAddr, tick - anim.origin,
+    tick - anim.origin, musicSignal, tick);
+  if (!found) return null;
+
+  const ch = new Float64Array(24);
+  identity(ch);
+
+  const { key } = found;
+  // NO TRUNCATION HERE. `f15 - t0` and `* invSpan` are register operations —
+  // there is no `stfs` between them, so they stay double. Rounding u to single
+  // left channel 10 two ulps out at two of three sampled times while every
+  // other channel was exact, which is what a too-early truncation looks like:
+  // it only shows on the one value large enough for the lost bits to matter.
+  const u = (found.time - key.t0) * key.invSpan;
+  const u2 = u * u, u3 = u2 * u;
+  const evalBlock = key.flags
+    ? (k) => fma(-u, k[3], k[0])
+    : (k) => fma(-u2, k[3], fma(k[2], u3, fma(k[1], u, k[0])));
+  const clampTo01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+  for (const g of GROUPS) {
+    g.blocks.forEach((b, i) => {
+      const v = evalBlock(key.blocks[b]);
+      ch[g.dst[i] >> 2] = f32(g.clamp ? clampTo01(v) : v);
+    });
+  }
+
+  // The builders read the channels back out, so they see the truncated values.
+  const T = translate(ch[12], ch[13], ch[14]);
+  const RX = rotX(sinus, ch[9]), RY = rotY(sinus, ch[10]), RZ = rotZ(sinus, ch[11]);
+  switch (anim.mode) {
+    case 1:                       // translate only
+      concat(ch, T);
+      break;
+    case 2:
+      // The rotations only, LEFT-multiplied, and no translation matrix: the
+      // `lwz r4, 0x29ee` at 0x10005354 loads the translate matrix and the very
+      // next instruction overwrites r4 with the rotY one, so it is dead. The
+      // translation still moves, because leftConcat rotates the triple in place.
+      leftConcat(ch, RY); leftConcat(ch, RX); leftConcat(ch, RZ);
+      break;
+    default:                      // 0 — translate, then Y, X, Z in that order
+      concat(ch, T);
+      concat(ch, RY); concat(ch, RX); concat(ch, RZ);
+  }
+  return ch;
 }
