@@ -372,7 +372,11 @@ def export_segments(flat, out):
     breaks quietly when another subsystem is ported.
     """
     n = 0
-    for pre in ('seg0_', 'seg4_'):
+    # SEG3 IS PART ONE'S PROGRAMS AND SCENES. The synth needs seg0 and seg4;
+    # the geometry and scene builders need seg3 as well, because every part-one
+    # stream lives at 0x1003xxxx. Shipping only the synth's two left the page
+    # unable to compute anything for eighteen of the twenty-nine scenes.
+    for pre in ('seg0_', 'seg3_', 'seg4_'):
         src = next(f for f in os.listdir(flat) if f.startswith(pre))
         data = open(os.path.join(flat, src), 'rb').read()
         open(f'{out}/{pre[:4]}.bin', 'wb').write(data)
