@@ -923,6 +923,48 @@ guards with `cmpwi r26, 0; beq`, so a type-3 node clearing it is consistent: the
 field means different things per type, and zero is the "nothing here" the mesh
 path already tests for.
 
+### 4a-ter. Where a line strip's and a fan's vertices come from
+
+Scene ops 0, 1 and 2 consume no stream operands and allocate two, three and four
+SUB-OBJECTS through `0x1000243c` — the same routine that read the node's own
+animation object. §4a records that much. What it does not say is what those
+sub-objects are for, and the answer is the whole of those three node types:
+
+```
+  0x10002f8c:  r11 = node+0x20            ; the count the handler just stored
+               r22 = node+0x00            ; the node's animation object
+               r26 = node+0x20
+               repeat r11 times:
+                   r22 = r22[+0x74]       ; the next sub-object
+                   *(++r26) = r22 + 0xc + 0x30
+```
+
+**A SUB-OBJECT'S CHANNEL BLOCK IS A VERTEX RECORD.** The pointer stored is the
+animation channels at `+0xc`, offset by `0x30` — and from there the layout lines
+up exactly with what the clipper and emitter read:
+
+| vertex field | channel |
+|---|---|
+| x, y, z at `+0x00/04/08` | 12, 13, 14 — the translation triple |
+| alpha at `+0x0c` | 15 |
+| r, g, b at `+0x10/14/18` | 16, 17, 18 |
+| u, v at `+0x1c/20` | 19, 20 |
+
+So these node types have no geometry of their own at all: the animation system
+writes their vertices directly, one animated channel block per corner. That is
+why `node+0x20` is a COUNT for them and a vertex-list POINTER for a mesh —
+measured across all 29 scenes, type 0 is always 2, type 1 always 3, type 2
+always 4, type 4 always 1, types 6 and 7 always 0, and type 5 is an address.
+
+**OP 2 STORES ITS FOURTH AND THIRD THE OTHER WAY ROUND.** `0x10002abc` assigns
+sub-objects one to four into `+0x24`, `+0x28`, `+0x30`, `+0x2c` — so the array
+the render walk reads in address order is sub 1, 2, 4, 3. That is the triangle
+fan's winding for a quad, and ops 0 and 1 use the generic in-order tail instead.
+
+Op 3 is the one that is not like the others: it reads ten operand bytes, keeps
+the fan-or-strip selector at `node+0x68`, and generates a grid — 5, 17 or 8
+vertices in the shipped data rather than a fixed count.
+
 ### 4a-bis. How a geometry program becomes a mesh — `0x100027b8`
 
 Scene op 5 consumes no stream operands, and this is what it does instead. It is

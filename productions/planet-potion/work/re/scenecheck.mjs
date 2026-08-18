@@ -47,6 +47,8 @@ const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
 let nodesOK = 0, nodesBad = 0, streamsOK = 0, streamsBad = 0, fields = 0;
 let texts = 0, printable = 0;
 let kOK = 0, kBad = 0, kFields = 0;
+let at20OK = 0, at20Bad = 0;
+const AT20 = { 0: 2, 1: 3, 2: 4, 4: 1, 6: 0, 7: 0 };
 const kByBlock = new Array(15).fill(0);
 let cOK = 0, cBad = 0, iOK = 0, iBad = 0, pOK = 0, pBad = 0, rOK = 0, rBad = 0;
 const NIL = 0xffffffff;
@@ -77,6 +79,12 @@ for (const scene of doc.scenes) {
         printable++;
         if (samples.length < 5) samples.push(a.text);
       }
+    }
+    // `node+0x20` IS A COUNT FOR EVERY TYPE BUT THE MESH, where it is the
+    // vertex-list head instead. Ops 0, 1 and 2 store 2, 3 and 4 — one per
+    // sub-object, because a sub-object's channel block IS a vertex record.
+    if (AT20[a.op] !== undefined) {
+      if (b.at20 === AT20[a.op]) at20OK++; else at20Bad++;
     }
     const checks = [
       ['type', a.op, b.type],
@@ -165,6 +173,9 @@ ok('every node matches type, clip, +0x0d, both flag bytes and its keyframe count
   nodesBad === 0, `${nodesOK}/${nodesOK + nodesBad}`);
 ok('every stream decodes to exactly the node list the original built',
   streamsBad === 0, `${streamsOK}/${streamsOK + streamsBad}`);
+ok('node+0x20 is the vertex count each handler stores', at20Bad === 0,
+  `${at20OK}/${at20OK + at20Bad} — 2, 3, 4 for ops 0-2, 1 per glyph, 0 for `
+  + 'camera and root; a mesh stores a pointer there instead');
 ok('all eight opcodes are exercised', seenOps.size === 8,
   [...seenOps].sort().join(', '));
 // A walk one byte out of step anywhere earlier reads some other byte as a
