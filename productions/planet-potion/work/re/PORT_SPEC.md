@@ -49,7 +49,7 @@ Every row here is a measurement, and the check that made it is named. Run
 | renderer, end to end | 135 of 140 frames | `pipeline` — 44,190 of 45,327 primitives on every vertex |
 | Warp3D → WebGL2 | verified | `rendercheck`, `lvocheck` |
 | the page, computing rather than replaying | draws in a real browser | `stagecheck` — all eight stages report a computed side |
-| the schedule, end to end | 907 frames, nothing throws | `showcheck` — every entry of both parts through the engine |
+| the schedule, end to end | 907 frames, nothing throws, worst tick 6.9 ms of 20 | `showcheck` — every entry of both parts through the engine |
 | **the 64k build** | **55,196 B, packed, runs** | `test_planet_mashi` — 10,340 under budget |
 
 **The 64k pack.** `./scripts/build-planet-potion-mashi.sh`. One measurement

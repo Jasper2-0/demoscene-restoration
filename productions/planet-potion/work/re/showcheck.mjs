@@ -49,6 +49,16 @@ const engine = createEngine({
 // which only draws briefly is still seen, coarse enough to finish.
 const STEP = Number(process.env.SHOWSTEP ?? 25);
 
+// AND HOW LONG A TICK TAKES. "Real-time 50 Hz playback" is a claim with a
+// number in it — 20 ms — and it had never been measured. This times a hundred
+// CONSECUTIVE ticks of every scene, because the animation is stateful and a
+// single frame in isolation is not what the show asks for.
+//
+// It is the CPU half only: the engine's arithmetic, not the GL calls the shim
+// makes with the result. Generous on purpose — the point is that a change which
+// makes a scene ten times slower fails here, not that this is a benchmark.
+let worstMs = 0, worstScene = '';
+
 let frames = 0, totalDraws = 0, threw = 0, noScene = 0, maxDraws = 0;
 const deadSlots = [];
 const failures = [];
@@ -73,6 +83,19 @@ for (const part of ['p1', 'p3']) {
       continue;
     }
     const base = (e.startTick ?? 0) - e.sceneStart;
+    {
+      const N = 100;
+      for (let i = 0; i < 5; i++) engine.frame(part, order, base + i, -1, e.camera ?? 0);
+      const t0 = process.hrtime.bigint();
+      for (let i = 0; i < N; i++) {
+        engine.frame(part, order, base + i, -1, e.camera ?? 0);
+        if (part === 'p1' && order !== engine.overlay.order) {
+          engine.frame(engine.overlay.part, engine.overlay.order, base + i, -1);
+        }
+      }
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6 / N;
+      if (ms > worstMs) { worstMs = ms; worstScene = `${part}/${e.slot}`; }
+    }
     for (let t = base; t < base + (e.durTicks ?? 0); t += STEP) {
       frames++; partFrames++;
       let n = 0;
@@ -117,6 +140,10 @@ ok('no scene spends its entire span drawing nothing', deadSlots.length === 0,
 // fails here even though every frame-level suite still passes.
 ok('and it draws a show, not a handful of primitives', totalDraws > 200000,
   `${totalDraws} draws, busiest frame ${maxDraws}`);
+
+ok('a tick fits in the 50 Hz budget', worstMs < 20,
+  `worst ${worstMs.toFixed(2)} ms of 20.00, at ${worstScene} — the engine's `
+  + 'arithmetic, not the GL calls');
 
 for (const f of failures) console.log(`     ${f}`);
 if (failed) process.exit(1);
