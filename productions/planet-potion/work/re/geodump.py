@@ -294,7 +294,7 @@ def read_vertex(A, a):
     }
 
 
-def read_triangle(A, a):
+def read_triangle(A, a, depth=0):
     """A 0x52 indexed triangle. The count is ALWAYS 3 — `0x1000335c` hardcodes
     `li r3, 3` on both of its two emit sites, and a quad arrives as two of
     these rather than as one record with four indices."""
@@ -322,7 +322,15 @@ def read_triangle(A, a):
         # +0x4a is another LAYER on the same three vertices — the record chain
         # continues while the next one's kind is neither 5 nor 6 — and +0x4e is
         # the next triangle. Two different chains out of one record.
+        #
+        # THE LAYERS ARE DUMPED, not just pointed at. `0x10002964` turns each
+        # one into its OWN scene face record on the +0x5c chain, and the render
+        # walk draws every one — so a consumer that reads only the primary
+        # under-counts the intro's primitives. 2,466 of them carry a layer.
         'layer': hex(A.u32(a, 0x4a)),
+        'layers': ([read_triangle(A, A.u32(a, 0x4a), depth + 1)]
+                   if depth < 4 and A.u32(a, 0x4a) not in (0, NIL)
+                   and A.has(A.u32(a, 0x4a), 0x52) else []),
         'next': hex(A.u32(a, 0x4e)),
     }
 

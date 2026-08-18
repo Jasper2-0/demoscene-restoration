@@ -87,6 +87,8 @@ for (const scene of arena.scenes) {
     hidden += prog.nodes.length - visible.length;
     const wantV = visible.reduce((t, n) => t + n.vertices.length, 0);
     const wantT = visible.reduce((t, n) => t + n.triangles.length, 0);
+    const wantF = visible.reduce((t, n) =>
+      t + n.triangles.reduce((u, x) => u + 1 + (x.layers?.length ?? 0), 0), 0);
     const haveV = (scene.nodes[i].vertexList ?? []).length;
     const objs = scene.nodes[i].objects ?? [];
     for (const o of objs) {
@@ -96,6 +98,10 @@ for (const scene of arena.scenes) {
 
     // The copy itself: positions, colours and the index resolution.
     const mesh = buildMesh(prog);
+    if (mesh.faces.length !== wantF && failures.length < 8) {
+      failures.push(`${scene.part}/${scene.order} node ${i}: buildMesh made `
+        + `${mesh.faces.length} faces, program implies ${wantF}`);
+    }
     const vmap = scene.vertices ?? {};
     const list = scene.nodes[i].vertexList ?? [];
     const skip = TEXTURE_DEPENDENT.has(`${scene.part}:${got[i].resource}`);
@@ -117,8 +123,13 @@ for (const scene of arena.scenes) {
       }
     }
     const idxOf = new Map(list.map((h, n) => [h, n]));
-    for (let k = 0; k < Math.min(objs.length, mesh.faces.length); k++) {
-      const w = objs[k].faces[0], g = mesh.faces[k];
+    // FLATTENED, because a scene face and its LAYERS are separate primitives.
+    // arenadump walks the +0x60 chain as "objects" and the +0x5c chain inside
+    // each as "faces"; the render walk draws every one of both, and buildMesh
+    // emits them in the same order — primary, then its layers.
+    const flat = objs.flatMap((o) => o.faces ?? []);
+    for (let k = 0; k < Math.min(flat.length, mesh.faces.length); k++) {
+      const w = flat[k], g = mesh.faces[k];
       const wi = (w.vertices ?? []).map((h) => idxOf.get(h));
       if (JSON.stringify(wi) === JSON.stringify(g.vertices)) idxOK++; else idxBad++;
       for (const [gv, wv] of [[g.cull, w.cull], [g.alpha, w.alpha],
@@ -136,9 +147,8 @@ for (const scene of arena.scenes) {
           + `(program ${got[i].resource}): ${haveV} vertices vs ${wantV}`);
       }
     }
-    // ONE 0x64 RECORD PER GEOMETRY TRIANGLE, chained on +0x60 — which is the
-    // chain arenadump calls "objects". Its "faces", on +0x5c, are the LAYER
-    // chain instead, which is why almost every object carries exactly one.
+    // ONE 0x64 RECORD PER GEOMETRY TRIANGLE on the +0x60 chain — which is the
+    // chain arenadump calls "objects" — plus one more per LAYER on +0x5c.
     if (objs.length === wantT) oOK++;
     else {
       oBad++;

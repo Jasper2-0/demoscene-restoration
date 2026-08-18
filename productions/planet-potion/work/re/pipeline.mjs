@@ -19,9 +19,28 @@
 //     for p1/1 at t=92.
 //
 // NOT ONE of the extra primitives is off-screen, so the unported trivial-reject
-// at `0x100062f8` does not explain it. The remaining suspects, in order: the
-// per-face cull's sign, the shading step's effect on the alpha gate, and the
-// `+0x5c` layer chain being drawn once per layer rather than once per face.
+// at `0x100062f8` does not explain it. That measurement is spent; do not repeat
+// it.
+//
+// THE COUNTS ARE WRONG IN BOTH DIRECTIONS and the two causes are now separated.
+//
+// UNDER-COUNTING IS EXPECTED AND UNINTERESTING: this only renders MESHES. p1/10
+// computes 185 against 586 recorded because its type 0, 3 and 4 nodes are not
+// fed any vertices here — the scene VM handlers that allocate them
+// (`0x10002a54` and friends) are not ported.
+//
+// OVER-COUNTING IS THE REAL ONE, AND THE FRAME ALIGNMENT IS SUSPECT BEFORE THE
+// RENDERER IS. p1/1 at t=92 computes 1,317 mesh primitives against 337
+// recorded — but the recorded draws carry cx/cy/scale of 320/240/320 and
+// 640/180/120, and the three mesh nodes anim_all.json reports for that same
+// scene and tick all carry 200/160/226.7711944580078. That projection appears
+// in NONE of the recorded draws.
+//
+// So before blaming the cull or the alpha gate, settle whether draws.json's
+// `t` and anim_all.json's `t` name the same instant, and whether draws.json's
+// per-scene frames include the OVERLAY's primitives — 640/180/120 matches no
+// node in that frame's list at all. Comparing two exports that disagree about
+// when they were taken would make any renderer look wrong.
 import fs from 'node:fs';
 const R = '/Users/scjas/Developer/01 - Jasper2-0/02 - Github Public/demoscene-restoration/productions/planet-potion';
 const { decodeScene, buildMesh } = await import(`${R}/web/js/scene.js`);

@@ -349,20 +349,26 @@ export function buildMesh(program) {
       });
     }
     for (const t of node.triangles) {
-      faces.push({
-        count: t.count,
-        vertices: t.idx.map((i) => base + i),
-        cull: t.cull,
+      // ONE SCENE FACE PER LAYER, NOT PER TRIANGLE. `0x10002964` follows the
+      // geometry triangle's +0x4a and gives each layer its own 0x64 record on
+      // the scene face's +0x5c chain, and the render walk draws every one. The
+      // layers share the triangle's vertex INDICES and carry their own
+      // material, so they are extra primitives over the same geometry — 1,616
+      // of them across the 39 programs.
+      for (const t2 of [t, ...(t.layers ?? [])]) faces.push({
+        count: t2.count,
+        vertices: t2.idx.map((i) => base + i),
+        cull: t2.cull,
         // The material quad is positional, not named: slot 0 is the ALPHA and
         // 1..3 are the colours, which is the order the shading step reads.
-        alpha: t.rgba[0],
-        rgb: [t.rgba[1], t.rgba[2], t.rgba[3]],
-        normal: t.normal,
-        uv: t.uv,
-        texture: t.texture,
-        textureIndex: t.texIndex,
-        prim: t.prim,
-        shading: t.kind,
+        alpha: t2.rgba[0],
+        rgb: [t2.rgba[1], t2.rgba[2], t2.rgba[3]],
+        normal: t2.normal,
+        uv: t2.uv,
+        texture: t2.texture,
+        textureIndex: t2.texIndex,
+        prim: t2.prim,
+        shading: t2.kind,
       });
     }
   }
