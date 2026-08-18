@@ -50,6 +50,16 @@ Every row here is a measurement, and the check that made it is named. Run
 | Warp3D → WebGL2 | verified | `rendercheck`, `lvocheck` |
 | the page, computing rather than replaying | draws in a real browser | `stagecheck` — all eight stages report a computed side |
 | the schedule, end to end | 907 frames, nothing throws | `showcheck` — every entry of both parts through the engine |
+| **the 64k build** | **55,196 B, packed, runs** | `test_planet_mashi` — 10,340 under budget |
+
+**The 64k pack.** `./scripts/build-planet-potion-mashi.sh`. One measurement
+decided it: the plan assumed the intro's own bytecode would be nearly free, on
+sonnet's finding that data packs 14-36:1 against code's 3:1. It is not — these
+segments are the payload of an already crunched executable and gzip manages
+2.4:1. What IS free is that 40,752 of seg0's 46,960 bytes are POWERPC CODE this
+port replaced, and everything still read from seg0 lives above `0xa334`, so the
+build ships a 5,180-byte slice and the three segments drop from 47,142 packed
+bytes to 23,487.
 
 **What still keeps a recorded input in the loop, in the order it matters:**
 

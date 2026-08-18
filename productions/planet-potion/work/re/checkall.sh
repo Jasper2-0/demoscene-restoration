@@ -253,6 +253,13 @@ run "pipeline — the renderer reproduces the recording, from bytecode" \
 run "showcheck — the whole schedule runs end to end through the engine" \
   node "$HERE/showcheck.mjs"
 
+# THE 64k PACK, if one has been built. A different DELIVERY of the same runtime,
+# so what can break is the delivery — the payload index, the seg0 reassembly,
+# the fetch shim — and all three fail as a blank page that no suite driving the
+# readable dist can see.
+run "mashi — the 64k pack boots and draws what the readable build draws" \
+  node "$HERE/../../../../tools/test_planet_mashi.mjs"
+
 # The emitter, checked on its own before the clipper and node walk that feed it
 # exist: the recorded stream is 144,727 vertices of its output, and the
 # projection inverts exactly, so the round trip is a real test of the
