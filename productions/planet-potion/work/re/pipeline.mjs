@@ -148,7 +148,12 @@ function runScene(scene, frame, activeCamera = 0) {
       type: n.op, drawGate: out.drawGate, at0d: n.at0d ?? 2,
       cx: out.cx, cy: out.cy, scale: out.scale, clip: n.clip,
       built: out.built, ordinal: n.ordinal ?? 0,
-      at68: w?.at68 ?? 0, texture: w?.texture ?? null,
+      // A type 0 to 3 node's RESOURCE byte is its texture index — the same
+      // byte that indexes the object table for a mesh and stands for itself for
+      // a camera. The arena holds a texture-object POINTER there, which is why
+      // the dump could not supply it.
+      at68: n.at68 ?? 0,
+      texture: n.op < 4 ? (n.resource ?? null) : (w?.texture ?? null),
       plain: out.plainVertices ?? null,
       objects: meshObjects[i] = mesh ? mesh.faces.map((f) => ({
         faces: [{

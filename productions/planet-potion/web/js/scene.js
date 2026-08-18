@@ -307,7 +307,28 @@ export function decodeScene(bytes, at) {
         node.cameras = [];
         for (let i = 0; i < n; i++) node.cameras.push(c.u8());
       }
-      for (let i = 0; i < HANDLER[op]; i++) c.u8();
+      // OP 3'S TEN TRAILING BYTES ARE SIX OPERANDS, not padding: `0x10002b08`
+      // reads u16, u16, u8, u8, u16, u16 through the readers at `0x1000274c`
+      // and `0x10002738`, and each one goes straight through `int2float`. The
+      // first two carry a flag in 0x4000 and another in 0x8000 and keep 14 bits
+      // of value; the FIFTH carries the fan-or-strip selector in its top bit and
+      // keeps 15.
+      //
+      // That selector is the whole difference between two primitives. The type-3
+      // render handler at `0x10005ddc` reads it as a halfword from node+0x68 and
+      // falls through into the TYPE 0 handler when it is zero — a line strip
+      // with a minimum of two vertices — or branches to the type 1 and 2 handler
+      // when it is set, a triangle fan with a minimum of three.
+      if (op === 3) {
+        const a0 = c.u16(), a1 = c.u16(), a2 = c.u8(), a3 = c.u8();
+        const a4 = c.u16(), a5 = c.u16();
+        node.at68 = a4 >>> 15;
+        node.operands = [a0 & 0x3fff, a1 & 0x3fff, a2, a3, a4 & 0x7fff, a5];
+        node.opFlags = [(a0 >>> 14) & 1, (a0 >>> 15) & 1,
+          (a1 >>> 14) & 1, (a1 >>> 15) & 1];
+      } else {
+        for (let i = 0; i < HANDLER[op]; i++) c.u8();
+      }
       nodes.push(node);
 
       if (c.at >= body.length) break;
