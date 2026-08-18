@@ -48,6 +48,8 @@ let nodesOK = 0, nodesBad = 0, streamsOK = 0, streamsBad = 0, fields = 0;
 let texts = 0, printable = 0;
 let kOK = 0, kBad = 0, kFields = 0;
 const kByBlock = new Array(15).fill(0);
+let cOK = 0, cBad = 0, iOK = 0, iBad = 0, pOK = 0, pBad = 0, rOK = 0, rBad = 0;
+const NIL = 0xffffffff;
 const seenOps = new Set();
 const failures = [];
 const samples = [];
@@ -113,16 +115,37 @@ if (fs.existsSync(animFile)) {
     if (!seg) continue;
     const got = decodeScene(seg.data, addr - seg.base).nodes;
     const want = scene.frames[0].nodes;
+    const byAnimAddr = new Map();
+    want.forEach((n, i) => { if (n.anim) byAnimAddr.set(parseInt(n.anim.addr, 16), i); });
     for (let i = 0; i < Math.min(got.length, want.length); i++) {
       const gk = got[i].anim.keys, wk = want[i].track ?? [];
       for (let j = 0; j < Math.min(gk.length, wk.length); j++) {
-        if (gk[j].empty) continue;
-        if (gk[j].time !== wk[j].tick) { kBad++; continue; }
+        // EVERY block of EVERY keyframe, including the ones no group wrote and
+        // the single empty keyframe a `0x1f` gate still allocates. Skipping
+        // those was hiding 3,677 comparisons and, worse, hiding the fact that
+        // the decoder was leaving them null when the original leaves them zero.
+        if (gk[j].invSpan === wk[j].invSpan) iOK++; else iBad++;
         for (let b = 0; b < 15; b++) {
-          if (gk[j].blocks[b] === null) continue;
           kFields++;
           if (gk[j].blocks[b] === wk[j].blocks[b][0]) kOK++;
           else { kBad++; kByBlock[b]++; }
+          // c1..c3 are the cubic the coefficient pass builds from the
+          // neighbouring keyframes — what `anim.js` actually evaluates.
+          for (let c = 1; c < 4; c++) {
+            if (gk[j].coeff[b][c] === wk[j].blocks[b][c]) cOK++; else cBad++;
+          }
+        }
+      }
+      // The parent reference, resolved. This is the field the structural pass
+      // above deliberately skips, and it can be checked now that the resolution
+      // is ported: 0xff means root, anything else names a node ONE-BASED.
+      const wp = want[i].anim?.parent;
+      if (wp !== undefined) {
+        const gp = got[i].anim.parent;
+        if (wp === NIL) { if (gp === null) rOK++; else rBad++; } else {
+          const wi = byAnimAddr.get(wp);
+          const gi = gp ? got.findIndex((n) => n.anim === gp) : -1;
+          if (wi !== undefined) { if (gi === wi) pOK++; else pBad++; }
         }
       }
     }
@@ -152,6 +175,13 @@ if (kFields) {
     `${kOK}/${kFields} block values`
     + (kBad ? `, worst blocks ${kByBlock.map((v, i) => (v ? i : null))
       .filter((v) => v !== null).join(',')}` : ''));
+  ok('every cubic coefficient the animation evaluates is bit-exact',
+    cBad === 0, `${cOK}/${cOK + cBad}`);
+  ok('every keyframe span reciprocal is bit-exact', iBad === 0,
+    `${iOK}/${iOK + iBad}`);
+  ok('every parent reference resolves to the right animation object',
+    pBad === 0 && rBad === 0,
+    `${pOK} parented, ${rOK} roots`);
 } else {
   console.log('     keyframe VALUES not checked: no anim_all.json here');
 }
@@ -160,8 +190,7 @@ ok('every text node decodes to a printable string', printable === texts,
 
 // `parent` is decoded and deliberately not compared: the stream carries an
 // encoded reference and a post-pass at 0x100022d0 resolves it to a pointer.
-console.log('     parent is decoded as the stream\'s encoded reference and not '
-  + 'compared — 0x100022d0 resolves it after the walk');
+
 
 for (const f of failures) console.log(`     ${f}`);
 

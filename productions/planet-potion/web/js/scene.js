@@ -103,9 +103,18 @@ function readAnim(c, skipAlpha) {
     anim.at72 = (t >> 4) & 7;
     anim.at71 = t >> 7;
   }
-  // No keyframe DATA — but `0x10002470` already allocated the track record, so
-  // the node still owns exactly one, carrying the defaults `0x10002768` wrote.
-  if (gate === 0x1f) { anim.keys.push({ empty: true }); return anim; }
+  // No keyframe DATA — but `0x10002470` already allocated the track record and
+  // `0x10002768` preset it, so the node owns exactly one keyframe carrying
+  // those defaults. It has to be a REAL keyframe and not a marker: the
+  // coefficient pass runs over the chain regardless, and giving it no blocks
+  // makes that pass throw, which the decoder's own catch then turns into a
+  // silently truncated node list rather than an error.
+  if (gate === 0x1f) {
+    const b = new Array(15).fill(0);
+    b[6] = 1.0; b[7] = 1.0; b[8] = 1.0; b[9] = 1.0;
+    anim.keys.push({ empty: true, hold: 0, time: 0, t0: 0, blocks: b });
+    return anim;
+  }
 
   const n = c.u8();
   for (let i = 0; i <= n; i++) {
@@ -114,8 +123,12 @@ function readAnim(c, skipAlpha) {
     // are polynomial coefficients a later pass fills in. `0x10002768` presets
     // the alpha and colour blocks to 1.0 before every keyframe, so an absent
     // colour group is opaque white rather than black.
+    // ZERO, NOT NULL. `alloc_mem` zeroes the 0x104 track record it hands out,
+    // so a block whose group is absent really is 0.0 rather than absent — and
+    // the coefficient pass reads all fifteen either way. Leaving them null
+    // makes them look unknown when the original knows exactly what they are.
     const k = { hold: v >> 15, time: v & 0x7fff, t0: f32(v & 0x7fff),
-      blocks: new Array(15).fill(null) };
+      blocks: new Array(15).fill(0) };
     k.blocks[6] = 1.0; k.blocks[7] = 1.0; k.blocks[8] = 1.0; k.blocks[9] = 1.0;
     if (!(gate & 1)) {
       k.blocks[0] = f32(c.s16()); k.blocks[1] = f32(c.s16());
@@ -153,6 +166,89 @@ function readAnim(c, skipAlpha) {
 }
 
 /**
+ * `0x10002658` — turn the keyframe VALUES into the cubic each channel is
+ * evaluated with. Runs once over the chain, right after it is read.
+ *
+ * Every keyframe holds fifteen 16-byte blocks and the reader fills only the
+ * first float of each. This fills the other three from the neighbouring
+ * keyframes, which is why `anim.js` can read `k[1]`, `k[2]` and `k[3]` straight
+ * out of the track: they were computed here, not at evaluation time.
+ *
+ * THE NEIGHBOURS CLAMP AT BOTH ENDS AND THE PREVIOUS ONE LAGS. `prev` starts
+ * pointing AT the head, so the first keyframe is its own predecessor, and it
+ * only begins advancing after the first iteration; `next` and `next2` fall back
+ * to themselves at the tail. So a two-keyframe track has every neighbour
+ * collapsed onto one of the two, which is most of the tracks in the intro.
+ *
+ * THE HOLD FLAG SKIPS THE ACCUMULATION ENTIRELY. With `flags` set, the three
+ * coefficients stay as the raw differences and `anim.js` takes its `fnmsub`
+ * branch — a step rather than a curve. Running the accumulation anyway turns
+ * every hold in the intro into a slide.
+ *
+ * `invSpan` is `fres` of the gap to the next keyframe, and a zero gap leaves it
+ * zero rather than infinite: `fcmpu` then `beq` skips the reciprocal.
+ */
+export function prepareTrack(keys) {
+  const fres = (x) => Math.fround(1 / x);
+  for (let i = 0; i < keys.length; i++) {
+    const cur = keys[i];
+    const prev = keys[i === 0 ? 0 : i - 1];
+    const next = keys[i + 1] ?? cur;
+    const next2 = keys[i + 2] ?? next;
+    const span = next.t0 - cur.t0;
+    cur.invSpan = span === 0 ? span : fres(span);
+    cur.coeff = [];
+    for (let b = 0; b < 15; b++) {
+      const p = prev.blocks[b], t = cur.blocks[b];
+      const n = next.blocks[b], nn = next2.blocks[b];
+      let c1 = n - p;
+      let c2 = nn - t;
+      let c3 = t - n;
+      if (!cur.hold) {
+        c2 = c2 + c3;
+        c2 = c2 + c3;
+        c2 = c2 + c1;
+        c3 = c2 + c3;
+        c3 = c3 + c1;
+      }
+      cur.coeff.push([t, f32(c1), f32(c2), f32(c3)]);
+    }
+  }
+  return keys;
+}
+
+/**
+ * `0x10002320` — resolve every encoded parent reference into the animation
+ * object it names. Runs after the whole list is built, because a node may name
+ * one that does not exist yet.
+ *
+ * The reference packs a NODE INDEX in its top sixteen bits and a SUB-OBJECT
+ * index in its low four. `0xff` in the node field means no parent; `0xf` in the
+ * sub-object field means the node's own animation object rather than one of the
+ * chain on `+0x74`. The two sentinels are different widths and different
+ * values, which is easy to get symmetrical and wrong.
+ *
+ * THE NODE INDEX IS ONE-BASED, and not because anything says so: the walk
+ * starts at `head->next` and only THEN steps the counter, so a stored zero
+ * means the second node in the list. Reading it as zero-based resolves every
+ * parent to the node before the right one — which still produces a valid
+ * hierarchy, just the wrong one.
+ */
+export function resolveParents(nodes) {
+  for (const node of nodes) {
+    for (const anim of [node.anim, ...node.subs]) {
+      const ref = anim.parentRef;
+      const ni = ref >>> 16, si = ref & 0x0f;
+      if (ni === 0xff) { anim.parent = null; continue; }
+      const target = nodes[ni + 1];
+      if (!target) { anim.parent = null; continue; }
+      anim.parent = si === 0x0f ? target.anim : (target.subs[si] ?? target.anim);
+    }
+  }
+  return nodes;
+}
+
+/**
  * Decode one scene stream.
  *
  * @param {Uint8Array} bytes the segment holding it
@@ -176,8 +272,13 @@ export function decodeScene(bytes, at) {
         node.at0d = 2 - (r >> 7);
       }
       node.anim = readAnim(c, op === 7);
+      prepareTrack(node.anim.keys);
       node.subs = [];
-      for (let i = 0; i < SUBOBJECTS[op]; i++) node.subs.push(readAnim(c, true));
+      for (let i = 0; i < SUBOBJECTS[op]; i++) {
+        const sub = readAnim(c, true);
+        prepareTrack(sub.keys);
+        node.subs.push(sub);
+      }
       if (op === 4) {
         const n = c.u8();
         let s = '';
@@ -203,5 +304,6 @@ export function decodeScene(bytes, at) {
   } catch (e) {
     return { nodes, consumed: c.at, length, overrun: String(e.message) };
   }
+  resolveParents(nodes);
   return { nodes, consumed: c.at, length };
 }
