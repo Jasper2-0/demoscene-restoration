@@ -55,6 +55,7 @@ const startEl = document.getElementById('start');
 const params = new URLSearchParams(location.search);
 
 const fadeEl = document.getElementById('fade');
+const barEl = document.getElementById('bar');
 const say = (s) => {
   if (!statusEl) return;
   statusEl.hidden = false;
@@ -77,12 +78,14 @@ const stage = (text, detail = '') => {
   stageAt = now;
   stageLog.push(text);
   if (stageLog.length > 3) stageLog.shift();
+  if (barEl) barEl.hidden = false;
   say(`Planet Potion\n${stageLog.join('\n')}${detail ? `\n${detail}` : ''}`);
 };
 /** Nothing on screen but the intro. */
 const hideChrome = () => {
   if (statusEl) statusEl.hidden = true;
   if (startEl) startEl.hidden = true;
+  if (barEl) barEl.hidden = true;
 };
 
 async function loadJSON(path) {
@@ -416,6 +419,8 @@ async function main() {
     return got.value;
   };
 
+  // Which stage the show is in, for the error path. See the catch below.
+  let where = 'startup';
   const SHOW = [
     { part: 'p1', label: 'part one' },
     { part: 'p3', label: 'part three' },
@@ -476,12 +481,15 @@ async function main() {
 
   /** Generate, sequence and mix one part, then show it against its own clock. */
   async function playPart(ctx, spec) {
+    where = `${spec.label}: generating the soundtrack`;
     stage(`generating ${spec.label}'s soundtrack`,
       'the intro\u2019s own softsynth, from its bytecode');
     // Yield so the line above paints: generating part one is about 1.6 seconds
     // of straight-line arithmetic and it blocks the thread.
     await new Promise((r) => setTimeout(r, 0));
+    where = `${spec.label}: reading the module`;
     const mod = parseDBM(await moduleBytes(spec.part));
+    where = `${spec.label}: mixing`;
     stage(`mixing ${spec.label}`,
       `${mod.info?.channels ?? '?'} channels, `
       + `${mod.instruments?.length ?? mod.info?.instruments ?? '?'} instruments`);
@@ -497,6 +505,7 @@ async function main() {
     const octaveShift = Number(params.get('octave') ?? 0) || 0;
     const { pcm, sampleRate, seconds, cues } = render(mod,
       { sampleRate: ctx.sampleRate, octaveShift });
+    where = `${spec.label}: queueing the audio`;
     // THE BEAT SYNC, as a lookup. Every effect-7 in the module, by the tick it
     // lands on; _calc_matrix compares it against each node's trigger byte and a
     // match restarts that node's animation. Without it a computed frame is
@@ -515,6 +524,7 @@ async function main() {
     const spans = spansFor(spec.part);
     const t0 = ctx.currentTime + 0.06;   // a beat of slack so frame 0 is not late
     src.start(t0);
+    where = `${spec.label}: playing`;
     // From here the screen is the intro and nothing else.
     hideChrome();
     // THE FADE AT THE END. Two seconds of black over the tail of the last part,
@@ -828,18 +838,25 @@ async function main() {
         for (const spec of SHOW) await playPart(ctx, spec);
         say('Planet Potion — Potion, 2002\nreload to run it again');
       } catch (e) {
-        say(`sound failed: ${e.message}`);
+        // WHERE, not just what. The packed build is minified and drops every
+        // console call, so a thrown message on its own names nothing; the
+        // breadcrumb is the only thing that says which stage it came from.
+        say(`sound failed during ${where}\n${e.message}`);
       } finally {
         ctx.close();
       }
     }, { once: true });
   }
 
-  // The last thing said before the button is what got built, not what the
-  // shim is. `cache.report` already collects one line per generated stage with
-  // whether it was cached and how long it took.
-  say(`Planet Potion — Potion, 2002\n${cache.report.join('\n') || tex}\n`
-    + `${SCREEN_W}\u00d7${SCREEN_H}, generated from the intro\u2019s own bytecode`);
+  // What it IS, not what it took to get here — the per-stage timings have
+  // already been on screen while they ran and `cache.report` keeps them for the
+  // inspector. The one thing worth carrying into the resting state is a stage
+  // that came up EMPTY, because a missing font is not visible until text is.
+  // Precalc is over until the button is pressed, so the bar stops.
+  if (barEl) barEl.hidden = true;
+  const missing = cache.report.filter((r) => r.includes('NO '));
+  say(`Planet Potion — Potion, 2002${missing.length ? `\n${missing.join('\n')}` : ''}`
+    + `\n${SCREEN_W}\u00d7${SCREEN_H}, generated from the intro\u2019s own bytecode`);
 }
 
 main();

@@ -22,7 +22,7 @@
 // from 47,142 packed bytes to 23,487.
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -66,8 +66,32 @@ const seg0 = need(path.join(DATA, 'seg0.bin'));
 const seg0Slice = seg0.subarray(SEG0_OFF);
 if (seg0.length < 0xb428) throw new Error('seg0 shorter than the pool it holds');
 
+// AND A SECOND SLICE, BECAUSE THE ENUMERATION ABOVE WAS INCOMPLETE. There is a
+// fourth way the port reads seg0 and it is the only one that reads CODE:
+// `decodeScript` walks the two softsynth call scripts instruction by
+// instruction, because the script is the faithful thing to read and it "is
+// already in the bytes we have to carry anyway" — which was true of the
+// segment and not of the slice. Those scripts sit at 0x6b6c..0x6ef0, far below
+// 0xa334, so the packed build had them as zeros: `decodeScript` returned an
+// empty array, `script[0].call` threw, and the pack has never made a sound.
+// Nothing caught it because the size test renders one frame and never presses
+// Start.
+//
+// Derived from the runtime's own table so it cannot drift, and it is 900 bytes.
+const { SCRIPTS } = await import(
+  pathToFileURL(path.join(PROD, 'web/js/synth.js')).href);
+const CODE_BASE = 0x10000000;
+const SCRIPT_OFF = Math.min(...Object.values(SCRIPTS).map((x) => x.lo)) - CODE_BASE;
+const SCRIPT_END = Math.max(...Object.values(SCRIPTS).map((x) => x.hi)) - CODE_BASE;
+if (SCRIPT_END > SEG0_OFF) throw new Error('the synth scripts reach into the slice');
+const seg0Scripts = seg0.subarray(SCRIPT_OFF, SCRIPT_END);
+
 const files = [
   ['seg0 slice', seg0Slice],
+  ['seg0 synth scripts', seg0Scripts],
+  // 2 KB of 1bpp font mask. `_init_txtgen` expands it into the atlas every
+  // glyph in the intro is drawn from; without it the pack renders no text.
+  ['seg2.bin', need(path.join(DATA, 'seg2.bin'))],
   ['seg3.bin', need(path.join(DATA, 'seg3.bin'))],
   ['seg4.bin', need(path.join(DATA, 'seg4.bin'))],
   // The JSON goes in MINIFIED — these are exports written for a human to read
@@ -117,6 +141,7 @@ const result = await esbuild.build({
     'import.meta.url': JSON.stringify(MASHI_BASE),
     __SEG0_LEN__: String(seg0.length),
     __SEG0_OFF__: String(SEG0_OFF),
+    __SEG0_SCRIPT_OFF__: String(SCRIPT_OFF),
     // Folds out the recorded paths: the oracle player, the PNG texture loader
     // and the stage switch are all dead on a build that ships no recording.
     __SIZE__: 'true',

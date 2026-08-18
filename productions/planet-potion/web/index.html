@@ -20,6 +20,19 @@
       cursor: pointer; z-index: 1; }
     #start:hover { background: #222d; }
     #start[hidden], #status[hidden] { display: none; }
+    /* The precalc bar. TRANSFORM ONLY, and promoted: the generators block the
+       main thread for seconds at a time, and a compositor-driven transform
+       keeps moving through that where anything driven by script would freeze
+       exactly when it most needs to show the page is alive. */
+    #bar { position: fixed; inset: calc(50% + 6.2rem) 0 auto; margin: 0 auto;
+      width: 13rem; height: 2px; background: #333; overflow: hidden; z-index: 1; }
+    #bar i { display: block; width: 38%; height: 100%; background: #ccc;
+      will-change: transform; animation: sweep 1.15s ease-in-out infinite; }
+    #bar[hidden] { display: none; }
+    @keyframes sweep {
+      from { transform: translateX(-110%); }
+      to   { transform: translateX(375%); }
+    }
     /* The fade at the end of part three. Over the whole viewport, not the
        canvas, so the letterbox goes with it. */
     #fade { position: fixed; inset: 0; background: #000; opacity: 0;
@@ -30,6 +43,7 @@
   <canvas id="screen" width="640" height="480"></canvas>
   <button id="start" type="button">Start Intro</button>
   <div id="status">Planet Potion</div>
+  <div id="bar"><i></i></div>
   <div id="fade"></div>
   <script type="module" src="./js/main.js"></script>
 </body>

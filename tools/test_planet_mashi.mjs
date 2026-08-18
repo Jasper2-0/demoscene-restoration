@@ -81,5 +81,50 @@ await withPage({
     m ? `${m[4]} draws (readable build: 337)` : 'no frame');
 });
 
+// ---------------------------------------------------------------------------
+// AND IT HAS TO MAKE A SOUND.
+//
+// Everything above renders one frame with `?scene=&tick=`, which is a path that
+// never touches the softsynth — so the pack shipped SILENT and passed. seg0's
+// PowerPC was sliced away at 0xa334 on the reasoning that the port only reads
+// the small-data area above it, and that enumeration missed `decodeScript`,
+// which walks the two call scripts at 0x6b6c as INSTRUCTIONS. They came through
+// as zeros, the walk returned nothing, and pressing Start threw
+// `undefined.call` out of minified code.
+//
+// So this presses Start. It is slow — the synth is a couple of seconds and the
+// mix a couple more — and it is the only assertion here that exercises the
+// payload rather than the picture.
+if (findChrome()) {
+  await withPage({
+    root: 'dist/planet-potion-mashi', path: '/index.html', query: '',
+    extraArgs: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader',
+      '--autoplay-policy=no-user-gesture-required'],
+  }, async ({ page }) => {
+    const read = () => page
+      .evaluate("document.getElementById('status')?.textContent ?? ''")
+      .catch(() => '');
+    // The generators block the main thread, so this polls rather than waiting
+    // on a function the page has no cycles to evaluate.
+    const until = async (re, ms) => {
+      for (let i = 0; i < ms / 2000; i++) {
+        const t = await read();
+        if (re.test(t)) return t;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      return read();
+    };
+    const ready = await until(/Potion, 2002|failed/, 240000);
+    ok('the pack finishes its precalc', /Potion, 2002/.test(ready),
+      ready.replace(/\n/g, ' · ').slice(0, 90));
+    ok('and it has a font', !/NO FONT/.test(ready),
+      /NO FONT/.test(ready) ? 'seg2 is missing from the payload' : 'seg2 present');
+    await page.evaluate("document.getElementById('start')?.click()").catch(() => {});
+    const after = await until(/failed|mixing|playing/, 240000);
+    ok('and pressing Start reaches the soundtrack without throwing',
+      !/failed/.test(after), after.replace(/\n/g, ' · ').slice(0, 110));
+  });
+}
+
 if (failed) process.exit(1);
 console.log('\nthe 64k pack runs, and draws what the readable build draws');

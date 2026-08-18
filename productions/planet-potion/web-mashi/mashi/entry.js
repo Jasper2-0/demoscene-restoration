@@ -42,12 +42,18 @@ const parts = [];
     off += n;
   }
 }
-const [seg0Slice, seg3, seg4, showorder, renderState, texPrograms, texKernels]
-  = parts;
+const [seg0Slice, seg0Scripts, seg2, seg3, seg4, showorder, renderState,
+  texPrograms, texKernels] = parts;
 
-// seg0, reassembled. __SEG0_LEN__ and __SEG0_OFF__ are build-time constants.
+// seg0, reassembled from TWO slices. The high one is the small-data area every
+// r2 displacement reaches; the low one is 900 bytes of PowerPC at 0x6b6c that
+// `decodeScript` walks to find the softsynth's call scripts — the only code in
+// seg0 this port still reads, and the reason the pack was silent until it was
+// carried too. __SEG0_LEN__, __SEG0_OFF__ and __SEG0_SCRIPT_OFF__ are
+// build-time constants.
 const seg0 = new Uint8Array(__SEG0_LEN__);
 seg0.set(seg0Slice, __SEG0_OFF__);
+seg0.set(seg0Scripts, __SEG0_SCRIPT_OFF__);
 
 const text = new TextDecoder();
 const json = (u8) => JSON.parse(text.decode(u8));
@@ -63,6 +69,12 @@ document.head.insertAdjacentHTML('beforeend',
   + '#status{position:fixed;inset:calc(50% + 2.4rem) 0 auto;text-align:center;'
   + 'opacity:.75;line-height:1.6;pointer-events:none;white-space:pre-line;z-index:1}'
   + '#fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none}'
+  + '#bar{position:fixed;inset:calc(50% + 6.2rem) 0 auto;margin:0 auto;width:13rem;'
+  + 'height:2px;background:#333;overflow:hidden;z-index:1}'
+  + '#bar i{display:block;width:38%;height:100%;background:#ccc;will-change:transform;'
+  + 'animation:sweep 1.15s ease-in-out infinite}'
+  + '#bar[hidden]{display:none}'
+  + '@keyframes sweep{from{transform:translateX(-110%)}to{transform:translateX(375%)}}'
   + '#start{position:fixed;inset:0;margin:auto;width:max-content;'
   + 'height:max-content;padding:.7rem 1.4rem;font:inherit;letter-spacing:.04em;color:#fff;'
   + 'border:1px solid #777;background:#111c;cursor:pointer;z-index:1}'
@@ -73,6 +85,7 @@ document.body.innerHTML =
   '<canvas id=screen width=640 height=480></canvas>'
   + '<button id=start type=button>Start Intro</button>'
   + '<div id=status>planet potion</div>'
+  + '<div id=bar><i></i></div>'
   + '<div id=fade></div>';
 
 // --------------------------------------------- 2. answer the runtime's fetches
@@ -82,6 +95,7 @@ document.body.innerHTML =
 // build it is absent on purpose.
 const FILES = new Map([
   ['./data/seg0.bin', seg0],
+  ['./data/seg2.bin', seg2],
   ['./data/seg3.bin', seg3],
   ['./data/seg4.bin', seg4],
   ['./data/showorder.json', showorder],
