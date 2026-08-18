@@ -49,6 +49,7 @@ Every row here is a measurement, and the check that made it is named. Run
 | renderer, end to end | 135 of 140 frames | `pipeline` — 44,190 of 45,327 primitives on every vertex |
 | Warp3D → WebGL2 | verified | `rendercheck`, `lvocheck` |
 | the page, computing rather than replaying | draws in a real browser | `stagecheck` — all eight stages report a computed side |
+| the schedule, end to end | 907 frames, nothing throws | `showcheck` — every entry of both parts through the engine |
 
 **What still keeps a recorded input in the loop, in the order it matters:**
 

@@ -266,11 +266,23 @@ async function main() {
 
   /** One part's scenes in schedule order, with the tick span each occupies. */
   const spansFor = (part) => (schedule && engine
-    ? (schedule[part]?.schedule ?? []).map((e, i) => ({
-      scene: i, frames: [], slot: e.slot, fog: e.fog, camera: e.camera,
-      start: e.startTick ?? 0, end: (e.startTick ?? 0) + (e.durTicks ?? 0),
-      part,
-    }))
+    // A SLOTLESS SCHEDULE ENTRY CONTINUES THE ONE BEFORE IT, and eleven of the
+    // thirty-nine are: nine `new_camera`, which change which camera renders and
+    // nothing else, and two `dalej`, which just carry on. Reading `slot` alone
+    // leaves those spans with no scene at all — a fifth of part one's back half
+    // frozen — and the scene's own clock has to keep running from the entry
+    // that INTRODUCED the slot, not restart at each continuation.
+    ? (() => {
+      let slot = null, sceneStart = 0;
+      return (schedule[part]?.schedule ?? []).map((e, i) => {
+        if (e.slot) { slot = e.slot; sceneStart = e.startTick ?? 0; }
+        return {
+          scene: i, frames: [], slot, fog: e.fog, camera: e.camera, sceneStart,
+          start: e.startTick ?? 0, end: (e.startTick ?? 0) + (e.durTicks ?? 0),
+          part,
+        };
+      });
+    })()
     : (dataset?.scenes ?? []).map((s, i) => ({
       scene: i, frames: s.frames ?? [], slot: s.slot, fog: s.fog,
       start: s.startTick ?? 0, end: (s.startTick ?? 0) + (s.durTicks ?? 0),
@@ -292,7 +304,10 @@ async function main() {
         const local = tick - s.start;
         let k = 0;
         for (let j = 1; j < s.frames.length; j++) if (s.frames[j].t <= local) k = j;
-        return { scene: s.scene, frame: k, slot: s.slot, span: s, local };
+        // The scene's OWN clock: from where the scene started, not where this
+        // schedule entry did.
+        return { scene: s.scene, frame: k, slot: s.slot, span: s,
+          local: tick - (s.sceneStart ?? s.start) };
       }
     }
     return null;

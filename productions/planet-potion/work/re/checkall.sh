@@ -248,6 +248,11 @@ run "chancheck — every node's channels, in every scene, at every tick" \
 run "pipeline — the renderer reproduces the recording, from bytecode" \
   node "$HERE/pipeline.mjs"
 
+# THE SCHEDULE, which is what turns frames into a show and is the one part with
+# no oracle. Every entry of both parts, stepped through the engine.
+run "showcheck — the whole schedule runs end to end through the engine" \
+  node "$HERE/showcheck.mjs"
+
 # The emitter, checked on its own before the clipper and node walk that feed it
 # exist: the recorded stream is 144,727 vertices of its output, and the
 # projection inverts exactly, so the round trip is a real test of the
