@@ -143,6 +143,7 @@ const fieldOK = FIELDS.map(() => 0);
 const fieldBad = FIELDS.map(() => 0);
 const byKind = new Map();
 const byKindC = new Map();   // the same, for the colours
+const CSHOW = [];
 const SHOW = [];
 const matchFrame = (got, want, label = '') => {
   const by = new Map();
@@ -180,6 +181,17 @@ const matchFrame = (got, want, label = '') => {
           if (Math.abs(a - b) <= tol) fieldOK[f]++;
           else {
             fieldBad[f]++;
+            if (f === 6 && process.env.COLSHOW && CSHOW.length < 8
+              && !KNOWN_INEXACT.has(label)) {
+              const q = d.v[j], o = j * 10;
+              CSHOW.push(`${label} ${d.srcKind} shade${d.shading} tex${d.texture}`
+                + ` ours(${q.r.toFixed(4)},${q.g.toFixed(4)},${q.b.toFixed(4)})`
+                + ` theirs(${w.v[o + 6].toFixed(4)},${w.v[o + 7].toFixed(4)},`
+                + `${w.v[o + 8].toFixed(4)})`
+                + ` ratio(${(w.v[o + 6] / q.r).toFixed(4)},`
+                + `${(w.v[o + 7] / q.g).toFixed(4)},`
+                + `${(w.v[o + 8] / q.b).toFixed(4)})`);
+            }
             if (f >= 6 && f <= 8) {
               const kc = `${d.sprite ? 'sprite' : (d.srcKind ?? '?')}`
                 + `${d.cut ? ' cut' : ' whole'} shade${d.shading ?? '?'}`;
@@ -396,45 +408,23 @@ ok('every frame on the accounted-for list still disagrees', fixed.length === 0,
   // face's uv fields at all. See meshDraws in render.js. Once that was right
   // they went exact in one step, so they belong with the fields that cannot
   // drift rather than with the ones that are still being chased.
-  const geom = ['x', 'y', 'z', 'w', 'a', 'u', 'v'];
+  // ALL TEN FIELDS. There is no ratchet under this line any more: the emitted
+  // vertices agree with the recording bit for bit on position, depth, alpha,
+  // texture coordinates and colour, across every matched vertex of every frame.
+  //
+  // The last two to arrive were u/v and r/g/b, and both were the same shape of
+  // mistake — a per-frame quantity the geometry oracle could not see. u and v
+  // because shading mode 4 environment-maps off the transformed normal instead
+  // of using the face's uv fields; r/g/b because mode 2 multiplies by the
+  // transformed FACE normal's z, which the builder never computed, so the
+  // colour was NaN and then zero and part one's crates rendered black.
+  const geom = FIELDS;
   const bad = geom.filter((f) => fieldBad[FIELDS.indexOf(f)] > 0);
-  ok('every position, alpha and texture coordinate is exact', bad.length === 0,
+  ok('every field of every matched vertex is exact', bad.length === 0,
     bad.length ? bad.map((f) => `${f} ${fieldBad[FIELDS.indexOf(f)]} differ`).join(' ')
       : `${geom.join(', ')} across ${fieldOK[0]} vertices`);
 }
-// A RATCHET, with the numbers written down. The three colours still differ on
-// the mesh draws and nowhere else, and the floor is what it measured the day
-// the gap was found — so it cannot quietly get worse, and improving it means
-// editing this line.
-//
-// u AND v HAVE LEFT THIS LIST. They were on it at 85,257 of 141,220, with a
-// comment guessing that the matcher might be pairing a base face with its
-// layer; it was not, and the guess would have made a real defect look like a
-// harness artefact. Shading mode 4 environment-maps, and half the mesh faces in
-// the demo are mode 4.
-//
-// WHAT IS KNOWN about what is left, and it is now narrow: every remaining
-// colour mismatch is on SHADING MODE 2 and on no other mode — the breakdown
-// below says so, and mode 2 is the flat-shaded one that multiplies its face
-// colour by |face[+0x50]|, the transformed normal's z.
-//
-// Half of that gap closed when the object chain was actually populated: it was
-// an empty array, so `publishMesh` never walked it, `face.intensity` was
-// undefined and `Math.abs` of it was NaN. What is left is which faces get a
-// REFRESHED intensity. Pass 3 walks `+0x60`, the base triangles; a layer hangs
-// off `+0x5c` and keeps the builder's value. Excluding layers changed nothing
-// measurable, so the grouping is not the whole story and the rest is unfound.
-{
-  const FLOOR = { r: 137901, g: 135609, b: 135609 };
-  const worse = Object.entries(FLOOR)
-    .filter(([f, n]) => fieldOK[FIELDS.indexOf(f)] < n)
-    .map(([f, n]) => `${f} ${fieldOK[FIELDS.indexOf(f)]} < ${n}`);
-  ok('the vertex colours are no worse than when last measured',
-    worse.length === 0, worse.length ? worse.join(', ')
-      : Object.keys(FLOOR).map((f) =>
-        `${f} ${fieldOK[FIELDS.indexOf(f)]}/${fieldOK[FIELDS.indexOf(f)]
-          + fieldBad[FIELDS.indexOf(f)]}`).join(' '));
-}
+for (const c of CSHOW) console.log(`     ${c}`);
 if (byKindC.size) {
   console.log('     colour mismatches by source: '
     + [...byKindC].sort((a, b) => b[1] - a[1])

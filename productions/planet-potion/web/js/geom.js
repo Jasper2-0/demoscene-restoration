@@ -555,19 +555,46 @@ function normalise(v) {
  * the transform reaches the field everything else reads, and is why normals
  * turn with their geometry instead of staying in model space.
  */
+function faceNormal(positions, t) {
+  const B = positions[t[0]], A = positions[t[1]], C = positions[t[2]];
+  if (!A || !B || !C) return null;
+  const e1 = [C[0] - B[0], C[1] - B[1], C[2] - B[2]];
+  const e2 = [A[0] - B[0], A[1] - B[1], A[2] - B[2]];
+  return normalise([
+    -(fma(e2[2], e1[1], -(e1[2] * e2[1]))),
+    -(fma(e2[0], e1[2], -(e1[0] * e2[2]))),
+    -(fma(e2[1], e1[0], -(e1[1] * e2[0]))),
+  ]);
+}
+
+/**
+ * The TRIANGLE's own normal, at `+0x3a/+0x3e/+0x42`.
+ *
+ * `0x10003d18` computes it from the same two edges and normalises it through
+ * the same `frsqrte` at `0x10003674` as the per-vertex accumulation; the scene
+ * builder then copies it into the scene face at `+0x3c` (`0x10002908`), and
+ * pass 3 rotates THAT through the node's 3x3 into `+0x48/+0x4c/+0x50`. The
+ * third component is the face intensity shading mode 2 multiplies by.
+ *
+ * Nothing had it: `geo.json` does not export the field, so `geovertcheck` could
+ * not miss it, and mode-2 faces were multiplying their colour by an undefined
+ * that became NaN and then, once the chain existed but was empty, by zero.
+ * Part one's crates are mode 2 and they rendered black.
+ */
+export function attachFaceNormals(positions, triangles) {
+  for (const raw of triangles) {
+    const n = faceNormal(positions, raw.idx ?? raw);
+    if (n) raw.normal = n.map(f32);
+  }
+  return triangles;
+}
+
 function computeNormals(positions, triangles) {
   const N = positions.map(() => [0, 0, 0]);
   for (const raw of triangles) {
     const t = raw.idx ?? raw;
-    const B = positions[t[0]], A = positions[t[1]], C = positions[t[2]];
-    if (!A || !B || !C) continue;
-    const e1 = [C[0] - B[0], C[1] - B[1], C[2] - B[2]];
-    const e2 = [A[0] - B[0], A[1] - B[1], A[2] - B[2]];
-    const n = normalise([
-      -(fma(e2[2], e1[1], -(e1[2] * e2[1]))),
-      -(fma(e2[0], e1[2], -(e1[0] * e2[2]))),
-      -(fma(e2[1], e1[0], -(e1[1] * e2[0]))),
-    ]);
+    const n = faceNormal(positions, t);
+    if (!n) continue;
     for (const i of t) {
       N[i][0] = f32(N[i][0] + n[0]);
       N[i][1] = f32(N[i][1] + n[1]);
@@ -793,6 +820,9 @@ export function buildOp0(node, table) {
   const raw = rec ? src.map((v) => transformVertex(v, rec, table, true)) : src;
   applyUVs(tris, { source: src, built: out, box: raw }, null, node.records,
     atanTable());
+  // The triangle's own normal, which the scene builder copies to the face and
+  // pass 3 rotates into the intensity. See attachFaceNormals.
+  attachFaceNormals(out, tris);
   return { vertices: out, triangles: tris, normals: computeNormals(out, triangles) };
 }
 
@@ -898,6 +928,7 @@ export function buildOp3(node, source, table) {
       if (sel === 0) break;
     }
   }
+  attachFaceNormals(V, T);
   return { vertices: V, triangles: T, normals: N };
 }
 
@@ -1096,6 +1127,7 @@ export function buildOp4(node, table, atanTab) {
   const raw = rec ? src.map((v) => transformVertex(v, rec, table, true)) : src;
   applyUVs(tris, { source: src, built: vertices, box: raw },
     V.map((v) => [v.u, f32(v.arc * invArc)]), node.records, atanTab);
+  attachFaceNormals(vertices, tris);
   return {
     vertices,
     triangles: tris,
