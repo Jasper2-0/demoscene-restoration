@@ -1,8 +1,22 @@
 # Planet Potion — browser restoration
 
-Work in progress. **The textures, the soundtrack and the Warp3D shim are
-computed; the engine is not.** Everything between them — scene build, animation,
-draw emission — still comes from the original's recorded stream.
+**Self-contained.** This page downloads no recorded draw stream and no
+pre-rendered audio. It reads the intro's own bytecode out of three segments and
+runs it: the scene graph, the geometry, the three animation passes, the node
+walk, the clipper, the projection, both soundtrack modules and all 69 textures.
+
+`work/re/pipeline.mjs` compares 140 frames of that against the original's
+recorded stream — 135 reproduce every primitive exactly, and the five that do
+not are one geometry node whose displacement map is specified in
+[`PORT_SPEC.md`](../work/re/PORT_SPEC.md) §0-bis and not yet reproduced.
+
+`?oracle=1` and `?scene=N` still play the recording, which is now an oracle
+rather than an input. `?scene=N&tick=M` renders one computed frame.
+
+There is a second target: `./scripts/build-planet-potion-mashi.sh` packs the
+same runtime into one self-extracting 55,196-byte .html, against the original's
+65,288. It does not fork the code — see
+[`PORT_SPEC.md`](../work/re/PORT_SPEC.md) §0-bis.
 
 ## What is here
 
@@ -13,10 +27,12 @@ bilinear-without-mipmaps, `REPEAT` wrapping, texel-space texture coordinates, an
 per-vertex linear fog. Provenance for each is in
 [`../work/re/PORT_SPEC.md`](../work/re/PORT_SPEC.md) §5.
 
-It consumes the same record shape `work/re/drawlog.py` records from the original,
-so the recorded draw stream plays through it directly. That is the first
-milestone on purpose: it tests the WebGL2 translation **alone**, with no
-reimplemented engine present to confuse a difference with.
+It consumes the same record shape `work/re/drawlog.py` records from the
+original, so the recorded draw stream plays through it directly. That was the
+first milestone on purpose — it tested the WebGL2 translation **alone**, with no
+reimplemented engine to confuse a difference with — and it is why the engine
+could be checked against the recording through a shim already known to be
+right.
 
 `js/fp.js` holds the two PowerPC floating-point semantics everything else
 depends on: `stfs` stores truncate rather than round, and the multiply-adds are
