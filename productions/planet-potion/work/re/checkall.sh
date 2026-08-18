@@ -226,6 +226,9 @@ run "joincheck — the geometry programs wired to the scenes that use them" \
 # The scene stream, decoded statically and checked field by field against the
 # node list the original built. This is the check that reported 0/29 for most of
 # the project's life.
+run "texmemcheck — the textures as the intro leaves them in MEMORY" \
+  node "$HERE/texmemcheck.mjs" "$DATA"
+
 run "scenegram — every scene stream decodes to the nodes the original built" \
   python3 "$HERE/scenegram.py" "$FLAT" "$HERE/out/arena.json"
 

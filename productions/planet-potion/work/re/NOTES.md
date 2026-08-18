@@ -2482,6 +2482,72 @@ have is a **register being clobbered by something you are not modelling**.
 
 ## The capture, aligned — and two things that fell out of aligning it
 
+### THE CAPTURE'S GREYS ARE GREEN, AND EVERY INPUT OF OURS IS EXACT
+
+Through part one, surfaces the port draws as EXACTLY neutral grey — R = G = B
+to a tenth over a whole region — come back from the capture with red and blue
+below green. 0x25aa, 0x25ae, 0x25ca and 0x25c2 all show it, and it is worth
+writing down what was measured before anyone chases it again.
+
+WHAT WAS RULED OUT, in the order it was ruled out.
+
+*The draw stream.* Matched on geometry ALONE — ignoring texture, so that a
+primitive drawn with the wrong texture would still pair — all 1358, 279, 483 and
+747 primitives of those four scenes agree with the recording on texture index.
+Colours agree too, and not only at the five ticks per scene `draws.json` samples:
+running the original through `drawlog` at ticks 200, 400, 600 and 800 of 0x25ca
+and 0x25c2 — ticks nothing had ever sampled — gives ZERO vertices with a
+different colour. That kills the "a colour curve we have missed" reading, which
+was a good hypothesis: colours ARE animated, through channels 16-18.
+
+*The textures, as the intro leaves them in MEMORY.* `rendertex.py` runs each
+program in isolation, so "every program is byte-exact alone" and "the texture the
+draw calls sample is right" were different claims. `texmemdump.py` probes the
+live images after a real init and all 48 agree on R, G and B. It did find one
+thing — see `texmemcheck.mjs` — and it is an alpha seam in tex10, not a colour.
+
+*The 16-bit framebuffer.* The original renders to R5G6B5, where green gets the
+extra bit, so it is the obvious suspect. Quantising our frame to R5G6B5 with bit
+replication moves the balance by **-1.0** — the wrong way, and a sixth of the
+size.
+
+WHAT IT IS. The file is `yuv420p` with `color_range=unknown`, and its chroma
+planes do not sit on neutral: at t=9 s the frame means are U 126.01 and V 125.46
+against 128, 128. Through BT.601 that is
+
+```
+    R = Y + 1.402(V-128)                    = Y - 3.56
+    G = Y - 0.344(U-128) - 0.714(V-128)     = Y + 2.49
+    B = Y + 1.772(U-128)                    = Y - 3.53
+    G - (R+B)/2                             = +6.04
+```
+
+and the measured bias in that frame is **+6.75**.
+
+AND IT IS NOT OBJECT-SPECIFIC, which is the part that needed checking rather
+than asserting, because a cast should be uniform and the report was about
+particular objects. Per tile over an 8x6 grid our render is +0.0 in every tile
+of all four scenes and the capture is biased in every tile of all four —
+0x25ca uniformly +3.0 to +4.0. Region by region in 0x25aa:
+
+| region | ours | capture | bias |
+|---|---|---|---|
+| the object that rises through the scene | 33.4 neutral | 28.6 / 32.2 / 28.9 | +3.40 |
+| its tendrils | 209.3 neutral | 198.8 / 204.3 / 199.7 | +5.06 |
+| grey fan, left | 76.7 neutral | 68.2 / 75.4 / 69.1 | +6.73 |
+| white background | 255.0 neutral | 245.5 / 252.5 / 245.5 | +7.00 |
+
+The object singled out as looking green is the LEAST affected region in the
+frame; the bias tracks brightness, which is what a chroma plane does and not
+what an object colour does.
+
+CONSEQUENCE FOR THE CHECKS. `capsweep` and `capcheck` correlate LUMA grids, and
+luma is very nearly untouched by this, so the existing comparison is sound. A
+future comparison that looks at colour has to neutralise the offset first, or it
+will measure the encoder.
+
+## The capture, aligned — and two things that fell out of aligning it
+
 `alignmentOffsetMs` was null until `capalign.mjs` measured it. It is **120 ms**:
 our clock runs that far ahead of the capture, in lost-vegas's sign convention
 (ours minus the reference), because the recording begins a tenth of a second
