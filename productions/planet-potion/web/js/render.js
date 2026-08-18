@@ -148,3 +148,93 @@ export function planeDistances(v, cx, cy, scale) {
     fma(v[1], -1, v[2] * ((H - cy) / scale)),
   ];
 }
+
+// ---------------------------------------------------------------------------
+// The node walk, `_show_scene` at `0x10005d28`, and the shared draw routine at
+// `0x10006630` that every primitive in the intro passes through.
+//
+// THE HANDLERS ARE THIN. Six of the eight table entries at `r2+0x2a22` do
+// nothing but choose a draw vector, a render-state block, a vertex array and a
+// minimum vertex count, then jump to the shared routine:
+//
+//     type 0        DrawLineStrip, node+0x20, min 2
+//     type 1, 2     DrawTriFan,    node+0x20, min 3     — the same entry
+//     type 3        whichever `node+0x68` selects
+//     type 4        DrawTriFan, once per glyph, at glyph+0x14
+//     type 5        the mesh, which walks objects and faces first
+//     type 6        the camera, which draws nothing
+//
+// THE VERTEX ARRAY IS COUNT-THEN-POINTERS. `r19` points at the count and the
+// pointers follow, read with a pre-incrementing `lwzu` — so for types 0 to 3
+// the count is at node+0x20 and the first pointer at node+0x24, and for a glyph
+// the count is at +0x14 and the first vertex at +0x18. That is the same +0x18
+// the text tail writes, which is how the two halves meet.
+
+/**
+ * `0x10006630` — one primitive, from the gate to the emitter.
+ *
+ * THE ALPHA GATE IS THE FIRST THING AND IT USES THE UNCLIPPED FIRST VERTEX.
+ * `lfs f24, 0xc(r12)` then `blelr` — a primitive whose leading vertex has alpha
+ * at or below zero is not drawn at all. That single value is then written to
+ * EVERY output vertex, which is why alpha is the one field the clipper does not
+ * interpolate, and why every draw in the recorded stream carries one alpha
+ * across all its vertices.
+ */
+export function drawPrimitive(source, node, prim) {
+  if (!source.length) return null;
+  const alpha = source[0].a;
+  if (!(alpha > 0)) return null;
+  const { cx, cy, scale } = node;
+  const poly = node.clip ? clip(source, cx, cy, scale, prim) : source;
+  if (!poly.length) return null;
+  return { prim, texture: node.texture, cx, cy, scale, clip: !!node.clip,
+    v: emit(poly, cx, cy, scale, alpha) };
+}
+
+/** Which vector each node type draws with, and its minimum vertex count. */
+export function primitiveOf(node) {
+  if (node.type === 0) return 'linestrip';
+  if (node.type === 3) return node.at68 ? 'trifan' : 'linestrip';
+  return 'trifan';
+}
+
+/**
+ * `_show_scene`. Walk the list on `+0x10` and dispatch on `+0x08`.
+ *
+ * PUBLISHES NOTHING UNLESS `+0x0c` IS SET — the same gate byte pass 3 writes,
+ * so a node whose track has not started is skipped here rather than drawn with
+ * stale numbers. `+0x0d` against the running state triggers a render-state
+ * change before the handler, which is where shading mode is selected.
+ *
+ * THE MESH HANDLER IS NOT HERE. `0x100061a0` walks the object and face chains,
+ * applies the cull and the four shading modes, and only then reaches
+ * `drawPrimitive`; it is a separate piece with its own oracle in arena.json.
+ */
+export function showScene(nodes) {
+  const draws = [];
+  let state = 2;
+  for (const node of nodes) {
+    if (!node.drawGate) continue;
+    if (node.at0d !== state) state = node.at0d;      // render-state change
+    if (node.type === 6 || node.type === 7) continue; // camera and root draw nothing
+    if (node.type === 5) continue;                    // mesh: not ported here
+    if (node.type === 4) {
+      for (const g of node.glyphs ?? []) {
+        if (!g || g.space || !g.quad) continue;
+        const d = drawPrimitive(g.quad.map(toVertex), node, 'trifan');
+        if (d) draws.push(d);
+      }
+      continue;
+    }
+    const d = drawPrimitive((node.vertices ?? []).map(toVertex), node,
+      primitiveOf(node));
+    if (d) draws.push(d);
+  }
+  return draws;
+}
+
+/** A stored vertex record's nine floats, as the clipper and emitter want them. */
+function toVertex(v) {
+  return { p: [v[0], v[1], v[2]], a: v[3], rgb: [v[4], v[5], v[6]],
+    uv: [v[7], v[8]] };
+}

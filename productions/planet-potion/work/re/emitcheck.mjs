@@ -45,12 +45,28 @@ let uvrgb = 0;
 // The clip planes, split by the per-draw clip flag: only a CLIPPED primitive
 // has to satisfy them.
 const plane = { on: { n: 0, in: 0, worst: 0 }, off: { n: 0, in: 0, worst: 0 } };
+// The two rules `0x10006630` applies before anything else.
+let draws = 0, oneAlpha = 0, minOK = 0, posAlpha = 0, roundedToZero = 0;
 const prims = new Set();
 
 for (const scene of doc.scenes) {
   for (const frame of scene.frames) {
     for (const d of frame.draws) {
       prims.add(d.prim);
+      draws++;
+      const a0 = d.v[9];
+      // The alpha is per-PRIMITIVE: `f24` is read once from the unclipped first
+      // vertex and written to every output vertex. All of them sharing one
+      // value is what that looks like from the outside.
+      let same = true;
+      for (let q = 0; q < d.v.length; q += 10) if (d.v[q + 9] !== a0) same = false;
+      if (same) oneAlpha++;
+      if (d.v.length / 10 >= (d.prim === 'linestrip' ? 2 : 3)) minOK++;
+      // `blelr` — alpha at or below zero and the primitive is never drawn. Four
+      // recorded draws carry exactly 0, and they are an EXPORT artifact rather
+      // than a counter-example: export.py rounds every vertex field except z
+      // and w to five decimals, so any alpha under 5e-6 lands on zero.
+      if (a0 > 0) posAlpha++; else if (a0 === 0) roundedToZero++;
       const V = d.v;
       for (let i = 0; i < V.length; i += 10) {
         const [x, y, z, w, u, v, r, g, b, a] = V.slice(i, i + 10);
@@ -104,6 +120,14 @@ ok('the passthrough fields survive unchanged', uvrgb === recover,
 // right plane, say, or the divide by scale — and the clipped side fails
 // immediately. The unclipped side is reported beside it as the control, and it
 // does NOT satisfy them, which is the whole point of the flag.
+ok('every primitive carries one alpha across all its vertices',
+  oneAlpha === draws, `${oneAlpha}/${draws}`);
+ok('every primitive meets its minimum vertex count', minOK === draws,
+  `${minOK}/${draws} — 3 for a fan, 2 for a strip`);
+ok('every primitive passed the alpha gate', posAlpha + roundedToZero === draws
+  && roundedToZero <= 4, `${posAlpha}/${draws}`
+  + (roundedToZero ? `, ${roundedToZero} rounded to zero by the 5-decimal export`
+    : ''));
 ok('every clipped vertex is inside all four clip planes',
   plane.on.in === plane.on.n, `${plane.on.in}/${plane.on.n}`
   + (plane.on.worst ? `, worst outside ${plane.on.worst.toExponential(2)}` : ''));
