@@ -39,6 +39,7 @@ Every row here is a measurement, and the check that made it is named. Run
 | font atlas, glyph table, text layout | exact | `initcheck`, `font.js` 40/40 |
 | texture VM | byte-exact, 69/69 | `texvmdiff`, `texopdiff` |
 | softsynth | **byte-exact, both modules** | `synthdiff` — 94/94 samples, SHA-256 |
+| **audio, end to end** | **COMPLETE** | listened to front to back in the browser, both parts, 2026-08-18 |
 | DBM replayer | 0.9955 / 0.9858 vs reference | `dbmdiff`, `dbmsuite` |
 | geometry: vertices, triangles, normals, UVs | bit-exact | `geovertcheck` — 11,723 / 19,074 / all 7 UV modes |
 | geometry: the mesh copy into a scene | bit-exact | `joincheck` — 141,690 face fields |
@@ -60,6 +61,12 @@ segments are the payload of an already crunched executable and gzip manages
 port replaced, and everything still read from seg0 lives above `0xa334`, so the
 build ships a 5,180-byte slice and the three segments drop from 47,142 packed
 bytes to 23,487.
+
+**The visuals are the remaining work.** The engine reproduces the original's
+draw calls; what sits between those calls and the screen — the Warp3D shim's
+blending, texture environment and filtering — is measured against nothing but
+the capture, and the capture says the composition is right and the shading is
+not. `capcheck.mjs` is the instrument and it fails deliberately.
 
 **What still keeps a recorded input in the loop, in the order it matters:**
 
