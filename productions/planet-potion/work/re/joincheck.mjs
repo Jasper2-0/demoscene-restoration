@@ -53,13 +53,30 @@ let vOK = 0, vBad = 0, oOK = 0, oBad = 0, nodes = 0, noProgram = 0, hidden = 0;
 // The copied VALUES, not just the counts.
 let posOK = 0, posBad = 0, colOK = 0, colBad = 0, idxOK = 0, idxBad = 0;
 let fieldOK = 0, fieldBad = 0, texDep = 0;
-// PROGRAM 26 OF PART ONE READS TEXTURE MEMORY. It is the one that segfaulted
-// under rungeo's single shared no-op vector, and it only runs at all once the
-// texture table holds dereferenceable pointers — because something in it
-// FOLLOWS one. So its geometry depends on what those objects contain, geodump
-// fills them with zeroes, and the vertices it produces are not the ones the
-// real boot produces. Its 1,044 positions are counted separately and named
-// rather than lost in a tolerance.
+// PROGRAM 26 OF PART ONE COMES OUT DIFFERENT UNDER geodump THAN UNDER A REAL
+// BOOT, and the reason written here before — that it reads texture memory —
+// is DISPROVED. It does need the texture table to hold dereferenceable
+// pointers or it segfaults, so something follows one; but the vertices do not
+// depend on what is behind them:
+//
+//   * filling geodump's whole 128 KB texture region with 0x01, and again with
+//     0xFF, changes not one of the 1,713 vertices. A dereference of a pointer
+//     read from there would fault on 0xFFFFFFFF, and it does not.
+//   * zeroing every entry of the texture TABLE, and swapping the two words of
+//     each entry, likewise change nothing.
+//
+// What differs is one node: index 11, an op-0 33x33 grid of 1,089 vertices, of
+// which 1,044 differ. x is IDENTICAL in every one and z moves by at most about
+// three, so it is a displacement along y — up to 3.7e3 against a base grid that
+// only varies by 12. And it is structured, not noise: flat runs, linear ramps
+// and plateaux, 794 distinct heights.
+//
+// It is not the geometry program's eval pass — op 0's eval vector is a bare
+// `blr` — and not the scene's mesh copy, which is a straight copy of +0x24,
+// +0x50 and +0x0c. So it is something about the CONTEXT geodump runs in, most
+// likely that it gives each program a fresh arena while the real boot runs all
+// thirty-nine into one. Counted separately and named rather than lost in a
+// tolerance.
 const TEXTURE_DEPENDENT = new Set(['p1:26']);
 const layers = new Map();
 const failures = [];

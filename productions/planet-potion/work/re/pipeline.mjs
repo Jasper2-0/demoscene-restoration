@@ -335,11 +335,14 @@ const matchFrame = (got, want) => {
 // listed one leaves it, so the only way to move the number is to change this
 // line and say why.
 //
-//   p1/17 x5   geometry that READS TEXTURE MEMORY. joincheck already names the
-//              program, p1:26, and geodump fills the texture objects with
-//              zeroes, so its 33x33 grid is flat here and displaced in the
-//              original. Everything else in those frames matches: the whole
-//              disagreement is that one node's 2,048 triangles.
+//   p1/17 x5   ONE NODE, and it is the same one joincheck names as p1:26 —
+//              node 11 of that program, an op-0 33x33 grid whose 1,089 vertices
+//              come out flat under geodump and displaced along y under a real
+//              boot. Its 2,048 triangles are the whole disagreement; every
+//              other texture in those five frames matches exactly. See
+//              joincheck for what the difference is NOT: not the texture
+//              contents, not the texture table, not the eval pass, not the mesh
+//              copy.
 // p1/5, p1/14 and p1/15 were on this list, short by three, two and two at their
 // earliest tick and at no other. They were the OVERLAY: animdump gave it only
 // the default ticks, because it is not a scene to draws.json and so has none of
