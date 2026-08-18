@@ -373,6 +373,12 @@ export function decodeScene(bytes, at) {
 export function buildMesh(program) {
   const vertices = [];
   const faces = [];
+  // POINT SPRITES. A geometry node carries a FOURTH chain at +0x0c that nothing
+  // used to export, and `0x1000298c` copies it into the scene node's +0x28 list.
+  // A node with no triangles at all is not empty: part one's program 12 is 81
+  // points and nothing else, and the two scene nodes that use it drew nothing
+  // until this existed.
+  const sprites = [];
   for (const node of program.nodes) {
     if (!node.visible) continue;
     const base = vertices.length;
@@ -383,6 +389,21 @@ export function buildMesh(program) {
         // The four the geometry vertex allocator preset to 1.0, landing in the
         // slot everything downstream reads as the source colour.
         rgba: [1, 1, 1, 1],
+      });
+    }
+    for (const q of node.sprites ?? []) {
+      // The vertex is an INDEX, walked down the +0x68 chain by `0x1000277c`,
+      // and rebased here the same way a triangle's indices are.
+      sprites.push({
+        vertex: base + q.vertex,
+        size: q.size,
+        textureIndex: q.texIndex,
+        // Four corners share one colour and take opposite ends of the UV rect:
+        // (u0,v0), (u1,v0), (u1,v1), (u0,v1) — `0x10002a00` onward.
+        uv: [[q.uv[0], q.uv[1]], [q.uv[2], q.uv[1]],
+          [q.uv[2], q.uv[3]], [q.uv[0], q.uv[3]]],
+        // Positional again: alpha first, then the three colours.
+        rgba: [...q.rgba],
       });
     }
     for (const t of node.triangles) {
@@ -409,5 +430,5 @@ export function buildMesh(program) {
       });
     }
   }
-  return { vertices, faces };
+  return { vertices, faces, sprites };
 }

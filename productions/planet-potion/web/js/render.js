@@ -278,6 +278,64 @@ function meshDraws(node) {
       if (d) out.push(d);
     }
   }
+  out.push(...spriteDraws(node));
+  return out;
+}
+
+/**
+ * The point sprites, `0x100062bc`. NOT an alternative to the triangles: the
+ * object loop's exit and the no-objects test land on the SAME instruction, so
+ * every mesh runs this after its faces, and a mesh with no faces at all runs
+ * only this. Part one's program 12 is 81 points and nothing else.
+ *
+ * One screen-aligned quad per point, built in EYE space from the published
+ * vertex and a half-size the geometry carried, so the four corners share the
+ * point's depth and the quad stays square on screen at any distance.
+ *
+ * THE ALPHA CARRIES A RIM TERM. `1 - nz` off the transformed normal, clamped
+ * below at zero on both sides of the subtraction, multiplied into the vertex's
+ * own scaled alpha and then the sprite's. A point facing the camera fades out
+ * and one edge-on is opaque.
+ */
+function spriteDraws(node) {
+  const out = [];
+  const { cx, cy, scale } = node;
+  for (const sp of node.sprites ?? []) {
+    const v = sp.v;
+    const [x, y, z] = v.p;
+    if (!(z > 0)) continue;                    // `ble` — behind the eye
+    // The trivial ACCEPT: the centre and the four corners, projected. If not
+    // one of the five lands on the screen the point is skipped without being
+    // clipped. `0x10005e78`, five calls.
+    const k = f32(scale) * fres(z);
+    const on = (px, py) => {
+      const sx = fma(px, k, cx), sy = fma(py, k, cy);
+      return sx > 0 && sy > 0 && sx < W && sy < H;
+    };
+    const s = sp.size;
+    if (!(on(x, y) || on(x - s, y - s) || on(x + s, y - s)
+      || on(x + s, y + s) || on(x - s, y + s))) continue;
+
+    // `fsel f20, f20, f20, f31` is `>= 0 ? value : 0`, and it runs on the
+    // normal AND on one minus it, so a normal outside [0, 1] cannot make the
+    // alpha negative from either end.
+    const lo = (t) => (t >= 0 ? t : 0);
+    const hi = (t) => (t - 1 >= 0 ? 1 : t);
+    let a = v.scaled[0] * lo(1 - lo(v.nz));
+    const r = hi(v.scaled[1] * sp.rgba[1]);
+    const g = hi(v.scaled[2] * sp.rgba[2]);
+    const b = hi(v.scaled[3] * sp.rgba[3]);
+    a = hi(a * sp.rgba[0]);
+
+    const corners = [[x - s, y - s], [x + s, y - s],
+      [x + s, y + s], [x - s, y + s]];
+    const poly = corners.map((c, i) => ({
+      p: [f32(c[0]), f32(c[1]), f32(z)], a, rgb: [r, g, b], uv: sp.uv[i],
+    }));
+    const d = drawPrimitive(poly, { ...node, texture: sp.textureIndex },
+      'trifan');
+    if (d) out.push(d);
+  }
   return out;
 }
 

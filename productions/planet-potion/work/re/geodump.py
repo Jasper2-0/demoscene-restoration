@@ -277,6 +277,38 @@ def table_index(v):
     return d // TEXSTRIDE if 0 <= d < 256 * TEXSTRIDE and d % TEXSTRIDE == 0 else None
 
 
+def read_point(A, a):
+    """A geometry node's FOURTH chain, on `+0x0c`, which nothing exported.
+
+    A node whose triangle list is empty is not empty: it can carry point
+    sprites, and `0x1000298c` copies this chain into the scene node's `+0x28`
+    list, 0x24 bytes each. The renderer's mesh handler jumps straight here when
+    `node+0x24` has no objects — `0x100061c0` — and draws one screen-aligned
+    quad per point at `0x100062bc`.
+
+    Part one's geometry program 12 is 81 points and no triangles at all, so
+    without this the two scene nodes that use it drew nothing.
+
+        +0x00  vertex INDEX, resolved down the +0x68 vertex chain by 0x1000277c
+        +0x04  texture
+        +0x08  half-size, in eye units
+        +0x0c  u0     +0x10  v0     +0x14  u1     +0x18  v1
+        +0x1c  alpha  +0x20  r      +0x24  g      +0x28  b
+        +0x2c  next
+    """
+    return {'addr': hex(a),
+            'vertex': A.u32(a, 0x00),
+            'texture': A.u32(a, 0x04),
+            # The same +0x100 bias a triangle's texture carries.
+            'texIndex': table_index(A.u32(a, 0x04) - 0x100),
+            'size': A.f32(a, 0x08),
+            'uv': [A.f32(a, 0x0c), A.f32(a, 0x10),
+                   A.f32(a, 0x14), A.f32(a, 0x18)],
+            'rgba': [A.f32(a, 0x1c), A.f32(a, 0x20),
+                     A.f32(a, 0x24), A.f32(a, 0x28)],
+            'next': hex(A.u32(a, 0x2c))}
+
+
 def read_vertex(A, a):
     """A 0x6c vertex. SOURCE fields only — nothing has transformed it yet.
 
@@ -382,7 +414,9 @@ def dump_program(part, index, prog):
         recs, o1 = chain(A, A.u32(a, 0x00), 0x54, 0x58, MAX_RECS)
         verts, o2 = chain(A, A.u32(a, 0x04), 0x68, 0x6c, MAX_VERTS)
         tris, o3 = chain(A, A.u32(a, 0x08), 0x4e, 0x52, MAX_TRIS)
-        for flag, name in ((o1, 'records'), (o2, 'vertices'), (o3, 'triangles')):
+        pts, o4 = chain(A, A.u32(a, 0x0c), 0x2c, 0x30, MAX_TRIS)
+        for flag, name in ((o1, 'records'), (o2, 'vertices'), (o3, 'triangles'),
+                           (o4, 'sprites')):
             if flag:
                 truncated.append(f'{hex(a)}:{name}')
         n = {'addr': hex(a), 'op': op,
@@ -394,7 +428,11 @@ def dump_program(part, index, prog):
              'visible': A.u8(a, 0x12), 'at13': A.u8(a, 0x13),
              'records': [read_record(A, r) for r in recs],
              'vertices': [read_vertex(A, v) for v in verts],
-             'triangles': [read_triangle(A, t) for t in tris]}
+             'triangles': [read_triangle(A, t) for t in tris],
+             # NOT `points` — op 4 already uses that name for its tube's
+             # control points, and `read_node_fields` runs after this and would
+             # silently overwrite them.
+             'sprites': [read_point(A, q) for q in pts]}
         n.update(read_node_fields(A, a, op))
         nodes.append(n)
     return {'part': part, 'index': index, 'program': hex(prog),
@@ -437,10 +475,11 @@ def main():
     nodes = sum(len(p['nodes']) for p in progs)
     verts = sum(len(n['vertices']) for p in progs for n in p['nodes'])
     tris = sum(len(n['triangles']) for p in progs for n in p['nodes'])
+    pts = sum(len(n['sprites']) for p in progs for n in p['nodes'])
     recs = sum(len(n['records']) for p in progs for n in p['nodes'])
     trunc = [t for p in progs for t in p['truncated']]
     print(f'{len(progs)} programs, {nodes} nodes, {recs} records, '
-          f'{verts} vertices, {tris} triangles -> {out}')
+          f'{verts} vertices, {tris} triangles, {pts} sprites -> {out}')
     print(f'  arena high-water {max((p["arenaUsed"] for p in progs), default=0)} '
           f'of {ARENA_SZ} bytes')
     for f in fails:

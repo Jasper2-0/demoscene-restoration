@@ -155,6 +155,12 @@ function runScene(scene, frame, activeCamera = 0) {
       at68: n.at68 ?? 0,
       texture: n.op < 4 ? (n.resource ?? null) : (w?.texture ?? null),
       plain: out.plainVertices ?? null,
+      // The point sprites carry their own published vertex rather than a face's.
+      sprites: mesh ? mesh.sprites.map((q) => {
+        const v = out.vertices[q.vertex];
+        return { ...q, v: { p: [v.ox, v.oy, v.oz],
+          scaled: [v.o0, v.o1, v.o2, v.o3], nz: v.onz } };
+      }) : [],
       objects: meshObjects[i] = mesh ? mesh.faces.map((f) => ({
         faces: [{
           ...f,
@@ -212,7 +218,7 @@ function runScene(scene, frame, activeCamera = 0) {
   const draws = showScene(nodes, activeCamera);
   // NOT ONE of them lands entirely off the 640x480 screen, which rules out the
   // trivial-reject test at 0x100062f8 as the explanation for the overdraw.
-  return { draws, faces, meshNodes };
+  return { draws, faces, meshNodes, nodes };
 }
 
 // THE OVERLAY IS A SCENE TO anim_all AND NOT ONE TO draws.json, which folds its
@@ -251,6 +257,12 @@ const matchFrame = (got, want) => {
   for (const d of got) {
     const c = bag.get(gotKey(d));
     if (c) { hit++; bag.set(gotKey(d), c - 1); } else miss.push(d);
+  }
+  if (process.env.PIPEWANT) {
+    const left = [];
+    for (const [k, c] of bag) for (let i = 0; i < c; i++) left.push(k);
+    console.log(`   ${left.length} recorded primitives unmatched`);
+    for (const k of left.slice(0, 6)) console.log('     ' + k);
   }
   if (process.env.PIPEMISS && miss.length) {
     const d = miss[0];
@@ -344,6 +356,18 @@ for (const scene of A.scenes) {
     frameRes = BUCKETS.map(() => 0); bySrc = new Map();
     for (const d of r.draws) bump(sizeGot, d.v.length);
     for (const d of df.draws) bump(sizeWant, d.v.length / 10);
+    if (process.env.PIPEDEBUG === scene.stream) {
+      r.nodes.forEach((nd, i) => { if (nd.type === 5) console.log(
+        `   mesh node ${i} gate ${nd.drawGate} built ${nd.built} objects `
+        + `${nd.objects.length} alpha `
+        + JSON.stringify([...new Set(nd.objects.flatMap((o) => o.faces.map(
+          (fc) => +(fc.alpha * (fc.vertices[0]?.scaled[0] ?? 0)).toFixed(4))))].slice(0, 5))
+        + ' cull ' + JSON.stringify([...new Set(nd.objects.map((o) => o.faces[0].cull))])); });
+      const per = new Map();
+      for (const d of r.draws) per.set(d.src, (per.get(d.src) ?? 0) + 1);
+      console.log('   draws by node ' + [...per].sort((a, b) => a[0] - b[0])
+        .map(([k, v]) => `${k}:${v}`).join(' '));
+    }
     nearest(r.draws, df.draws);
     scenes++;
     const total = r.draws.length + over;
