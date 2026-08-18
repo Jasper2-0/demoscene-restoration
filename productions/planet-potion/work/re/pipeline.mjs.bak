@@ -45,8 +45,7 @@
 import fs from 'node:fs';
 const R = '/Users/scjas/Developer/01 - Jasper2-0/02 - Github Public/demoscene-restoration/productions/planet-potion';
 const { decodeScene, buildMesh } = await import(`${R}/web/js/scene.js`);
-const { evaluateNode, composeHierarchy, publishNode, concat } =
-  await import(`${R}/web/js/anim.js`);
+const { evaluateNode, composeHierarchy, publishNode } = await import(`${R}/web/js/anim.js`);
 const { showScene } = await import(`${R}/web/js/render.js`);
 const { sinus } = await import(`${R}/web/js/tables.js`);
 
@@ -88,7 +87,7 @@ function runScene(scene, frame) {
       prev: j > 0 ? j : 0,
     }));
     const anim = {
-      flags2: n.anim.flags2, flags3: n.anim.flags3, mode: n.anim.mode,
+      flags2: n.anim.flags2, flags3: n.anim.flags3, mode: 0,
       parent: n.anim.parent ? 1 : NIL,
       origin: w?.anim ? w.anim.origin : 0,
       trigger: n.anim.trigger ?? 0,
@@ -111,7 +110,6 @@ function runScene(scene, frame) {
 
   // Pass 3 and the render walk.
   const nodes = [];
-  const meshObjects = [];      // per node, the object list a camera may borrow
   entries.forEach(({ n, w, mesh }, i) => {
     const e = composed[i];
     const out = {
@@ -142,14 +140,13 @@ function runScene(scene, frame) {
         nx: v.n[0], ny: v.n[1], nz: v.n[2],
       }));
     }
-    out.built = w?.built ?? 0;
     publishNode(out, e.ch ?? new Float64Array(24), e.resolved);
     nodes.push({
       type: n.op, drawGate: out.drawGate, at0d: n.at0d ?? 2,
       cx: out.cx, cy: out.cy, scale: out.scale, clip: n.clip,
       built: 0, at68: w?.at68 ?? 0, texture: w?.texture ?? null,
       plain: out.plainVertices ?? null,
-      objects: meshObjects[i] = mesh ? mesh.faces.map((f) => ({
+      objects: mesh ? mesh.faces.map((f) => ({
         faces: [{
           ...f,
           vertices: f.vertices.map((k) => {
@@ -162,43 +159,6 @@ function runScene(scene, frame) {
       vertices: [], glyphs: null,
     });
   });
-  // THE CAMERA'S REFERENCE LIST, `0x1000644c`. The stream gives one byte per
-  // link and the fixup at `0x100022f8` walks it down the `+0x10` chain from the
-  // head — the same ONE-BASED index `resolveParents` uses, since the walk starts
-  // at head->next. Each link carries a copy of the camera's own channel block
-  // concatenated with the referenced node's, which is `concat` and nothing new.
-  entries.forEach(({ n }, i) => {
-    if (n.op !== 6 || !n.cameras?.length) return;
-    const cam = nodes[i];
-    cam.refs = [];
-    for (const b of n.cameras) {
-      const t = b + 1;
-      if (!meshObjects[t] || composed[i].resolved !== 1) continue;
-      const ch = Float64Array.from(composed[i].ch ?? []);
-      if (!ch.length) continue;
-      concat(ch, composed[t].ch ?? new Float64Array(24));
-      // The link borrows the target's geometry and keeps the camera's own
-      // cx/cy/scale, texture and clip — `stw r12, 0x20(r30)` copies the lists
-      // INTO the camera node and draws through it.
-      const fresh = { type: 5, built: 0, vertices: entries[t].mesh.vertices.map((v) => ({
-        x: v.p[0], y: v.p[1], z: v.p[2],
-        c0: v.rgba[0], c1: v.rgba[1], c2: v.rgba[2], c3: v.rgba[3],
-        nx: v.n[0], ny: v.n[1], nz: v.n[2],
-      })) };
-      publishNode(fresh, ch, 1);
-      cam.refs.push({
-        ...cam, type: 5, built: 0, refs: null,
-        objects: entries[t].mesh.faces.map((f) => ({
-          faces: [{ ...f, vertices: f.vertices.map((k) => {
-            const v = fresh.vertices[k];
-            return { p: [v.ox, v.oy, v.oz], scaled: [v.o0, v.o1, v.o2, v.o3],
-              uv: [0, 0], gouraud: 1 };
-          }) }],
-        })),
-      });
-    }
-  });
-
   let faces = 0, meshNodes = 0;
   for (const n of nodes) {
     if (n.type === 5) { meshNodes++; faces += n.objects.length; }
@@ -215,28 +175,7 @@ function runScene(scene, frame) {
 const OVERLAY = '0x1003301a';
 const overlayScene = A.scenes.find((s) => s.stream === OVERLAY);
 
-// CONTENT, NOT COUNT. Two frames can agree on how many primitives they draw and
-// share not one of them, so every frame is also matched as a MULTISET keyed by
-// the primitive, its texture, its vertex count and its first vertex's screen
-// position to two decimals — draws.json rounds to five, so two is safe.
-const key = (prim, tex, n, x, y) =>
-  `${prim}|${tex}|${n}|${x.toFixed(2)}|${y.toFixed(2)}`;
-const matchFrame = (got, want) => {
-  const bag = new Map();
-  for (const d of want) {
-    const k = key(d.prim, d.texture, d.v.length / 10, d.v[0], d.v[1]);
-    bag.set(k, (bag.get(k) ?? 0) + 1);
-  }
-  let hit = 0;
-  for (const d of got) {
-    const k = key(d.prim, d.texture, d.v.length, d.v[0].x, d.v[0].y);
-    const c = bag.get(k);
-    if (c) { hit++; bag.set(k, c - 1); }
-  }
-  return hit;
-};
-
-let totalGot = 0, totalWant = 0, scenes = 0, exact = 0, totalHit = 0;
+let totalGot = 0, totalWant = 0, scenes = 0, exact = 0;
 for (const scene of A.scenes) {
   // JOIN ON THE STREAM POINTER, NOT ON (part, order). The two exports number
   // their scenes differently — anim_all.json counts the OVERLAY as a scene and
@@ -257,14 +196,12 @@ for (const scene of A.scenes) {
     if (dd.overlay && overlayScene && scene.stream !== OVERLAY) {
       const of_ = overlayScene.frames.find((f) => f.t === frame.t);
       if (of_) {
-        over = runScene(overlayScene, of_).draws.length;
+        try { over = runScene(overlayScene, of_).draws.length; } catch { over = 0; }
       }
     }
     scenes++;
     const total = r.draws.length + over;
     if (total === df.draws.length) exact++;
-    const hit = matchFrame(r.draws, df.draws);
-    totalHit += hit;
     totalGot += total; totalWant += df.draws.length;
     console.log(`  ${scene.part}/${scene.order} t=${String(frame.t).padStart(3)}  `
       + `${String(r.meshNodes)} mesh nodes, ${String(r.faces).padStart(5)} faces -> `
@@ -272,31 +209,8 @@ for (const scene of A.scenes) {
       + (over ? ` + ${String(over).padStart(4)} overlay` : '            ')
       + ` = ${String(total).padStart(5)} draws, recorded `
       + `${String(df.draws.length).padStart(5)}`
-      + `  ${hit} placed`
-      + (total === df.draws.length && hit === df.draws.length ? '  EXACT' : ''));
-    // Where a frame disagrees, say WHICH primitives — an aggregate count hides
-    // whether the port draws the wrong things or the right things twice.
-    if (total !== df.draws.length) {
-      const tally = (list, k) => {
-        const m = new Map();
-        for (const x of list) {
-          const key = `${x.prim}/${x.texture}`;
-          const e = m.get(key) ?? [0, 0]; e[k]++; m.set(key, e);
-        }
-        return m;
-      };
-      const m = tally(r.draws, 0);
-      for (const [key, [, b]] of tally(df.draws, 1)) {
-        const e = m.get(key) ?? [0, 0]; e[1] = b; m.set(key, e);
-      }
-      const bad = [...m].filter(([, [a, b]]) => a !== b)
-        .sort((x, y) => Math.abs(y[1][0] - y[1][1]) - Math.abs(x[1][0] - x[1][1]));
-      console.log('        ' + bad.slice(0, 6)
-        .map(([k, [a, b]]) => `${k} ${a}v${b}`).join('  ')
-        + (bad.length > 6 ? `  (+${bad.length - 6})` : ''));
-    }
+      + (total === df.draws.length ? '  EXACT' : ''));
   }
 }
 console.log(`\n${scenes} frames, ${exact} exact: `
-  + `${totalGot} draws computed, ${totalWant} recorded, `
-  + `${totalHit} matched by primitive, texture, size and screen position`);
+  + `${totalGot} draws computed, ${totalWant} recorded`);

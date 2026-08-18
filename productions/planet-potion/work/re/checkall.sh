@@ -236,6 +236,11 @@ run "scenecheck — the scene decoder the page uses" \
   node "$HERE/scenecheck.mjs" "$FLAT" "$HERE/out/arena.json" \
   "$HERE/out/anim_all.json"
 
+# The animation, on every scene rather than the one fixture: all 1,118 node
+# channel blocks and the 186 composed matrices the cameras hand the renderer.
+run "chancheck — every node's channels, in every scene, at every tick" \
+  node "$HERE/chancheck.mjs" "$FLAT" "$HERE/out/anim_all.json"
+
 # The emitter, checked on its own before the clipper and node walk that feed it
 # exist: the recorded stream is 144,727 vertices of its output, and the
 # projection inverts exactly, so the round trip is a real test of the

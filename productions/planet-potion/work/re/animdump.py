@@ -93,7 +93,26 @@ def read_anim(snap, addr, arena):
         # checked at all — the width and height of every glyph come from here.
         'subAt': _at(snap, o + 0x74, '>I')[0],
         'sub': _sub_channels(snap, _at(snap, o + 0x74, '>I')[0], arena),
+        # THE WHOLE CHAIN, not just the first. Scene ops 0, 1 and 2 allocate two,
+        # three and four sub-objects and use their CHANNEL BLOCKS as vertex
+        # records — channels 12..14 are the position, 15..18 the colour, 19 and
+        # 20 the texture coordinates — so without the chain those node types
+        # have no geometry anything can check.
+        'subs': _sub_chain(snap, _at(snap, o + 0x74, '>I')[0], arena),
     }
+
+
+def _sub_chain(snap, addr, arena, limit=64):
+    out, a, seen = [], addr, set()
+    while a not in (0, NIL) and a not in seen and len(out) < limit:
+        o = a - arena
+        if not 0 <= o < len(snap) - 0x78:
+            break
+        seen.add(a)
+        out.append({'addr': hex(a),
+                    'channels': list(_at(snap, o + 0x0c, '>24f'))})
+        a = _at(snap, o + 0x74, '>I')[0]
+    return out
 
 
 def _sub_channels(snap, addr, arena):

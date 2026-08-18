@@ -214,6 +214,14 @@ export function primitiveOf(node) {
  * the triangle is, not only on which way it points. `1` keeps a positive
  * result and `2` keeps a negative one; `0` skips the test.
  */
+/**
+ * Type 5 draws itself ONLY IF the built-already byte is clear. `0x100061a0`
+ * tests `node+0x0f` and returns; the camera's reference loop calls
+ * `bl 0x100061ac`, which is the SAME routine one instruction further on. One
+ * flag and one alternate entry point are the whole mechanism: a referenced mesh
+ * never draws on its own account and always draws through the camera that
+ * references it, with that camera's composed matrix instead of its own.
+ */
 function meshDraws(node) {
   if (node.built === 1) return [];
   const out = [];
@@ -274,7 +282,17 @@ export function showScene(nodes) {
   for (const node of nodes) {
     if (!node.drawGate) continue;
     if (node.at0d !== state) state = node.at0d;      // render-state change
-    if (node.type === 6 || node.type === 7) continue; // camera and root draw nothing
+    if (node.type === 7) continue;                    // the root draws nothing
+    // THE CAMERA IS A DRAW HANDLER, not just a source of cx/cy/scale.
+    // `0x1000644c` walks its reference chain at `+0x2c`, and for each link
+    // COPIES the referenced node's vertex and object lists into its own
+    // `+0x20/+0x24/+0x28`, transforms them by the link's composed matrix, and
+    // enters the mesh renderer past its gate. Everything else about the draw —
+    // cx, cy, scale, texture, clip — stays the camera's own.
+    if (node.type === 6) {
+      for (const ref of node.refs ?? []) draws.push(...meshDraws(ref));
+      continue;
+    }
     if (node.type === 5) { draws.push(...meshDraws(node)); continue; }
     if (node.type === 4) {
       for (const g of node.glyphs ?? []) {
@@ -284,8 +302,10 @@ export function showScene(nodes) {
       }
       continue;
     }
-    const d = drawPrimitive((node.vertices ?? []).map(toVertex), node,
-      primitiveOf(node));
+    // A type 0 to 3 node's vertices are its sub-objects' channel blocks, ready
+    // to use — no record to unpack, because the animation wrote them.
+    const source = node.plain ?? (node.vertices ?? []).map(toVertex);
+    const d = drawPrimitive(source, node, primitiveOf(node));
     if (d) draws.push(d);
   }
   return draws;

@@ -239,7 +239,7 @@ const translate = (x, y, z) => mat(1, 0, 0, 0, 1, 0, 0, 0, 1, x, y, z);
  *
  * Every result goes back through a `stfs`, so it truncates.
  */
-function concat(ch, m) {
+export function concat(ch, m) {
   for (let r = 0; r < 3; r++) {
     const a = ch[r * 3], b = ch[r * 3 + 1], c = ch[r * 3 + 2], tw = ch[12 + r];
     const c0 = fma(c, m[6], fma(b, m[3], a * m[0]));
