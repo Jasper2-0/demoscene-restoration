@@ -3,14 +3,14 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Twenty-nine checks accumulated over the work and there is no point in
-# remembering twenty-nine invocations. Each passes or names what drifted; none of them
+# Thirty checks accumulated over the work and there is no point in
+# remembering thirty invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
-# scenegram.py is expected to report 0/29. It encodes a scene-stream grammar
-# that does NOT work, deliberately kept as a failing check with the measured
-# facts in PORT_SPEC section 4a beside it — see the note it prints. Treat a
-# non-zero score there as news, not as success.
+# scenegram.py used to be the one check expected to FAIL, at 0/29. It passes
+# now: 27/27 streams and every node field. What unstuck it was scenewalk.py,
+# which measures where each opcode really is by patching the stream's own u16
+# length and watching the node count step, rather than arguing about widths.
 #
 # HALF OF THESE NEED THE ORIGINAL BINARY AND HALF DO NOT, which matters more
 # than it sounds: `flat/` is gitignored, so a fresh clone — or a recycled cloud
@@ -217,8 +217,11 @@ run "geovertcheck — op0's generator, vertex positions bit for bit" \
 [ -n "$W3D" ] && run "lvocheck — the LVO table, re-derived from the real libraries" \
   python3 "$HERE/lvocheck.py" "$W3D"
 
-printf '\n=== scenegram — EXPECTED TO FAIL 0/29, see PORT_SPEC section 4a\n'
-python3 "$HERE/scenegram.py" "$FLAT" "$DATA/scenes.json" 2>&1 | grep -E 'streams produce|no .*layout'
+# The scene stream, decoded statically and checked field by field against the
+# node list the original built. This is the check that reported 0/29 for most of
+# the project's life.
+run "scenegram — every scene stream decodes to the nodes the original built" \
+  python3 "$HERE/scenegram.py" "$FLAT" "$HERE/out/arena.json"
 
 if [ $rc -eq 0 ]; then
   printf '\nall suites that could run passed'

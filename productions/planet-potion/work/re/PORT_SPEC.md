@@ -540,11 +540,51 @@ allocates most, op 4 at 212 the text node with its glyph array.
 pointer read out of the small-data area and handed straight to `_generate_scene`
 as `r4`. It is the right address.
 
-**Which leaves a contradiction, and it is recorded as one.** The pointer is
-right, the opcode set is `0..7`, the prologue's `lhz`/`addi` skip a u16 length —
-and the bytes at that address are `0x02 0x9b 0x5b …`, which decode to nothing
-sensible under any combination of those three. One of them is wrong and the
-reading does not say which.
+**THE CONTRADICTION IS RESOLVED. The stream decodes, 27/27.** All three of
+those facts were right; what was missing was three more, and none of them is
+visible from the handlers alone:
+
+* **THE BOUND IS `bge`, NOT `bgt`.** `0x10002200` stops the walk when the cursor
+  REACHES the declared end rather than passing it, so the last usable opcode
+  sits two bytes inside the length;
+* **EVERY OPCODE EXCEPT 7 IS FOLLOWED BY A RESOURCE BYTE.** Its low seven bits
+  index the text table, or the object table for op 5, or stand for themselves
+  for op 6; its top bit lands at `node+0x0d` as `2 - bit`;
+* **AND EVERY NODE CARRIES AN INLINE ANIMATION OBJECT.** `0x1000243c` reads
+  loop mode, an encoded parent, an optional trigger byte, a keyframe count and
+  then that many keyframe records — each with FIVE independently gated channel
+  groups. That is most of a node's bytes; the seven handlers account for at most
+  ten of the forty-one a typical op-3 node occupies. **Handlers for ops 0, 1, 2
+  and 4 then call the same routine again**, two, three, four and one more times,
+  for the sub-objects on `+0x74`.
+
+The gate mask is `flags2 & 0x1f` and it is ACTIVE LOW — a clear bit means the
+group is present, the same polarity the geometry builder uses. `0x1f` means no
+keyframe data at all, though the track record is still allocated.
+
+One byte of that block is conditional on something outside the stream: the alpha
+in group 2 is read only when `r20` is neither 1 nor 4, which is true for a
+node's own animation object and false for the synthesised root and for every
+sub-object a handler allocates.
+
+`work/re/scenegram.py` decodes all 29 streams and compares type, clip flag,
+`+0x0d`, `flags2`, `flags3` and keyframe count against what the original built:
+**339 nodes, 2,007 field comparisons, 27/27 streams**, all eight opcodes
+exercised. The 44 text nodes come out as readable strings — `planet potion`,
+`greetings from`, `ready for part 2 ?` — which is the cheapest confirmation in
+the file, because a walk one byte out of step anywhere earlier would read some
+other byte as a length and produce noise.
+
+`parent` is decoded but NOT compared: the stream carries an encoded reference,
+`(B << 16) | (C & 0x0f)`, and a post-pass at `0x100022d0` resolves it into a
+pointer or into -1 for a root.
+
+**How it was unstuck is the part worth keeping.** Not by reading harder —
+`work/re/scenewalk.py` MEASURES where every opcode is, by patching the stream's
+own u16 length and watching the node count step. The walk's own bound is the
+instrument. Three previous attempts argued about widths from the handlers; the
+first measurement said the root consumes nine bytes and a typical op-3 node
+forty-one, and the grammar was written to those numbers.
 
 Measured rather than argued. Resolving the pointer exactly as `export_scenes`
 does and dumping what is there:
