@@ -2643,7 +2643,7 @@ when the node count is zero. This is METHOD.md's rule about checks that cannot
 exit non-zero, found in the suite that was written to enforce it.
 
 
-## The (prim, texture) diagnostic, and why it is not a check
+## The (prim, texture) diagnostic — written off, then RESOLVED
 
 Matching every recorded draw against the (primitive, texture) pairs its scene
 offers reaches **73%** and stops there. It is written down here because it keeps
@@ -2672,6 +2672,33 @@ worth listing so nobody re-derives them:
   offer texture 0 and nothing else, its nodes offer 0, 2, 16 and 18, and its
   draws are dominated by texture 11 — which is on neither list.
 
-**Do not spend more on it in this form.** The comparison that supersedes it is a
-per-draw one against `draws.json`, available once the pipeline runs end to end,
-and it will answer the question as a side effect rather than as an investigation.
+### The answer: the join was wrong, and so were three of those four reasons
+
+**98.3%, not 73%.** Everything above is kept as written because the mistake is
+the lesson, and the mistake was mine rather than the data's.
+
+`anim_all.json`, `arena.json` and `draws.json` DO NOT NUMBER THEIR SCENES THE
+SAME WAY. The overlay, stream `0x1003301a`, is a scene to the first two and is
+not one to the third — `draws.json` folds its primitives into every part-one
+scene instead, which is what the `overlay` field records. So the two orderings
+run one apart, and they disagree for **23 of 28 streams**. Join on the STREAM
+POINTER; never on `(part, order)`.
+
+With that fixed, and the overlay's own textures added to what a part-one scene
+offers, the match is 44,546 of 45,327. What is left is 781 draws of one
+primitive-and-texture pair in two part-three scenes, which have no overlay — a
+small, localised residue rather than a quarter of the intro.
+
+Three of the four reasons given above evaporate with it. p3/1's draws being
+"dominated by a texture on neither its faces nor its nodes" was p3/1's draws
+being compared against p3/2's geometry. The absence of a constant offset was
+real and meant nothing. Only the first reason — that `drawlog` and `arenadump`
+build different mappings of the same pointer — was ever a genuine hazard, and it
+turns out not to bite.
+
+**The general lesson is worth more than the number.** A join key that is an
+ORDINAL rather than an identity is a silent hazard: it produces a full result
+set, plausible values, and a stable wrong answer. It cost a write-off here and
+an entire "the renderer over-draws by four times" investigation in
+`pipeline.mjs`. Prefer the pointer, the address, the digest — anything the
+producer did not renumber.
