@@ -6,6 +6,8 @@
 // translation on its own, with no reimplemented engine to confuse a difference
 // with. See ../../work/re/PORT_SPEC.md and tools/inspect/ADAPTER.md.
 //
+//   (no query)       the engine: everything computed, nothing recorded
+//   ?scene=N&tick=M  one COMPUTED frame, deterministically
 //   ?oracle=1        play recorded frames from data/draws.json
 //   ?scene=N&t=M     one recorded frame, deterministically
 //   ?inspect=1       install window.__demo and draw nothing on its own
@@ -21,10 +23,18 @@
 // which is also the only clock that means anything here, since the show's
 // schedule is defined by effect-7 signals in the music.
 //
-// What that gets you is the intro at FIVE FRAMES PER SCENE. The recorded stream
-// samples each scene's own span five times; real playback of the 438-second
-// show would be 21,915 frames, and draws.json is already 19 MB for 140. The
-// stills step in time with the music because the engine does not exist yet.
+// THE ENGINE EXISTS NOW. On the default path this page does not download a draw
+// stream at all: engine.js decodes the scene graph and the geometry out of seg3
+// and seg4, runs the three animation passes once per tick with the replayer's
+// own effect-7 cues driving the beat sync, walks the nodes, clips and projects,
+// and hands the result to the same Warp3D shim the recording used to feed. The
+// schedule comes from showorder.json, 11 KB against draws.json's 20 MB, and it
+// is the richer of the two — 26 part-one entries against 18 scenes, because a
+// scene replays under a different camera, and it says which.
+//
+// draws.json is still the ORACLE. work/re/pipeline.mjs compares 140 frames and
+// 45,327 primitives against it, and `?oracle=1` and `?scene=N` still play it.
+// It is no longer an input to the picture.
 
 import { Warp3D, SCREEN_W, SCREEN_H } from './warp3d.js';
 import { buildTextures, loadTextures } from './textures.js';
@@ -128,12 +138,28 @@ async function main() {
   } catch {
     // Older dataset: no presets, so no fog. Not worth a message of its own.
   }
+  // THE 20 MB IS ONLY FETCHED IF SOMETHING STILL NEEDS IT. On the computed path
+  // the schedule comes from showorder.json — 11 KB, and RICHER: it has 26
+  // part-one entries against draws.json's 18 scenes, because a scene replays
+  // under a different camera, and it carries which camera. draws.json stays the
+  // oracle and stops being a download.
+  let schedule = null;
   try {
-    dataset = await loadJSON('./data/draws.json');
-  } catch {
-    // The dataset is regenerable, not committed — see work/re/export.py.
-    say('Warp3D shim ready. No recorded stream present: '
-      + 'run work/re/export.py and copy out/ to web/data/.');
+    schedule = await loadJSON('./data/showorder.json');
+  } catch { /* the computed path says so below */ }
+  // ?oracle and ?scene ASK FOR A RECORDED FRAME by name, so they get one even
+  // when the emit stage is computed — otherwise the mode whose whole purpose is
+  // to show the recording silently shows nothing.
+  const wantsRecorded = params.has('oracle')
+    || (params.has('scene') && !params.has('tick'));
+  if (stages.emit !== 'computed' || !schedule || wantsRecorded) {
+    try {
+      dataset = await loadJSON('./data/draws.json');
+    } catch {
+      // The dataset is regenerable, not committed — see work/re/export.py.
+      say('Warp3D shim ready. No recorded stream present: '
+        + 'run work/re/export.py and copy out/ to web/data/.');
+    }
   }
   try {
     const [programs, kernels] = await Promise.all([
@@ -149,6 +175,20 @@ async function main() {
   // node walk, the clipper and the projection — everything draws.json used to
   // hold. Built once and STEPPED: `anim.origin` is the beat sync, so the state
   // it accumulates tick by tick is part of the answer.
+  /**
+   * A fog preset, from either spelling of the field.
+   *
+   * draws.json carries an INDEX because export.py resolved it; showorder.json
+   * carries the small-data DISPLACEMENT the schedule actually names, and the
+   * presets carry theirs. Indexing the preset array with an address gives
+   * undefined, which reads on screen as no fog at all.
+   */
+  const fogFor = (v) => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number') return fogPresets[v] ?? null;
+    return fogPresets.find((p) => p.disp === v) ?? null;
+  };
+
   let engine = null;
   if (stages.emit === 'computed') {
     try {
@@ -174,14 +214,17 @@ async function main() {
   const renderComputed = (span, tick, signal) => {
     const order = engine.orderOfSlot(span.part, span.slot);
     if (order == null) return null;
-    let draws = engine.frame(span.part, order, tick, signal);
+    // WHICH CAMERA, from the schedule. `_play_scene_new_camera` sets a global
+    // the renderer compares against each camera node's ordinal, and three of
+    // part one's scenes carry four cameras and play three times over.
+    const cam = span.camera ?? 0;
+    let draws = engine.frame(span.part, order, tick, signal, cam);
     const ov = engine.overlay;
     if (span.part === ov.part && order !== ov.order) {
       draws = draws.concat(engine.frame(ov.part, ov.order, tick, signal));
     }
     textures?.use(span.part);
-    w3d.setFog(span.fog === null || span.fog === undefined
-      ? null : fogPresets[span.fog]);
+    w3d.setFog(fogFor(span.fog));
     w3d.setZBuffer(false, false);
     w3d.clear([0, 0, 0]);
     const info = w3d.drawFrame({ draws: flattenDraws(draws) });
@@ -222,13 +265,17 @@ async function main() {
   const TICKS_PER_SECOND = 50;
 
   /** One part's scenes in schedule order, with the tick span each occupies. */
-  const spansFor = (part) => (dataset?.scenes ?? [])
-    .map((s, i) => ({
+  const spansFor = (part) => (schedule && engine
+    ? (schedule[part]?.schedule ?? []).map((e, i) => ({
+      scene: i, frames: [], slot: e.slot, fog: e.fog, camera: e.camera,
+      start: e.startTick ?? 0, end: (e.startTick ?? 0) + (e.durTicks ?? 0),
+      part,
+    }))
+    : (dataset?.scenes ?? []).map((s, i) => ({
       scene: i, frames: s.frames ?? [], slot: s.slot, fog: s.fog,
       start: s.startTick ?? 0, end: (s.startTick ?? 0) + (s.durTicks ?? 0),
       part: s.part,
-    }))
-    .filter((s) => s.part === part && s.frames.length)
+    })).filter((s) => s.part === part && s.frames.length))
     .sort((a, b) => a.start - b.start);
 
   /**
@@ -379,9 +426,14 @@ async function main() {
         // The fog plumbing, which is otherwise invisible: it needs
         // render_state.json AND a resolved `fog` on each scene in draws.json,
         // and either one missing leaves every scene clear with nothing to see.
+        // FROM WHICHEVER SOURCE IS LOADED. draws.json is not fetched at all on
+        // the computed path, so reading the scenes only from there reported no
+        // fog on the very path that now draws it.
         fog: {
           presets: fogPresets.length,
-          scenes: (dataset?.scenes ?? [])
+          scenes: (dataset?.scenes
+            ?? ['p1', 'p3'].flatMap((part) => (schedule?.[part]?.schedule ?? [])
+              .map((e) => ({ part, slot: e.slot, fog: e.fog }))))
             .filter((s) => s.fog !== null && s.fog !== undefined)
             .map((s) => `${s.part}/${s.slot}=${s.fog}`),
         },
@@ -401,10 +453,7 @@ async function main() {
     // computed frame without playing five minutes of music at it.
     if (engine && params.has('tick')) {
       const tick = Number(params.get('tick'));
-      const span = (dataset?.scenes ?? []).map((sc, i) => ({
-        scene: i, slot: sc.slot, part: sc.part, fog: sc.fog,
-        start: sc.startTick ?? 0,
-      }))[s];
+      const span = spansFor(params.get('part') ?? 'p1')[s];
       const info = span ? renderComputed(span, tick, -1) : null;
       say(info
         ? `computed ${info.part} ${info.slot} tick=${tick}: `
