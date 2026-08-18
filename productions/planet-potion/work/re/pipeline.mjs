@@ -25,9 +25,19 @@
 // projection looked wrong, and the renderer looked broken. It was not.
 //
 // WHAT IS STILL MISSING is meshes only: this renders type 5 and nothing else,
-// so a scene's type 0, 3 and 4 nodes contribute nothing here. That is most of
-// the remaining shortfall — and p1/16 producing zero from four mesh nodes is a
-// real fault worth chasing on its own.
+// so a scene's type 0, 3 and 4 nodes contribute nothing, and neither does the
+// OVERLAY that draws.json folds into every part-one scene. That is the whole of
+// the remaining shortfall.
+//
+// p1/16 PRODUCING ZERO DRAWS IS CORRECT, not a fault, and it took a measurement
+// to be sure. All four of its mesh nodes carry the built-already flag, and the
+// render handler's very first instruction pair is `lbz r3, 0xf(r30); cmpwi r3,
+// 1; beqlr` — such a node is skipped before anything else happens. Across the
+// whole export, 78 of 78 mesh nodes with that flag set have no draw attributed
+// to them and 105 of 123 without it do. Its 158 recorded primitives are the
+// overlay's, projected through that scene's CAMERA — which is why they all
+// carry 320/240/200, the camera node's own triple: `publishCamera` pushes its
+// channel block down a chain into other nodes' animation objects.
 //
 // Also spent and recorded so it is not repeated: not one extra primitive is
 // off-screen, so the unported trivial-reject at 0x100062f8 was never the cause.

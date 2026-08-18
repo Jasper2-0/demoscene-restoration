@@ -54,6 +54,7 @@ let builtSkipped = 0, textNodes = 0, meshNodes = 0;
 let vNonFinite = 0, oNonFinite = 0;
 let gOK = 0, gBad = 0, gStale = 0, gUnwritten = 0, gSpace = 0;
 let cOK = 0, cBad = 0, cStale = 0;
+let builtDrew = 0, builtSilent = 0, liveDrew = 0;
 const gModes = new Map();
 const failures = [];
 const kinds = new Map();
@@ -140,6 +141,16 @@ for (const scene of doc.scenes ?? [doc]) {
         }
       }
 
+      // THE BUILT-ALREADY FLAG SUPPRESSES DRAWING, NOT JUST THE TRANSFORM.
+      // `0x100061a0` opens with `lbz r3, 0xf(r30); cmpwi r3, 1; beqlr`, so such
+      // a node is skipped before its objects are even looked at. Worth pinning
+      // because the flag reads like a caching hint — "already transformed, do
+      // not redo it" — and a port that treats it that way draws 78 meshes the
+      // original never shows.
+      if (src.type === 5) {
+        if (src.built === 1) { if (src.drew) builtDrew++; else builtSilent++; }
+        else if (src.drew) liveDrew++;
+      }
       if (src.type === 6) {
         for (let c = 0; c < wantC.length; c++) {
           // Unresolved nodes leave an earlier frame's block behind, same rule
@@ -240,6 +251,8 @@ console.log(`     glyph modes exercised: `
 // The camera tail RUNS but nothing here can judge it: its output goes into the
 // sub-structures on node+0x2c, which animdump does not export. Said out loud so
 // "pass 3 is verified" is not read as covering all four tails.
+ok('a mesh with the built-already flag never draws', builtDrew === 0,
+  `${builtSilent} flagged and silent, ${liveDrew} unflagged and drawn`);
 ok('every camera sub-structure gets the right channel block', cBad === 0,
   `${cOK}/${cOK + cBad} over ${kinds.get('camera') ?? 0} node-frames`
   + (cStale ? `, ${cStale} left over from an earlier frame` : ''));
