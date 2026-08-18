@@ -34,7 +34,7 @@
 // passes, the camera reference lists, the clipper — comes out of the segments.
 
 import { decodeScene, buildMesh } from './scene.js';
-import { decodeProgram } from './geom.js';
+import { decodeProgram, buildGeometry } from './geom.js';
 import { evaluateNode, composeHierarchy, composeSub, publishNode, concat }
   from './anim.js';
 import { showScene } from './render.js';
@@ -231,11 +231,10 @@ export function createEngine({ seg0, seg3, seg4, table, layoutText,
   };
   const ptr = (disp) => u32(seg0, R2 + disp);
 
-  // WHERE THE GEOMETRY COMES FROM. `programOf(part, index)` hands back a
-  // program in the shape buildMesh wants — built vertices, indexed triangles,
-  // materials, and the SPRITE chain. geom.js reproduces the first three exactly
-  // and does not yet build the fourth, so until it does the caller supplies
-  // geo.json and this stays honest about which stage is computed.
+  // WHERE THE GEOMETRY COMES FROM. By default out of the segment, through
+  // `buildGeometry` — vertices, triangles, normals, materials, the layer chain
+  // and the sprite chain, which is everything buildMesh reads. `programOf` is
+  // left as an override so a harness can substitute geo.json and compare.
   const meshCache = new Map();
   const meshOf = (part) => (resource) => {
     const key = `${part}:${resource}`;
@@ -248,7 +247,7 @@ export function createEngine({ seg0, seg3, seg4, table, layoutText,
       else {
         const a = ptr(disp + resource * 4);
         const w = a === NIL ? null : at(a);
-        if (w) mesh = buildMesh(decodeProgram(w.d, w.o, null));
+        if (w) mesh = buildMesh(buildGeometry(decodeProgram(w.d, w.o, null), table));
       }
     }
     meshCache.set(key, mesh);

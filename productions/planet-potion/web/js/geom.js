@@ -1096,6 +1096,94 @@ export function buildOp4(node, table, atanTab) {
  * unbuilt cannot be built either. `vertices` is null for those and for op4,
  * whose spline sweep is not ported — a caller must check rather than assume.
  */
+/**
+ * A program in the shape the SCENE builder wants — what geodump exports, built
+ * out of the segment instead of read out of an arena.
+ *
+ * `buildProgram` gives the three things that were hard: positions, indexed
+ * triangles and normals. Two more are needed before `buildMesh` can be handed
+ * this instead of geo.json, and both are small:
+ *
+ *   * LAYERS. A material record whose successor is neither kind 5 nor kind 6
+ *     starts a chain, and the scene builder turns every link into its OWN face
+ *     on the same three vertices (`0x10002964`). 2,466 triangles carry one, so
+ *     a consumer that reads only the primary under-counts the primitives.
+ *   * SPRITES. A kind-5 record turns EVERY vertex of the node into a screen
+ *     -aligned quad: `0x10003dd4` walks the vertex chain and allocates one 0x30
+ *     record each, taking the size from the record's +0x2c, the texture from
+ *     +0x14, the rectangle from +0x1c..+0x28 with the second pair ADDED to the
+ *     first, and the colour from +0x04..+0x10.
+ *
+ * VISIBILITY is the other thing the arena has and the bytecode does not say
+ * outright: every build handler sets +0x12 on its way out and op 3's eval then
+ * CLEARS it on whatever node it cloned, so a source that has been copied is
+ * hidden and only the copy draws.
+ */
+export function buildGeometry(decoded, table) {
+  const built = buildProgram(decoded, table);
+  // A CLONE HIDES ITS SOURCE ONLY IF ITS 0x80 FLAG IS CLEAR. op 3 stores byte 1
+  // of its operands split in two — the low seven bits are the repeat count at
+  // +0x19 and the top bit goes to +0x1a — and that top bit is "keep the
+  // original as well". Marking every source hidden gets 125 of 181 nodes;
+  // honouring the bit gets all 181, and the thirteen that ARE hidden are each
+  // cloned by the node immediately after them.
+  const cloned = new Set();
+  decoded.nodes.forEach((n) => {
+    if (n.op === 3 && !n.flag) cloned.add(n.at18);
+  });
+
+  return {
+    nodes: decoded.nodes.map((n, i) => {
+      const b = built[i];
+      // A CLONE CARRIES NO MATERIAL RECORDS OF ITS OWN and inherits its
+      // source's, which is how eleven op-3 nodes end up with layers and one
+      // with 56 sprites while their own record list is empty. Followed rather
+      // than assumed one deep: op 3 can clone an op 3.
+      let recs = n.records ?? [];
+      for (let src = n, guard = 0; !recs.length && src.op === 3 && guard < 8;
+        guard++) {
+        src = decoded.nodes[src.at18] ?? {};
+        recs = src.records ?? [];
+      }
+      const layerRecs = [];
+      for (let k = 1; k < recs.length; k++) {
+        if (recs[k].kind === 5 || recs[k].kind === 6) break;
+        layerRecs.push(recs[k]);
+      }
+      const triangles = (b.triangles ?? []).map((t) => ({
+        ...t,
+        count: 3,
+        layers: layerRecs.map((r) => ({
+          ...t, count: 3, kind: r.kind, sub: r.sub, cull: r.cull,
+          prim: r.kind === 1 ? 'linestrip' : 'trifan',
+          rgba: r.rgba, texIndex: r.texIndex,
+        })),
+      }));
+      // One sprite per vertex, off the first kind-5 record.
+      const five = recs.find((r) => r.kind === 5);
+      const sprites = five && b.vertices
+        ? b.vertices.map((_, k) => ({
+          vertex: k,
+          texIndex: five.texIndex,
+          size: five.at2c,
+          uv: [five.size[0], five.size[1],
+            five.size[0] + five.span[0], five.size[1] + five.span[1]],
+          rgba: [...five.rgba],
+        }))
+        : [];
+      return {
+        op: n.op,
+        visible: cloned.has(i) ? 0 : 1,
+        vertices: (b.vertices ?? []).map((p, k) => ({
+          p, n: b.normals?.[k] ?? [0, 0, 0], rgba: [1, 1, 1, 1],
+        })),
+        triangles,
+        sprites,
+      };
+    }),
+  };
+}
+
 export function buildProgram(decoded, table) {
   const out = [];
   for (const node of decoded.nodes) {

@@ -49,7 +49,10 @@ import { fileURLToPath } from 'node:url';
 const ABSENT = 77;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const R = path.resolve(HERE, '..', '..');
-const NEED = [`${R}/web/data/anim_all.json`, `${R}/web/data/geo.json`,
+// geo.json IS NO LONGER ONE OF THESE. The engine builds its geometry out of the
+// segments, so the only exports this needs are the recording it compares
+// against and the arena dump it takes the beat-sync origins from.
+const NEED = [`${R}/web/data/anim_all.json`,
   `${R}/web/data/draws.json`, `${R}/work/re/flat/seg0_CODE_10000000.bin`];
 for (const f of NEED) {
   if (!fs.existsSync(f)) {
@@ -66,7 +69,6 @@ const { sinus } = await import(`${R}/web/js/tables.js`);
 const { glyphTable, layoutText } = await import(`${R}/web/js/font.js`);
 
 const A = JSON.parse(fs.readFileSync(`${R}/web/data/anim_all.json`, 'utf8'));
-const G = JSON.parse(fs.readFileSync(`${R}/web/data/geo.json`, 'utf8'));
 const D = JSON.parse(fs.readFileSync(`${R}/web/data/draws.json`, 'utf8'));
 const seg0 = new Uint8Array(
   fs.readFileSync(`${R}/work/re/flat/seg0_CODE_10000000.bin`));
@@ -75,8 +77,6 @@ const segs = [
   { base: 0x10030000, d: new Uint8Array(fs.readFileSync(`${R}/work/re/flat/seg3_DATA_10030000.bin`)) },
   { base: 0x10040000, d: new Uint8Array(fs.readFileSync(`${R}/work/re/flat/seg4_DATA_10040000.bin`)) },
 ];
-const prog = { p1: [], p3: [] };
-for (const p of G.programs) prog[p.part][p.index] = p;
 const table = sinus();
 // THE CHECK RUNS THE PAGE'S ENGINE. Two implementations of the same eleven
 // stages, one checked and one shipped, is how a port acquires a difference that
@@ -84,7 +84,6 @@ const table = sinus();
 const engine = createEngine({
   seg0, seg3: segs[0].d, seg4: segs[1].d, table,
   layoutText: (text) => layoutText(GLYPHS, text),
-  programOf: (part, index) => prog[part][index] ?? null,
 });
 const NIL = 0xffffffff;
 
