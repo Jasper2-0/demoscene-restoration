@@ -449,6 +449,15 @@ function projectUV(pSrc, pOut, gen, rec, b1, b2, state, atanTable) {
 function applyUVs(triangles, positions, gen, records, atanTable) {
   const rec = records[0];
   if (!rec || !positions.built.length) return;
+  // A LAYER IS PROJECTED WITH ITS OWN RECORD. The scene builder turns the
+  // second material record into a face of its own on the same three vertices,
+  // and that face carries its own texture coordinates — a different `kind` and
+  // `sub` mean a different projection, so copying the primary's is wrong on
+  // every one of the 2,466 triangles that have a layer. Computed here, where
+  // the positions and the boxes already are, and hung on the triangle as
+  // `layerUV` for the scene builder to pick up.
+  const layerRec = records[1] && records[1].kind !== 5 && records[1].kind !== 6
+    ? records[1] : null;
   const b1 = bounds(positions.source);
   // THE TRANSFORMED BOX IS SEEDED FROM AN UNTRANSFORMED POINT. `0x10003a98`
   // copies the first vertex's SOURCE position into both the min and the max of
@@ -462,16 +471,22 @@ function applyUVs(triangles, positions, gen, records, atanTable) {
   // lo = -150.588 and extent 1055, and -150.588 is exactly that node's SOURCE
   // minimum. Six instructions later the disassembly says the same thing.
   const b2 = bounds([positions.source[0], ...(positions.box ?? positions.built)]);
-  for (const t of triangles) {
+  const project = (t, r) => {
     // r3 starts as the record's flag and is clobbered by any atan call.
-    const state = { seen: false, u: 0, v: 0, r3: rec.flag };
-    t.uv = t.idx.map((i) => projectUV(positions.source[i], positions.built[i],
-      gen ? gen[i] : null, rec, b1, b2, state, atanTable).map(f32));
-    if (rec.kind === 4) {
-      t.uv[0] = [f32(fma(rec.span[0], HALFISH, rec.size[0])),
-        f32(fma(rec.span[1], HALFISH, rec.size[1]))];
-      t.uv[1] = [f32(rec.span[0] * HALFISH), f32(rec.span[1] * HALFISH)];
+    const state = { seen: false, u: 0, v: 0, r3: r.flag };
+    const uv = t.idx.map((i) => projectUV(positions.source[i],
+      positions.built[i], gen ? gen[i] : null, r, b1, b2, state,
+      atanTable).map(f32));
+    if (r.kind === 4) {
+      uv[0] = [f32(fma(r.span[0], HALFISH, r.size[0])),
+        f32(fma(r.span[1], HALFISH, r.size[1]))];
+      uv[1] = [f32(r.span[0] * HALFISH), f32(r.span[1] * HALFISH)];
     }
+    return uv;
+  };
+  for (const t of triangles) {
+    t.uv = project(t, rec);
+    if (layerRec) t.layerUV = project(t, layerRec);
   }
 }
 
@@ -1145,11 +1160,14 @@ export function buildGeometry(decoded, table) {
         src = decoded.nodes[src.at18] ?? {};
         recs = src.records ?? [];
       }
-      const layerRecs = [];
-      for (let k = 1; k < recs.length; k++) {
-        if (recs[k].kind === 5 || recs[k].kind === 6) break;
-        layerRecs.push(recs[k]);
-      }
+      // ONE LAYER, not one per remaining record. `materialise` already reads
+      // it that way — `hasLayer` is a single boolean off records[1] — and the
+      // arena agrees: a triangle's +0x4a chain is one deep in the shipped data.
+      // Emitting a face per extra material record built 1,976 faces where the
+      // original has 1,244, and every face after the first divergence then
+      // carried the wrong texture coordinates.
+      const next = recs[1];
+      const layerRecs = next && next.kind !== 5 && next.kind !== 6 ? [next] : [];
       const triangles = (b.triangles ?? []).map((t) => ({
         ...t,
         count: 3,
@@ -1157,6 +1175,7 @@ export function buildGeometry(decoded, table) {
           ...t, count: 3, kind: r.kind, sub: r.sub, cull: r.cull,
           prim: r.kind === 1 ? 'linestrip' : 'trifan',
           rgba: r.rgba, texIndex: r.texIndex,
+          uv: t.layerUV ?? t.uv,
         })),
       }));
       // One sprite per vertex, off the first kind-5 record.

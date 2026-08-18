@@ -134,9 +134,25 @@ export class Warp3D {
     this.u = Object.fromEntries(['uViewport', 'uTexelScale', 'uFog', 'uFogColor',
       'uTex', 'uTextured', 'uTexEnv'].map((n) => [n, gl.getUniformLocation(prog, n)]));
 
-    // 0 replace, 1 modulate, 2 decal. See the fragment shader: the recorded
-    // stream does not decide this, so it is a knob rather than a measurement,
-    // and the default is the one the stream is at least consistent with.
+    // 0 replace, 1 MODULATE, 2 decal. The recorded stream cannot decide this —
+    // it carries the draw calls, and every value of this knob consumes them
+    // identically — so it sat at 0 as "the one the stream is at least
+    // consistent with". THE CAPTURE DECIDES IT. Correlating our frames against
+    // the reference video across part one: replace -0.269, decal -0.256,
+    // modulate +0.202, and modulate wins the frame-identification test on 6 of
+    // 16 samples where the other two win 2. See work/re/capcheck.mjs.
+    //
+    // AND THE TWO ORACLES DISAGREE, which is why the default stays at 0. Under
+    // `modulate` rendercheck's busiest RECORDED frame collapses to a single
+    // colour: that frame's vertex colours are zero, so multiplying the texture
+    // by them gives black, and only `replace` shows anything. So one oracle
+    // says modulate and the other says the original cannot have been
+    // modulating that draw.
+    //
+    // The likeliest resolution is that the environment is not one global
+    // setting — W3D_SetState carries a texture-environment mode per draw and
+    // the recorded stream does not carry it — but that is a hypothesis and this
+    // comment is the evidence, not the answer. `?texenv=1` runs the other way.
     this.texEnv = 0;
 
     this.vao = gl.createVertexArray();

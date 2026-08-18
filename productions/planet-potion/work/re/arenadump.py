@@ -210,6 +210,7 @@ def read_vertex(A, addr):
         return None
     return {
         'addr': hex(addr),
+        'uv': [A.f32(addr, 0x1c), A.f32(addr, 0x20)],
         'p': [_fin(x) for x in A.vec3(addr, 0x24)],
         'rgba': [_fin(A.f32(addr, 0x30 + 4 * i)) for i in range(4)],
         'n': [_fin(x) for x in A.vec3(addr, 0x50)],
@@ -268,6 +269,9 @@ def read_faces(A, obj, verts):
             'rgb': [_fin(x) for x in A.vec3(addr, 0x30)],
             'intensity': _fin(A.f32(addr, 0x50)),
             'texture': A.u32(addr, 0x54),
+            'uv': [[A.f32(addr, 0x14), A.f32(addr, 0x18)],
+                   [A.f32(addr, 0x1c), A.f32(addr, 0x20)],
+                   [A.f32(addr, 0x24), A.f32(addr, 0x28)]],
             'textureIndex': texture_index(A.u32(addr, 0x54)),
             'drawVector': A.u32(addr, 0x58),
             'prim': primitive(A.u32(addr, 0x58)),

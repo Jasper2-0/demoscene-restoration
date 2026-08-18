@@ -205,6 +205,9 @@ export function drawPrimitive(source, node, prim) {
   const poly = node.clip ? clip(source, cx, cy, scale, prim) : source;
   if (!poly.length) return null;
   return { prim, texture: node.texture, cx, cy, scale, clip: !!node.clip,
+    // Whether the clipper actually CHANGED anything, as distinct from having
+    // been asked to run. A primitive wholly inside comes back as the same array.
+    cut: poly !== source,
     v: emit(poly, cx, cy, scale, alpha) };
 }
 
@@ -278,7 +281,7 @@ function meshDraws(node) {
       if (d) out.push(d);
     }
   }
-  out.push(...spriteDraws(node));
+  for (const d of spriteDraws(node)) { d.sprite = true; out.push(d); }
   return out;
 }
 
@@ -357,7 +360,10 @@ export function showScene(nodes, activeCamera = 0) {
   // Each draw remembers which node emitted it. Nothing in the original does
   // this; it is here so a residual can be attributed rather than averaged.
   let src = -1;
-  const push = (list) => { for (const d of list) { d.src = src; draws.push(d); } };
+  let srcKind = '?';
+  const push = (list) => {
+    for (const d of list) { d.src = src; d.srcKind = srcKind; draws.push(d); }
+  };
   for (const node of nodes) {
     src++;
     if (!node.drawGate) continue;
@@ -369,11 +375,13 @@ export function showScene(nodes, activeCamera = 0) {
     // `+0x20/+0x24/+0x28`, transforms them by the link's composed matrix, and
     // enters the mesh renderer past its gate. Everything else about the draw —
     // cx, cy, scale, texture, clip — stays the camera's own.
+    srcKind = `type${node.type}`;
     if (node.type === 6) {
       // `0x10006468` compares the camera's ordinal against the show's active
       // camera and returns if they differ. Three scenes carry four cameras
       // each and render one of them at a time.
       if ((node.ordinal ?? 0) !== activeCamera) continue;
+      srcKind = 'camref';
       for (const ref of node.refs ?? []) push(meshDraws(ref));
       continue;
     }

@@ -211,7 +211,7 @@ async function main() {
    * a scene to the schedule — the original draws it INTO each one — which is
    * why it has a slot of its own and never a span.
    */
-  const renderComputed = (span, tick, signal) => {
+  const renderComputed = (span, tick, signal, showTick = null, paint = true) => {
     const order = engine.orderOfSlot(span.part, span.slot);
     if (order == null) return null;
     // WHICH CAMERA, from the schedule. `_play_scene_new_camera` sets a global
@@ -219,9 +219,21 @@ async function main() {
     // part one's scenes carry four cameras and play three times over.
     const cam = span.camera ?? 0;
     let draws = engine.frame(span.part, order, tick, signal, cam);
+    // THE OVERLAY RUNS ON THE PART'S CLOCK, not the scene's — it fades once at
+    // the start of part one and is invisible for the rest of it. Given the
+    // scene's tick instead it restarts at every scene, and its quads are
+    // full-screen.
     const ov = engine.overlay;
     if (span.part === ov.part && order !== ov.order) {
-      draws = draws.concat(engine.frame(ov.part, ov.order, tick, signal));
+      draws = draws.concat(
+        engine.frame(ov.part, ov.order, showTick ?? tick, signal));
+    }
+    // `paint` false steps the engine and skips the GL entirely. A sweep needs
+    // the ANIMATION at every tick and the pixels only at the ones it samples,
+    // and under swiftshader the draw is what costs.
+    if (!paint) {
+      return { objects: draws.length, triangles: 0, glError: 0,
+        slot: span.slot, part: span.part, t: tick };
     }
     textures?.use(span.part);
     w3d.setFog(fogFor(span.fog));
@@ -456,6 +468,74 @@ async function main() {
     };
     window.__demoReady = true;
     say('inspect mode — recorded stream only');
+    return;
+  }
+
+  // ?show=p1&at=SECONDS — one computed frame at an absolute SHOW time, with
+  // the schedule resolved here rather than by the caller. This is what a
+  // comparison against the video capture needs: the capture has a clock and a
+  // frame rate and no idea what a scene index is.
+  if (engine && params.has('show')) {
+    const part = params.get('show');
+    // THE CUES, so the beat sync is right. Generating the module costs a couple
+    // of seconds and is the whole reason this mode installs a function on
+    // `window` rather than rendering once and stopping: a sweep over the
+    // capture wants forty frames out of one page load, not forty page loads.
+    let cues = [];
+    try {
+      const seg = await loadSegments();
+      const mod = parseDBM(generateModule(seg.seg0, seg.seg4, part));
+      cues = render(mod, { sampleRate: 48000 }).cues ?? [];
+    } catch (e) {
+      say(`could not read the music's cues: ${e.message}`);
+    }
+    // ONE FORWARD PASS, which is how the show runs and the only way the state
+    // is right. Two things made a per-sample render wrong:
+    //
+    //   * `anim.origin` is not a pure function of the cue list. A looping mode
+    //     SUBTRACTS the track length from it as it wraps, which is where the
+    //     arena's negative origins come from, so it cannot be reconstructed by
+    //     scanning the cues — it has to be arrived at.
+    //   * THE OVERLAY'S CLOCK IS THE PART'S, not the scene's. Rewinding it at
+    //     every scene restarts its fade, and its quads are full-screen: every
+    //     frame past the first scene came out as a flat wash. In the original
+    //     it fades once at the start of part one and is invisible thereafter,
+    //     which is exactly what the recording shows — 3 draws at tick 23, 2 at
+    //     46, 0 at 92.
+    //
+    // So `sweep` walks the part from tick zero with the replayer's cues, and
+    // hands back a frame at each tick asked for. Fourteen thousand ticks of
+    // part one is about ninety seconds, once, for as many samples as wanted.
+    const cueAt = new Map();
+    for (const c of cues) cueAt.set(c.ticks50, c.value);
+    const spans = spansFor(part);
+    const lastTick = spans.reduce((m, s2) => Math.max(m, s2.end), 0);
+    const sweep = (ticks, grab) => {
+      const want = new Set(ticks);
+      const seen = new Map();
+      engine.rewind();
+      for (let k = 0; k <= lastTick; k++) {
+        const h = frameAt(spans, k);
+        if (!h) continue;
+        const order = engine.orderOfSlot(h.span.part, h.span.slot);
+        if (order == null) continue;
+        const info = renderComputed(h.span, h.local, cueAt.get(k) ?? -1, k,
+          want.has(k));
+        if (want.has(k)) seen.set(k, grab ? grab(info) : info);
+      }
+      return ticks.map((t) => seen.get(t) ?? null);
+    };
+    const renderAt = (seconds) =>
+      sweep([Math.round(seconds * TICKS_PER_SECOND)])[0];
+    window.__pp = { renderAt, sweep, cues: cues.length, lastTick };
+    // NOTHING IS RENDERED AT LOAD. A sweep walks the part from tick zero, so
+    // doing one here to show a single frame would make the page take as long to
+    // become ready as the sweep the caller is about to ask for.
+    say(`${part} ready to sweep: ${lastTick} ticks, ${cues.length} cues, `
+      + `textures ${textures ? `${textures.side} `
+        + Object.entries(textures.counts).map(([k, v]) => `${k}:${v}`).join(',')
+        : 'ABSENT'}`);
+    window.__ppReady = true;
     return;
   }
 

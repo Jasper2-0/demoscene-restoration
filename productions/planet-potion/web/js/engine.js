@@ -158,12 +158,18 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
       }));
     }
     publishNode(o, composed[i].ch ?? new Float64Array(24), composed[i].resolved);
+    // THE FACE'S OWN TEXTURE COORDINATES, one pair per CORNER. `uv: [0, 0]`
+    // stood here while this was a harness — the comparison it fed keys on
+    // primitive, texture, size and screen position, so every mesh in the intro
+    // sampling one texel of its texture was invisible to it and to all 45,327
+    // primitives it matched. It is not invisible on screen: it is the
+    // difference between a textured picture and a flat grey one.
     const faces = mesh ? mesh.faces.map((f) => ({
       faces: [{ ...f,
-        vertices: f.vertices.map((k) => {
+        vertices: f.vertices.map((k, corner) => {
           const v = o.vertices[k];
           return { p: [v.ox, v.oy, v.oz], scaled: [v.o0, v.o1, v.o2, v.o3],
-            uv: [0, 0], gouraud: v.onz };
+            uv: f.uv?.[corner] ?? [0, 0], gouraud: v.onz };
         }) }],
     })) : [];
     meshObjects[i] = faces;
@@ -203,10 +209,10 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
       out[i].refs.push({
         ...out[i], type: 5, built: 0, refs: null, sprites: [],
         objects: S.meshes[t].faces.map((f) => ({
-          faces: [{ ...f, vertices: f.vertices.map((k) => {
+          faces: [{ ...f, vertices: f.vertices.map((k, corner) => {
             const v = fresh.vertices[k];
             return { p: [v.ox, v.oy, v.oz], scaled: [v.o0, v.o1, v.o2, v.o3],
-              uv: [0, 0], gouraud: v.onz };
+              uv: f.uv?.[corner] ?? [0, 0], gouraud: v.onz };
           }) }],
         })),
       });
@@ -288,5 +294,58 @@ export function createEngine({ seg0, seg3, seg4, table, layoutText,
     },
     /** Reset every scene's animation state — a rewind. */
     rewind() { sceneCache.clear(); },
+
+    /**
+     * Put one scene's animation objects back to how they were built: origin 0,
+     * no track cursor. What a scene gets when it comes on screen.
+     */
+    rewindScene(part, order) {
+      const S = sceneOf(part, order);
+      const put = (a) => { a.origin = 0; a.track = 0; };
+      S.anims.forEach(put);
+      S.subAnims.forEach((list) => list.forEach(put));
+    },
+
+    /**
+     * Put a scene's animation state where it would be at `tick`, without
+     * having played the ticks before it.
+     *
+     * ⚠ APPROXIMATE, and only sound for nodes in loop mode 0. A looping mode
+     * subtracts the track length from `origin` as it wraps — which is where the
+     * arena's negative origins come from — and this reconstructs the beat sync
+     * only. Stepping the scene's span is the faithful way and is what the
+     * capture comparison does.
+     *
+     * THE ONLY STATE THAT MATTERS IS `origin`, and it is a pure function of the
+     * music. In loop mode 0 — and only there, `0x10005034` — a frame whose
+     * signal equals a node's trigger byte resets that node's origin to the
+     * current tick; nothing else writes it. So the value at any tick is the
+     * last cue at or before it that matched, which needs the cue LIST rather
+     * than the ticks in between.
+     *
+     * That is what makes seeking possible at all. Stepping from zero to the
+     * middle of part one is ten thousand ticks of arithmetic to arrive at one
+     * frame; this is a scan of a list a few hundred long.
+     *
+     * `cues` is dbmplayer's: `{ value, ticks50 }` per effect-7 in the module.
+     */
+    seek(part, order, tick, cues = []) {
+      const S = sceneOf(part, order);
+      const at = (trigger) => {
+        let last = 0;
+        for (const c of cues) {
+          if (c.ticks50 > tick) break;
+          if (c.value === trigger) last = c.ticks50;
+        }
+        return last;
+      };
+      const put = (a) => {
+        // Loop mode is the top three bits of flags2; only mode 0 syncs.
+        a.origin = (a.flags2 & 0xe0) === 0 ? at(a.trigger) : 0;
+        a.track = 0;
+      };
+      S.anims.forEach(put);
+      S.subAnims.forEach((list) => list.forEach(put));
+    },
   };
 }

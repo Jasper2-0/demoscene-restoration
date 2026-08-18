@@ -341,6 +341,12 @@ def read_vertex(A, a):
     return {
         'addr': hex(a),
         'p': [_fin(x) for x in A.vec3(a, 0x24)],
+        # THE VERTEX'S OWN TEXTURE COORDINATES. The emitter reads u and v from
+        # +0x1c and +0x20 of the VERTEX (`0x10006704`), not from the triangle —
+        # the triangle's three pairs at +0x12/+0x1a/+0x22 go onto the scene FACE
+        # and are a different thing. Nothing exported these, so every port of
+        # the mesh path had to invent them.
+        'uv': [_fin(A.f32(a, 0x1c)), _fin(A.f32(a, 0x20))],
         'rgba': [_fin(A.f32(a, 0x30 + 4 * i)) for i in range(4)],
         'n': [_fin(x) for x in A.vec3(a, 0x50)],
         'next': hex(A.u32(a, 0x68)),

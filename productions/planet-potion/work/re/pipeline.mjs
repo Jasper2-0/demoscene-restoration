@@ -133,6 +133,16 @@ const sizeGot = new Map(), sizeWant = new Map();
 const bump = (m, k) => m.set(k, (m.get(k) ?? 0) + 1);
 const kindOf = (prim, tex, n) => `${prim}|${tex}|${n}`;
 let worstMatched = 0;
+// EVERY FIELD, not just the two the match keys on. A primitive can land in
+// exactly the right place with the wrong texture coordinates on it, and that is
+// not a hypothetical: `uv: [0, 0]` sat in the engine's mesh path while this file
+// matched all 45,327 primitives, and on screen it was the difference between a
+// textured picture and a flat grey one.
+const FIELDS = ['x', 'y', 'z', 'w', 'u', 'v', 'r', 'g', 'b', 'a'];
+const fieldOK = FIELDS.map(() => 0);
+const fieldBad = FIELDS.map(() => 0);
+const byKind = new Map();
+const SHOW = [];
 const matchFrame = (got, want) => {
   const by = new Map();
   want.forEach((w, i) => {
@@ -159,6 +169,34 @@ const matchFrame = (got, want) => {
     if (found >= 0) {
       used.add(found); hit++;
       if (worst > worstMatched) worstMatched = worst;
+      const w = want[found];
+      for (let j = 0; j < d.v.length; j++) {
+        for (let f = 0; f < FIELDS.length; f++) {
+          const a = d.v[j][FIELDS[f]], b = w.v[j * 10 + f];
+          // The export rounds to five decimals, and u and v run to the
+          // hundreds, so the tolerance is relative for the big ones.
+          const tol = Math.max(1e-5, Math.abs(b) * 1e-5);
+          if (Math.abs(a - b) <= tol) fieldOK[f]++;
+          else {
+            fieldBad[f]++;
+            if (f === 4 || f === 5) {
+              const k = `${d.sprite ? 'sprite' : (d.srcKind ?? '?')}`
+                + `${d.cut ? ' cut' : ' whole'}`;
+              byKind.set(k, (byKind.get(k) ?? 0) + 1);
+              if (SHOW.length < 5 && f === 4 && j === 0) {
+                SHOW.push(`${k} tex${d.texture} n=${d.v.length} clip=${d.clip}`
+                  + `\n         ours uv ${d.v.map((q) =>
+                    `(${q.u.toFixed(1)},${q.v.toFixed(1)})`).join(' ')}`
+                  + `\n        their uv ${Array.from({ length: d.v.length },
+                    (_, q) => `(${w.v[q * 10 + 4].toFixed(1)},`
+                      + `${w.v[q * 10 + 5].toFixed(1)})`).join(' ')}`
+                  + `\n        ours xy  ${d.v.map((q) =>
+                    `(${q.x.toFixed(0)},${q.y.toFixed(0)})`).join(' ')}`);
+              }
+            }
+          }
+        }
+      }
     } else missed.push(d);
   }
   if (process.env.PIPEMISS) {
@@ -316,6 +354,44 @@ ok('no frame disagrees that is not already accounted for', surprise.length === 0
 ok('every frame on the accounted-for list still disagrees', fixed.length === 0,
   fixed.length ? `${fixed.join(' ')} now matches — take it off the list`
     : `${KNOWN_INEXACT.size} known`);
+// THE GEOMETRY FIELDS ARE EXACT and the ATTRIBUTE fields are not, so they are
+// asserted apart. Lumping them would let a position regression hide behind a
+// texture-coordinate gap that is already known.
+{
+  const geom = ['x', 'y', 'z', 'w', 'a'];
+  const bad = geom.filter((f) => fieldBad[FIELDS.indexOf(f)] > 0);
+  ok('every position and alpha of every matched vertex is exact', bad.length === 0,
+    bad.length ? bad.join(' ') : `${geom.join(', ')} across ${fieldOK[0]} vertices`);
+}
+// A RATCHET, with the numbers written down. u, v and the three colours differ
+// on the mesh draws and nowhere else, and the floor is what it measured the day
+// the gap was found — so it cannot quietly get worse, and improving it means
+// editing this line.
+//
+// WHAT IS KNOWN. Every face's texture coordinates are exact: 28,338 of 28,338
+// against the arena, layers included. What is not known is why the EMITTED ones
+// diverge on meshes and only on meshes. The matcher pairs primitives by
+// position, and a layer face sits on exactly the same three vertices as the
+// face it layers, so one candidate is that it is pairing a base with a layer —
+// in which case the mismatch is the comparison's and not the port's. That is a
+// hypothesis; the floor is a measurement.
+{
+  const FLOOR = { u: 85257, v: 85257, r: 135417, g: 135417, b: 135417 };
+  const worse = Object.entries(FLOOR)
+    .filter(([f, n]) => fieldOK[FIELDS.indexOf(f)] < n)
+    .map(([f, n]) => `${f} ${fieldOK[FIELDS.indexOf(f)]} < ${n}`);
+  ok('the texture coordinates and colours are no worse than when last measured',
+    worse.length === 0, worse.length ? worse.join(', ')
+      : Object.keys(FLOOR).map((f) =>
+        `${f} ${fieldOK[FIELDS.indexOf(f)]}/${fieldOK[FIELDS.indexOf(f)]
+          + fieldBad[FIELDS.indexOf(f)]}`).join(' '));
+}
+if (byKind.size) {
+  console.log('     uv mismatches by source: '
+    + [...byKind].sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => `${k} ${n}`).join(', '));
+}
+for (const l of SHOW) console.log('     ' + l);
 ok('every matched primitive is inside the export\'s own rounding',
   worstMatched <= TOL, `worst ${worstMatched.toExponential(2)} of ${TOL}`);
 ok('the whole set of frames is joined and compared', scenes >= 140,
