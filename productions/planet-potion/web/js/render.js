@@ -199,6 +199,64 @@ export function primitiveOf(node) {
 }
 
 /**
+ * Type 5 — the mesh, `0x100061a0`. The workhorse: most of the intro's 45,327
+ * primitives come from here.
+ *
+ * Objects hang off `node+0x24` chained on `+0x60`, and each object IS its own
+ * first face, with the rest chained on `+0x5c`. THE FACE RECORD IS ALSO THE
+ * VERTEX ARRAY — `addi r19, r17, 0` hands the face itself to the shared draw
+ * routine, so the count sits at face+0x00 and the pointers at +0x04, and the
+ * texture and draw vector come from the same record at +0x54 and +0x58.
+ *
+ * THE CULL IS A SIGNED VOLUME, NOT A FACING TEST. It takes the first three
+ * vertices, forms `-(A x B)` and dots it with C, which is the determinant of
+ * the three POSITIONS rather than of two edge vectors — so it depends on where
+ * the triangle is, not only on which way it points. `1` keeps a positive
+ * result and `2` keeps a negative one; `0` skips the test.
+ */
+function meshDraws(node) {
+  if (node.built === 1) return [];
+  const out = [];
+  for (const object of node.objects ?? []) {
+    for (const face of object.faces ?? []) {
+      const vs = face.vertices ?? [];
+      if (face.cull && vs.length >= 3) {
+        const [A, B, C] = [vs[0].p, vs[1].p, vs[2].p];
+        const nx = fma(A[2], B[1], -(A[1] * B[2]));
+        const ny = fma(A[0], B[2], -(A[2] * B[0]));
+        const nz = fma(A[1], B[0], -(A[0] * B[1]));
+        const d = fma(nz, C[2], fma(ny, C[1], nx * C[0]));
+        if (face.cull === 2 ? d >= 0 : d <= 0) continue;
+      }
+      // Shading writes the emitted colour on every vertex. `k` folds into the
+      // face colour for mode 2 and is per-vertex for mode 3; modes 0 and 4
+      // leave it at one. The clamp is ONE-SIDED — nothing catches a negative,
+      // which is how the alpha gate downstream ever sees one.
+      let [fr, fg, fb] = face.rgb;
+      if (face.shading === 2) {
+        const k = Math.abs(face.intensity);
+        fr *= k; fg *= k; fb *= k;
+      }
+      const shaded = vs.map((v) => {
+        const k = face.shading === 3 ? Math.abs(v.gouraud ?? 1) : 1;
+        return {
+          p: v.p,
+          a: Math.min(face.alpha * v.scaled[0], 1.0),
+          rgb: [Math.min(fr * v.scaled[1] * k, 1.0),
+            Math.min(fg * v.scaled[2] * k, 1.0),
+            Math.min(fb * v.scaled[3] * k, 1.0)],
+          uv: v.uv,
+        };
+      });
+      const d = drawPrimitive(shaded,
+        { ...node, texture: face.textureIndex }, face.prim ?? 'trifan');
+      if (d) out.push(d);
+    }
+  }
+  return out;
+}
+
+/**
  * `_show_scene`. Walk the list on `+0x10` and dispatch on `+0x08`.
  *
  * PUBLISHES NOTHING UNLESS `+0x0c` IS SET — the same gate byte pass 3 writes,
@@ -217,7 +275,7 @@ export function showScene(nodes) {
     if (!node.drawGate) continue;
     if (node.at0d !== state) state = node.at0d;      // render-state change
     if (node.type === 6 || node.type === 7) continue; // camera and root draw nothing
-    if (node.type === 5) continue;                    // mesh: not ported here
+    if (node.type === 5) { draws.push(...meshDraws(node)); continue; }
     if (node.type === 4) {
       for (const g of node.glyphs ?? []) {
         if (!g || g.space || !g.quad) continue;

@@ -84,8 +84,13 @@ import runscene
 NIL = 0xFFFFFFFF
 NODE_BYTES = 0x80          # dumped raw as well as decoded — see `raw` below
 MAX_NODES = 256
-MAX_OBJECTS = 256
-MAX_FACES = 512
+# RAISED FROM 256 AND 512. p1/12's object chain landed on exactly 256 and p1/11
+# carries 1,792 across its nodes, so the old caps were truncating real chains
+# and the dump gave no sign of it — the same silent loss animdump's 0x20000
+# window once caused. The walk is cycle-guarded, so these only bound runaway
+# structures, and every one of them is reported when it bites.
+MAX_OBJECTS = 8192
+MAX_FACES = 8192
 MAX_VERTS = 64             # per face; the array is inline from +0x04
 MAX_VERTLIST = 8192        # per node, walking node+0x20 on +0x68
 MAX_SPRITES = 512
