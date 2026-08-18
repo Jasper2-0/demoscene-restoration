@@ -134,7 +134,9 @@ async function textureBinder(w3d, programs, kernels, side, cache, pointSampled) 
 async function main() {
   let w3d;
   try {
-    w3d = new Warp3D(canvas);
+    // ?depth16=0 — draw straight to the canvas's 24-bit depth buffer
+    // instead of the 16 bits the hardware had. See warp3d.js.
+    w3d = new Warp3D(canvas, { depth16: params.get('depth16') !== '0' });
   } catch (e) {
     say(`WebGL2 unavailable: ${e.message}`);
     return;
@@ -557,6 +559,11 @@ async function main() {
   if (params.has('inspect')) {
     // The shared inspector contract. Assign __demo LAST, then the ready flag.
     window.__demo = {
+      // The depth precision actually in force. The original's z buffer was 16
+      // bits; WebGL's default framebuffer is usually 24 and cannot be asked for
+      // less, so the shim renders into its own target and blits.
+      depth: { target: w3d.fbo ? 'fbo' : 'canvas',
+        bits: w3d.fbo ? w3d.depthBits : w3d.gl.getParameter(w3d.gl.DEPTH_BITS) },
       id: 'planet-potion',
       schedule: () => (dataset?.scenes ?? []).map((s, i) => ({
         name: `${s.part} ${s.slot}`, phase: s.part, start: 0,

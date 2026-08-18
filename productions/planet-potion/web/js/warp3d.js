@@ -148,7 +148,8 @@ function compile(gl, type, src) {
 }
 
 export class Warp3D {
-  constructor(canvas) {
+  constructor(canvas, opts = {}) {
+    this.depth16 = opts.depth16 !== false;
     const gl = canvas.getContext('webgl2', {
       alpha: false, antialias: false, depth: true, preserveDrawingBuffer: true,
     });
@@ -191,6 +192,46 @@ export class Warp3D {
     this.texEnv = 1;
     this.texAlpha = 1;
     this.filter = null;   // null = per texture; 'linear'/'nearest' force it
+
+    // A 16-BIT DEPTH BUFFER, because that is what the hardware had. The
+    // framebuffer is 16 bits deep (see render_state.json) and so is the z
+    // buffer, and the difference is not academic: at t=692 of part one's 0x25ee
+    // there are 263 overlapping pairs of primitives whose depth ranges
+    // interpenetrate within 0.2% of each other and 148 of them cover more than
+    // 2,000 pixels. At 16 bits those quantise to the same value, W3D_Z_GEQUAL
+    // takes the later one, and the result is stable. Given the 24 bits WebGL
+    // hands out by default the differences resolve, and each pixel picks a
+    // winner on its own — which is z-fighting, on geometry the original drew
+    // clean.
+    //
+    // WebGL cannot ask the default framebuffer for a depth size, so the frame
+    // is drawn into one of our own and blitted across at the end. `?depth16=0`
+    // renders straight to the canvas the way it used to.
+    this.fbo = null;
+    // Reported so that "we render at the hardware's depth" is checkable rather
+    // than assumed: a driver that refuses the format leaves fbo null and this
+    // falls back to the canvas, which may be 16 or 24 depending on the machine.
+    this.depthBits = null;
+    if (this.depth16) {
+      const fbo = gl.createFramebuffer();
+      const colour = gl.createRenderbuffer();
+      const depth = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, colour);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, SCREEN_W, SCREEN_H);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16,
+        SCREEN_W, SCREEN_H);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+        gl.RENDERBUFFER, colour);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT,
+        gl.RENDERBUFFER, depth);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+        this.fbo = fbo;
+        this.depthBits = gl.getParameter(gl.DEPTH_BITS);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
 
     this.vao = gl.createVertexArray();
     this.vbo = gl.createBuffer();
@@ -282,6 +323,7 @@ export class Warp3D {
   /** W3D_ClearDrawRegion — _calc_matrix computes the colour per frame. */
   clear(rgb = [0, 0, 0]) {
     const { gl } = this;
+    if (this.fbo) gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.clearColor(rgb[0], rgb[1], rgb[2], 1);
     // THE DEPTH MASK GATES THE DEPTH CLEAR, not just drawing. `glClear` is
     // subject to the write masks, so clearing while `depthMask` is false --
@@ -306,6 +348,7 @@ export class Warp3D {
    */
   draw(draw) {
     const { gl } = this;
+    if (this.fbo) gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     const verts = draw.v instanceof Float32Array ? draw.v : new Float32Array(draw.v);
     if (verts.length < 20) return 0;                 // fewer than two vertices
 
@@ -341,7 +384,19 @@ export class Warp3D {
   drawFrame(frame) {
     let triangles = 0;
     for (const d of frame.draws) triangles += this.draw(d);
+    this.present();
     return { objects: frame.draws.length, triangles, glError: this.gl.getError() };
+  }
+
+  /** Blit the 16-bit target to the canvas. A no-op when drawing straight to it. */
+  present() {
+    const { gl } = this;
+    if (!this.fbo) return;
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.fbo);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    gl.blitFramebuffer(0, 0, SCREEN_W, SCREEN_H, 0, 0, SCREEN_W, SCREEN_H,
+      gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 }
 

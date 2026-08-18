@@ -314,7 +314,17 @@ function meshDraws(node) {
       if (d) { d.shading = face.shading; out.push(d); }
     }
   }
-  for (const d of spriteDraws(node)) { d.sprite = true; out.push(d); }
+  // SPRITES ARE DRAWN WITH THE DEPTH BUFFER OFF. `0x100062bc` opens the sprite
+  // path by setting BOTH z states to W3D_DISABLE, draws the whole chain, and
+  // restores them to the node's own state at 0x1000642c — so a point sprite
+  // neither tests nor writes depth however the mesh around it was drawn.
+  //
+  // It matters where the sprites sit ON the geometry they belong to: part
+  // three's 0x278e hangs a billboard on every vertex of a torus, and with the
+  // depth test left on those quads are coplanar with the faces underneath them
+  // and fight. Off, they simply land on top, in submission order, which is what
+  // the original does and why it does not fight either.
+  for (const d of spriteDraws(node)) { d.sprite = true; d.z = 2; out.push(d); }
   return out;
 }
 
@@ -397,12 +407,15 @@ export function showScene(nodes, activeCamera = 0) {
   const push = (list) => {
     for (const d of list) {
       d.src = src; d.srcKind = srcKind;
+      // A draw that already named its own depth state keeps it — the sprite
+      // path sets both z states to DISABLE around itself regardless of the
+      // node's, so this must not stamp the node's back over it.
       // THE Z-BUFFER STATE THIS DRAW IS MADE UNDER. The original does not put
       // it on the draw: it calls W3D_SetState when the byte changes and the
       // hardware keeps it until the next change. Carrying it per draw is the
       // same thing said in a form the shim can apply, and it survives the
       // draws being concatenated or reordered, which a running state does not.
-      d.z = state;
+      if (d.z === undefined) d.z = state;
       draws.push(d);
     }
   };
