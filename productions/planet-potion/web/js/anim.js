@@ -481,6 +481,30 @@ export function composeNode(ch, parentCh, gates) {
 }
 
 /**
+ * How a SUB-OBJECT composes against the node it hangs off.
+ *
+ * Two rules, and the difference is measured rather than assumed.
+ *
+ * A DECODED sub-object — ops 0, 1, 2 and 4 — composes under a fixed 0xd0:
+ * multiply channels 15 to 18, add 19 and 20, add the translation, and leave the
+ * matrix and cx/cy/scale alone. All 809 of them, and 0xf0 gets 444.
+ *
+ * A GENERATED one — op 3's, which `0x10002b08` synthesises rather than reads —
+ * takes the node's FRAME instead: same colour and texture rules, then
+ * `leftConcat`, so it inherits the node's 3x3 and its translation is rotated
+ * into it. The arena shows this plainly — every op-3 sub-object carries its
+ * node's matrix, not the identity its own single keyframe would give — and it
+ * is what takes them from 913 of 1,249 to 1,085. Copying cx/cy/scale down as
+ * well, which is what the PROJECT gate would do, takes it to zero.
+ */
+export function composeSub(ch, parentCh, generated) {
+  for (let i = 15; i <= 18; i++) ch[i] = f32(ch[i] * parentCh[i]);
+  for (let i = 19; i <= 20; i++) ch[i] = f32(ch[i] + parentCh[i]);
+  if (generated) leftConcat(ch, parentCh);
+  else for (let i = 12; i <= 14; i++) ch[i] = f32(ch[i] + parentCh[i]);
+}
+
+/**
  * The whole of pass 2 over one frame's nodes.
  *
  * `entries` are `{addr, parent, flags3, resolved, ch}` — the state pass 1 left,

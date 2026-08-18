@@ -23,7 +23,7 @@
 // declared end rather than passing it, so the byte sitting at `length - 1` is
 // read as an opcode and thrown away.
 
-import { f32 } from './fp.js';
+import { f32, fma } from './fp.js';
 
 // `[r2+0x2e5e]` — degrees to sine-table units, 32768/360. The rotate group is
 // stored already scaled, which is why the animation pass can index the table
@@ -326,6 +326,10 @@ export function decodeScene(bytes, at) {
         node.operands = [a0 & 0x3fff, a1 & 0x3fff, a2, a3, a4 & 0x7fff, a5];
         node.opFlags = [(a0 >>> 14) & 1, (a0 >>> 15) & 1,
           (a1 >>> 14) & 1, (a1 >>> 15) & 1];
+        // The sub-objects op 3 makes for itself, and the count it stores.
+        node.subs = generateOp3(node.operands, node.opFlags);
+        for (const sub of node.subs) prepareTrack(sub.keys);
+        node.at20 = node.subs.length;
       } else {
         for (let i = 0; i < HANDLER[op]; i++) c.u8();
       }
@@ -370,6 +374,152 @@ export function decodeScene(bytes, at) {
  * `+0x30`. That is why the geometry builder's own `+0x30` is zero everywhere —
  * it writes its colours somewhere else and this routine moves them.
  */
+// --- op 3's generated sub-objects ------------------------------------------
+//
+// `0x10002b08`. Every other type reads its sub-objects out of the stream; op 3
+// SYNTHESISES them, which is why SUBOBJECTS says zero for it and why the type
+// that accounts for 194 of the 395 nodes had none until now.
+//
+// It is a rounded rectangle. Six operands — width, height, a u and v origin, a
+// u and v span — and four flag bits, one per corner, each CLEARING to round
+// that corner rather than setting to. A corner costs three extra vertices, so
+// the count comes out at 5, 17 or 8, and `0x10002e08` stores it at node+0x20.
+//
+// The arcs are three constants from the float pool: 0.032, 0.016 and 0.008 at
+// `r2+0x2e46`, `+0x2e4a` and `+0x2e4e`, used as fractions of the width and
+// height. Every coordinate is one FUSED operation on top of a rounded product —
+// `fmul` then `fmsub` — so the pairs below are not algebraically simplified.
+//
+// `0x100023a8` turns each into a 0x78 animation object with one keyframe:
+// blocks 0, 1 and 2 are the position, blocks 10 and 11 the texture pair, and
+// `0x10002768` presets blocks 6 to 9 to 1.0 — which is the alpha and the three
+// colours. Those blocks land on channels 12-14, 19-20 and 15-18 through the
+// same GROUPS table every other track uses, so a generated sub-object IS a
+// vertex record, exactly like a decoded one.
+//
+// It also writes 320, 240 and 320 into the channel block's cx, cy and scale.
+// That never survives: the first evaluation rebuilds the block from the
+// keyframe, whose blocks 12-14 are zero, and the arena agrees — every op-3
+// sub-object reads 0, 0, 0 there.
+const K5 = 0.5, K4 = 0.032, K3 = 0.016, K2 = 0.008;
+
+// capstone's operand order is `op frD, frA, frC, frB`, so the addend is last.
+const madd = (a, c, b) => fma(a, c, b);
+const msub = (a, c, b) => fma(a, c, -b);
+const nmadd = (a, c, b) => -fma(a, c, b);
+const nmsub = (a, c, b) => -fma(a, c, -b);
+
+/** One synthesised sub-object: an animation record with a single keyframe. */
+function pointSub(x, y, z, u, v) {
+  // FIFTEEN blocks, the same as any decoded keyframe — GROUPS indexes 0 to 14.
+  const blocks = new Array(15).fill(0);
+  blocks[0] = x; blocks[1] = y; blocks[2] = z;
+  for (const b of [6, 7, 8, 9]) blocks[b] = 1.0;   // 0x10002768
+  blocks[10] = u; blocks[11] = v;
+  // ONE keyframe, so prepareTrack's neighbours are all itself and every cubic
+  // coefficient falls out to zero: the block evaluates to its constant at any
+  // tick, which is what a generated vertex wants.
+  return {
+    flags2: 0x40, flags3: 0, loopMode: 2, trigger: 0, parent: null,
+    generated: true,
+    keys: [{ time: 0, t0: 0, hold: 0, blocks }],
+  };
+}
+
+/**
+ * The fourteen emit sites of `0x10002b08`, in order, with their four gates.
+ *
+ * `flags` is [cr4, cr5, cr6, cr7] — 0x4000 and 0x8000 of the first operand word
+ * then of the second. A bit SET skips its corner's extra vertices.
+ */
+export function generateOp3(operands, flags) {
+  const [A, B, C, D, E, F] = operands;
+  const [g4, g5, g6, g7] = flags;
+  const U = madd(E, K5, C);           // fmadd f22, f20, f5, f22
+  const V = madd(F, K5, D);
+  const z = 0;
+  const out = [];
+  let x, y, u, v;
+  const emit = () => out.push(pointSub(x, y, z, u, v));
+
+  x = nmadd(A, K5, 0); y = nmadd(B, K5, 0);
+  u = nmsub(E, K5, U); v = nmsub(F, K5, V);
+  if (!g4) {
+    x = nmsub(A, K5, A * K3); y = nmsub(B, K5, B * K2);
+    u = nmsub(E, K5, madd(E, K3, U)); v = nmsub(F, K5, madd(F, K2, V));
+    emit();
+    x = nmsub(A, K5, A * K4); y = nmadd(B, K5, 0);
+    u = nmsub(E, K5, madd(E, K4, U)); v = nmsub(F, K5, V);
+  }
+  emit();                                                    // 0x10002bf0
+
+  x = A * K5; y = nmadd(B, K5, 0);
+  u = madd(E, K5, U); v = nmsub(F, K5, V);
+  if (!g5) {
+    x = msub(A, K5, A * K4);
+    u = msub(E, K5, msub(E, K4, U));
+    emit();
+    x = msub(A, K5, A * K3); y = nmsub(B, K5, B * K2);
+    u = msub(E, K5, msub(E, K3, U)); v = nmsub(F, K5, madd(F, K2, V));
+    emit();
+    x = msub(A, K5, A * K2); y = nmsub(B, K5, B * K3);
+    u = msub(E, K5, msub(E, K2, U)); v = nmsub(F, K5, madd(F, K3, V));
+    emit();
+    y = nmsub(B, K5, B * K4); x = A * K5;
+    v = nmsub(F, K5, madd(F, K4, V)); u = madd(E, K5, U);
+  }
+  emit();                                                    // 0x10002c7c
+
+  x = A * K5; y = B * K5;
+  u = madd(E, K5, U); v = madd(F, K5, V);
+  if (!g7) {
+    y = msub(B, K5, B * K4);
+    v = msub(F, K5, msub(F, K4, V));
+    emit();
+    x = msub(A, K5, A * K2); y = msub(B, K5, B * K3);
+    u = msub(E, K5, msub(E, K2, U)); v = msub(F, K5, msub(F, K3, V));
+    emit();
+    x = msub(A, K5, A * K3); y = msub(B, K5, B * K2);
+    u = msub(E, K5, msub(E, K3, U)); v = msub(F, K5, msub(F, K2, V));
+    emit();
+    x = msub(A, K5, A * K4); y = B * K5;
+    u = msub(E, K5, msub(E, K4, U)); v = madd(F, K5, V);
+  }
+  emit();                                                    // 0x10002d08
+
+  x = nmadd(A, K5, 0); y = B * K5;
+  u = nmsub(E, K5, U); v = madd(F, K5, V);
+  if (!g6) {
+    x = nmsub(A, K5, A * K4);
+    u = nmsub(E, K5, madd(E, K4, U));
+    emit();
+    x = nmsub(A, K5, A * K3); y = msub(B, K5, B * K2);
+    u = nmsub(E, K5, madd(E, K3, U)); v = msub(F, K5, msub(F, K2, V));
+    emit();
+    x = nmsub(A, K5, A * K2); y = msub(B, K5, B * K3);
+    u = nmsub(E, K5, madd(E, K2, U)); v = msub(F, K5, msub(F, K3, V));
+    emit();
+    y = msub(B, K5, B * K4); x = nmadd(A, K5, 0);
+    v = msub(F, K5, msub(F, K4, V)); u = nmsub(E, K5, U);
+  }
+  emit();                                                    // 0x10002d94
+
+  x = nmadd(A, K5, 0); y = nmadd(B, K5, 0);
+  u = nmsub(E, K5, U); v = nmsub(F, K5, V);
+  if (!g4) {
+    y = nmsub(B, K5, B * K4);
+    v = nmsub(F, K5, madd(F, K4, V));
+    emit();
+    x = nmsub(A, K5, A * K2); y = nmsub(B, K5, B * K3);
+    u = nmsub(E, K5, madd(E, K2, U)); v = nmsub(F, K5, madd(F, K3, V));
+    emit();
+    x = nmsub(A, K5, A * K3); y = nmsub(B, K5, B * K2);
+    u = nmsub(E, K5, madd(E, K3, U)); v = nmsub(F, K5, madd(F, K2, V));
+  }
+  emit();                                                    // 0x10002e04
+  return out;
+}
+
 export function buildMesh(program) {
   const vertices = [];
   const faces = [];

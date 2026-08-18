@@ -40,7 +40,7 @@
 
 import { decodeScene, buildMesh } from './scene.js';
 import { decodeProgram } from './geom.js';
-import { evaluateNode, composeHierarchy, composeNode, publishNode, concat }
+import { evaluateNode, composeHierarchy, composeSub, publishNode, concat }
   from './anim.js';
 import { showScene } from './render.js';
 
@@ -120,13 +120,15 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
   });
   composeHierarchy(composed);
 
-  // The sub-objects, under the fixed 0xd0 gate set — multiply, add-pair,
-  // translate — except op 4's, which carries the glyph scale and is not
-  // composed at all.
+  // The sub-objects. op 4's carries the glyph scale and is not composed at all;
+  // the rest go through composeSub, which takes the node's frame for a
+  // generated sub-object and only its translation for a decoded one.
   const subs = nodes.map((n, i) => subAnims[i].map((a, j) => {
     if (!subKeys[i][j].length) return null;
     const ch = evaluateNode(a, subKeys[i][j], tick, musicSignal, table);
-    if (n.op !== 4 && composed[i].ch) composeNode(ch, composed[i].ch, 0xd0);
+    if (n.op !== 4 && composed[i].ch) {
+      composeSub(ch, composed[i].ch, Boolean(nodes[i].subs[j]?.generated));
+    }
     return ch;
   }));
 
