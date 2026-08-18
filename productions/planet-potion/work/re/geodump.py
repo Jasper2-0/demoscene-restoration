@@ -63,6 +63,17 @@ STUBSZ = 32
 # real zeroed memory fixed it. `runscene.py` reached the same arrangement for
 # its texture objects for the same reason.
 TEXOBJ, TEXSTRIDE = 0x21800000, 0x200
+# THE TABLE'S FIRST WORD IS THE TEXEL BUFFER, not the Warp3D object. The shared
+# prologue at `0x10003124` stores `table[i*8]` into the record's +0x18 and
+# `table[i*8+4]` into +0x14, and `0x10003868` — op 0's displacement map — reads
+# 128x128x4 bytes straight off +0x18. Handing it 0x200 bytes of zeroes is what
+# made p1/26's landscape a flat plane.
+#
+# rendertex.py --raw writes the real ARGB, one 64 KB texture per slot, and it
+# has to be the RAW pixels: the PNG drops the first channel and that is exactly
+# the byte the displacement reads.
+TEXDATA, TEXDATASTRIDE = 0x22000000, 0x10000
+TEXCOUNT = {'p1': 48, 'p3': 21}
 MAX_NODES, MAX_RECS, MAX_VERTS, MAX_TRIS = 256, 4096, 65536, 65536
 
 # The two programs' pointer tables, exactly as export.py resolves them.
@@ -90,7 +101,7 @@ def subf(d, a, b):
     return (31 << 26) | (d << 21) | (a << 16) | (b << 11) | (40 << 1)
 
 
-def data_segments():
+def data_segments(texdata=b''):
     """The Warp3D vector table and the texture table, as memory images.
 
     Building these as data rather than as emitted stores keeps the stub short
@@ -107,13 +118,15 @@ def data_segments():
     tab = bytearray(256 * 8)
     for i in range(256):
         struct.pack_into('>II', tab, i * 8,
-                         TEXOBJ + i * TEXSTRIDE, TEXOBJ + i * TEXSTRIDE + 0x100)
+                         TEXDATA + i * TEXDATASTRIDE,
+                         TEXOBJ + i * TEXSTRIDE + 0x100)
     return [(lo, bytes(vec), 0x1000), (STUBS, stubs, len(stubs)),
             (TABLE, bytes(tab), len(tab)),
-            (TEXOBJ, None, 256 * TEXSTRIDE)]
+            (TEXOBJ, None, 256 * TEXSTRIDE),
+            (TEXDATA, texdata or None, 256 * TEXDATASTRIDE)]
 
 
-def run(prog):
+def run(prog, texdata=b''):
     """-> (head, high-water, arena bytes) for one geometry program."""
     c = []
     c += H.load32(1, H.STACK) + H.load32(2, R2) + H.load32(13, H.STACK - 0x1000)
@@ -134,7 +147,7 @@ def run(prog):
     pieces.append((H.SCRATCH, stub, 0x00600000))
     pieces.append((ARENA, None, ARENA_SZ))
     pieces.append((OUT, None, 0x1000))
-    pieces += data_segments()
+    pieces += data_segments(texdata)
     EH, PH, AL = 52, 32, 0x1000
     blob = b''
     loads = []
@@ -273,6 +286,14 @@ def table_index(v):
     answerable; a zeroed table would make every record's texture identical, the
     same way one shared draw vector once erased fan-vs-strip on every face.
     """
+    d = v - TEXDATA
+    return (d // TEXDATASTRIDE if 0 <= d < 256 * TEXDATASTRIDE
+            and d % TEXDATASTRIDE == 0 else None)
+
+
+def obj_index(v):
+    """The same, for the WARP3D OBJECT pointer — the table's second word, which
+    is what a triangle and a sprite carry."""
     d = v - TEXOBJ
     return d // TEXSTRIDE if 0 <= d < 256 * TEXSTRIDE and d % TEXSTRIDE == 0 else None
 
@@ -300,7 +321,7 @@ def read_point(A, a):
             'vertex': A.u32(a, 0x00),
             'texture': A.u32(a, 0x04),
             # The same +0x100 bias a triangle's texture carries.
-            'texIndex': table_index(A.u32(a, 0x04) - 0x100),
+            'texIndex': obj_index(A.u32(a, 0x04) - 0x100),
             'size': A.f32(a, 0x08),
             'uv': [A.f32(a, 0x0c), A.f32(a, 0x10),
                    A.f32(a, 0x14), A.f32(a, 0x18)],
@@ -350,7 +371,7 @@ def read_triangle(A, a, depth=0):
         'normal': [_fin(A.f32(a, 0x3a)), _fin(A.f32(a, 0x3e)),
                    _fin(A.f32(a, 0x42))],
         'texture': A.u32(a, 0x46),
-        'texIndex': table_index(A.u32(a, 0x46) - 0x100),
+        'texIndex': obj_index(A.u32(a, 0x46) - 0x100),
         # +0x4a is another LAYER on the same three vertices — the record chain
         # continues while the next one's kind is neither 5 nor 6 — and +0x4e is
         # the next triangle. Two different chains out of one record.
@@ -401,8 +422,8 @@ def read_node_fields(A, a, op):
     return {}
 
 
-def dump_program(part, index, prog):
-    head, hi, data = run(prog)
+def dump_program(part, index, prog, texdata=b''):
+    head, hi, data = run(prog, texdata)
     A = Arena(data)
     used = hi - ARENA
     nodes, truncated = [], []
@@ -456,6 +477,22 @@ def main():
     H.preload_tables(d0)
 
     out = sys.argv[2] if len(sys.argv) > 2 else 'out/geo.json'
+    # The real texels, if rendertex has produced them. Without them op 0's
+    # displacement map reads zeroes and every displaced node comes out flat —
+    # which is a real difference from the original, not a harmless one, so it is
+    # reported rather than passed over.
+    # OPT IN, so that `geodump.py flat/ out/geo.json` keeps producing the same
+    # file it always has. With --textures the displacement map runs and the
+    # output is closer to a real boot but no longer matches what web/js/geom.js
+    # builds, because the displacement is not ported there yet.
+    texdata = {}
+    if '--textures' in sys.argv:
+        tdir = sys.argv[sys.argv.index('--textures') + 1]
+        for part in TEXCOUNT:
+            texdata[part] = open(f'{tdir}/tex_{part}.bin', 'rb').read()
+        print(f'  texture data from {tdir}: '
+              + ', '.join(f'{k} {len(v)}B' for k, v in texdata.items()))
+
     progs, fails = [], []
     for part, disp, n in PROGRAMS:
         for i in range(n):
@@ -463,7 +500,7 @@ def main():
             if addr == NIL:
                 continue
             try:
-                progs.append(dump_program(part, i, addr))
+                progs.append(dump_program(part, i, addr, texdata.get(part, b'')))
             except Exception as e:
                 fails.append(f'{part}[{i}] {addr:#x}: {e}')
     doc = {'note': 'every structure _generate_obj builds, all 39 programs',

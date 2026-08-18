@@ -69,6 +69,19 @@ let fieldOK = 0, fieldBad = 0, texDep = 0;
 // SECOND word of the texture table entry the shared prologue looked up, so it
 // is that texture's texel data rather than its object.
 //
+// The map is p1's texture 43 — the record's own texIndex — and the sampling is
+// a clean grid: vertex (i, j) of the 33x33 reads texel (4i, 4j), recovered by
+// substituting a texture whose first channel IS its column, and again its row.
+// The amplitude is the record's +0x2c, 7300.0, and every one of the 33x33 real
+// heights divides by 7300/255 to an exact integer, which is what says the
+// formula is right rather than merely close.
+//
+// WITH THE REAL TEXELS IN PLACE, 1,015 of the 1,089 come out right — and the
+// remaining error is a pure horizontal offset: the real boot samples twelve
+// texels EARLIER in u than this does. Rolling p1[43] by -12 columns and
+// re-scoring puts it at 1,015 against 49 for the next best of all 69 textures,
+// so the texture is certain and the offset is not explained.
+//
 // So geodump's zero-filled texture region gives a flat grid where the real boot
 // gives a landscape. Measured, with the environment actually reaching the
 // container: filling the region with 0x01 moves all 1,089 of node 11's
@@ -84,6 +97,11 @@ let fieldOK = 0, fieldBad = 0, texDep = 0;
 // The shared-arena theory that replaced it IS disproved, this time properly:
 // building every earlier program of the same part into the same arena first
 // takes the high-water mark from 456 KB to 2.7 MB and changes not one vertex.
+//
+// `geodump.py --textures DIR` will hand it the real pixels, from
+// `rendertex.py --raw`. It is OPT IN and off by default, because with it the
+// oracle displaces and web/js/geom.js does not, so geovertcheck would fail on
+// a difference that is the port's and not the dump's.
 //
 // Node 11's 1,044 differing positions are counted separately and named rather
 // than lost in a tolerance.
