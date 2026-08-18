@@ -27,6 +27,44 @@ superseded figure reappears. Run it after editing this file.
 | texture VM | three float RGBA surfaces plus a mask; 20 table-dispatched opcodes and 40 verified 3×3 convolutions — see §7 |
 | audio | two DigiBooster Pro 2 modules, **generated** from ~37 KB of seed into 8.3 MB, plus a replayer and its DSP echo — see §8 |
 
+## 0-bis. What is ported, and what is left
+
+Every row here is a measurement, and the check that made it is named. Run
+`./checkall.sh flat/ out/ mods/ out/anim.json out/opsuite/ ~/Downloads`.
+
+| stage | state | evidence |
+|---|---|---|
+| lookup tables | byte-exact | `tablecheck` |
+| float semantics | exact | `fpcheck` — `stfs` truncates, `fmadd` is fused |
+| font atlas, glyph table, text layout | exact | `initcheck`, `font.js` 40/40 |
+| texture VM | byte-exact, 69/69 | `texvmdiff`, `texopdiff` |
+| softsynth | **byte-exact, both modules** | `synthdiff` — 94/94 samples, SHA-256 |
+| DBM replayer | 0.9955 / 0.9858 vs reference | `dbmdiff`, `dbmsuite` |
+| geometry: vertices, triangles, normals, UVs | bit-exact | `geovertcheck` — 11,723 / 19,074 / all 7 UV modes |
+| geometry: the mesh copy into a scene | bit-exact | `joincheck` — 141,690 face fields |
+| scene stream | 29/29 streams, 395/395 nodes | `scenegram`, `scenecheck` |
+| animation passes 1-3 | bit-exact | `chancheck` — 2,783 node blocks, 809 decoded sub-objects, 310 camera matrices |
+| op 3's generated sub-objects | 181 of 194 nodes | `chancheck` — thirteen named |
+| renderer, end to end | 130 of 140 frames | `pipeline` — 44,180 of 45,327 primitives on every vertex |
+| Warp3D → WebGL2 | verified | `rendercheck`, `lvocheck` |
+
+**What still keeps a recorded input in the loop, in the order it matters:**
+
+1. **The geometry node's SPRITE chain and its LAYER records.** `geom.js` builds
+   a program's vertices, triangles and materials exactly and builds neither of
+   these, so `engine.js` is handed `geo.json` for the mesh. Both are small and
+   specified: the sprites are one 0x30 record per vertex off a kind-5 material
+   record (`0x10003dd4`), and the layers hang off a triangle's `+0x4a`.
+2. **Thirteen op-3 nodes**, all in part three, all failing on every one of their
+   sub-objects — the signature of an operand read rather than of the arithmetic.
+3. **`p1/26` node 11's displacement map.** Specified in full at `0x10003868`
+   and reproduced to 1,015 of 1,089 vertices with `geodump --textures`; the
+   residue is a twelve-texel offset in u with no explanation yet.
+4. **The show timeline.** `anim.origin` is the beat sync — a music signal
+   matching a node's trigger resets it — so a harness that jumps to a tick has
+   to be told the origins and a page that plays from the start does not. That is
+   the one value `pipeline.mjs` still reads from the dump.
+
 ## 1. The schedule
 
 `out/showorder.json`. 26 driver calls in part one, 13 in part three, each with a
