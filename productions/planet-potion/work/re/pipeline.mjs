@@ -61,7 +61,7 @@ for (const f of NEED) {
 const { decodeScene, buildMesh } = await import(`${R}/web/js/scene.js`);
 const { evaluateNode, composeHierarchy, composeNode, publishNode, concat } =
   await import(`${R}/web/js/anim.js`);
-const { showScene } = await import(`${R}/web/js/render.js`);
+const { createEngine } = await import(`${R}/web/js/engine.js`);
 const { sinus } = await import(`${R}/web/js/tables.js`);
 const { glyphTable, layoutText } = await import(`${R}/web/js/font.js`);
 
@@ -78,194 +78,35 @@ const segs = [
 const prog = { p1: [], p3: [] };
 for (const p of G.programs) prog[p.part][p.index] = p;
 const table = sinus();
+// THE CHECK RUNS THE PAGE'S ENGINE. Two implementations of the same eleven
+// stages, one checked and one shipped, is how a port acquires a difference that
+// nothing measures.
+const engine = createEngine({
+  seg0, seg3: segs[0].d, seg4: segs[1].d, table,
+  layoutText: (text) => layoutText(GLYPHS, text),
+  programOf: (part, index) => prog[part][index] ?? null,
+});
 const NIL = 0xffffffff;
 
 function runScene(scene, frame, activeCamera = 0) {
-  const addr = parseInt(scene.stream, 16);
-  const seg = segs.find((s) => addr >= s.base && addr < s.base + s.d.length);
-  const decoded = decodeScene(seg.d, addr - seg.base).nodes;
-  const dumped = frame.nodes;
-
-  // Build each node's runtime state.
-  const entries = decoded.map((n, i) => {
-    const w = dumped[i];
-    const mesh = n.op === 5 && prog[scene.part][n.resource]
-      ? buildMesh(prog[scene.part][n.resource]) : null;
-    return { n, i, w, mesh };
+  const S = engine.scene(scene.part, scene.order);
+  // SEED THE BEAT SYNC. `anim.origin` is not in the bytecode: in loop mode 0 a
+  // match between the frame's music signal and the node's trigger resets it to
+  // the current tick, so a page that plays from the start arrives at the right
+  // value and a harness that JUMPS to tick 92 cannot. This is the only value
+  // here taken from the dump; everything else comes out of the segments.
+  S.anims.forEach((a, i) => {
+    a.origin = frame.nodes[i]?.anim?.origin ?? 0;
+    a.track = 0;
   });
-
-  // Pass 1 and 2, from the DECODED tracks.
-  const anims = entries.map(({ n, w }) => {
-    // The chain is by ADDRESS in the original, so give each keyframe a
-    // synthetic one: 1-based, because 0 means "no link".
-    const keys = n.anim.keys.map((k, j) => ({
-      tick: k.time, t0: k.t0, flags: k.hold, blocks: k.coeff,
-      invSpan: k.invSpan,
-      addr: j + 1,
-      next: j + 1 < n.anim.keys.length ? j + 2 : 0,
-      prev: j > 0 ? j : 0,
-    }));
-    const anim = {
-      flags2: n.anim.flags2, flags3: n.anim.flags3, mode: n.anim.mode,
-      parent: n.anim.parent ? 1 : NIL,
-      origin: w?.anim ? w.anim.origin : 0,
-      trigger: n.anim.trigger ?? 0,
-      loopMode: n.anim.loopMode,
-    };
-    return { anim, keys };
-  });
-
-  const composed = entries.map(({ n }, i) => {
-    const { anim, keys } = anims[i];
-    const ch = keys.length ? evaluateNode({ ...anim }, keys, frame.t, -1, table) : null;
-    return {
-      addr: i, parent: n.anim.parent ? decoded.indexOf(
-        decoded.find((x) => x.anim === n.anim.parent || x.subs.includes(n.anim.parent))) : NIL,
-      flags3: (n.anim.flags3 & 0xf0) | (n.anim.parent ? 1 : 0),
-      resolved: ch ? 1 : 0, ch,
-    };
-  });
-  composeHierarchy(composed);
-
-  // THE SUB-OBJECTS EVALUATE TOO, and they are what a type 0 to 4 node draws
-  // with: ops 0 to 2 keep their vertices there, op 4 its glyph scale. Each one
-  // runs pass 1 like any other animation object and then composes against its
-  // node under a FIXED gate set of 0xd0 — multiply, add-pair, translate, and
-  // not project, so it keeps its own cx/cy/scale. chancheck pins all 809.
-  const subChans = entries.map(({ n }, i) => n.subs.map((sub) => {
-    const keys = sub.keys.map((k, j) => ({
-      tick: k.time, t0: k.t0, flags: k.hold, blocks: k.coeff,
-      invSpan: k.invSpan, addr: j + 1,
-      next: j + 1 < sub.keys.length ? j + 2 : 0, prev: j > 0 ? j : 0,
-    }));
-    if (!keys.length) return null;
-    const ch = evaluateNode({
-      flags2: sub.flags2, flags3: sub.flags3, mode: 0, parent: NIL,
-      trigger: sub.trigger ?? 0, loopMode: sub.loopMode,
-      origin: entries[i].w?.anim ? entries[i].w.anim.origin : 0,
-    }, keys, frame.t, -1, table);
-    // op 4's sub carries the glyph scale and is NOT composed.
-    if (n.op !== 4 && composed[i].ch) composeNode(ch, composed[i].ch, 0xd0);
-    return ch;
+  S.subAnims.forEach((list, i) => list.forEach((a) => {
+    a.origin = frame.nodes[i]?.anim?.origin ?? 0;
+    a.track = 0;
   }));
-
-  // Pass 3 and the render walk.
-  const nodes = [];
-  const meshObjects = [];      // per node, the object list a camera may borrow
-  entries.forEach(({ n, w, mesh }, i) => {
-    const e = composed[i];
-    const out = {
-      type: n.op, built: 0, vertices: [], objects: [], cameras: [],
-      clip: n.clip ? 1 : 0, texture: null,
-    };
-    // TYPES 0 TO 3 HAVE NO GEOMETRY OF THEIR OWN: their vertices ARE the
-    // sub-objects' channel blocks, offset by 0x30 — channels 12..14 the
-    // position, 15 the alpha, 16..18 the colour, 19 and 20 the texture
-    // coordinates. So they need no generator here, only the channels, and the
-    // chain length equals node+0x20 exactly for every type.
-    //
-    // OP 2 STORES ITS LAST TWO THE OTHER WAY ROUND — sub-objects 1, 2, 4, 3 in
-    // address order, which is a quad's fan winding.
-    const subs = w?.anim?.subs ?? [];
-    if (!mesh && subs.length) {
-      const order = n.op === 2 ? [0, 1, 3, 2] : subs.map((_, k) => k);
-      out.plainVertices = order.map((k) => {
-        const c = subs[k].channels;
-        return { p: [c[12], c[13], c[14]], a: c[15],
-          rgb: [c[16], c[17], c[18]], uv: [c[19], c[20]] };
-      });
-    }
-    if (mesh) {
-      out.vertices = mesh.vertices.map((v) => ({
-        x: v.p[0], y: v.p[1], z: v.p[2],
-        c0: v.rgba[0], c1: v.rgba[1], c2: v.rgba[2], c3: v.rgba[3],
-        nx: v.n[0], ny: v.n[1], nz: v.n[2],
-      }));
-    }
-    // Type 4 lays its string out through the glyph table the 68K bootstrap
-    // unpacked, and publishText turns each record into a quad.
-    if (n.op === 4 && n.text) {
-      const L = layoutText(GLYPHS, n.text);
-      out.glyphs = L.glyphs; out.at2c = L.at2c; out.at30 = L.at30;
-      out.subChannels = subChans[i][0];
-    }
-    out.built = w?.built ?? 0;
-    publishNode(out, e.ch ?? new Float64Array(24), e.resolved);
-    nodes.push({
-      type: n.op, drawGate: out.drawGate, at0d: n.at0d ?? 2,
-      cx: out.cx, cy: out.cy, scale: out.scale, clip: n.clip,
-      built: out.built, ordinal: n.ordinal ?? 0,
-      // A type 0 to 3 node's RESOURCE byte is its texture index — the same
-      // byte that indexes the object table for a mesh and stands for itself for
-      // a camera. The arena holds a texture-object POINTER there, which is why
-      // the dump could not supply it.
-      at68: n.at68 ?? 0,
-      texture: n.op < 5 ? (n.resource ?? null) : (w?.texture ?? null),
-      plain: out.plainVertices ?? null,
-      // The point sprites carry their own published vertex rather than a face's.
-      sprites: mesh ? mesh.sprites.map((q) => {
-        const v = out.vertices[q.vertex];
-        return { ...q, v: { p: [v.ox, v.oy, v.oz],
-          scaled: [v.o0, v.o1, v.o2, v.o3], nz: v.onz } };
-      }) : [],
-      objects: meshObjects[i] = mesh ? mesh.faces.map((f) => ({
-        faces: [{
-          ...f,
-          vertices: f.vertices.map((k) => {
-            const v = out.vertices[k];
-            return { p: [v.ox, v.oy, v.oz], scaled: [v.o0, v.o1, v.o2, v.o3],
-              uv: [0, 0], gouraud: 1 };
-          }),
-        }],
-      })) : [],
-      vertices: [], glyphs: out.glyphs ?? null,
-    });
-  });
-  // THE CAMERA'S REFERENCE LIST, `0x1000644c`. The stream gives one byte per
-  // link and the fixup at `0x100022f8` walks it down the `+0x10` chain from the
-  // head — the same ONE-BASED index `resolveParents` uses, since the walk starts
-  // at head->next. Each link carries a copy of the camera's own channel block
-  // concatenated with the referenced node's, which is `concat` and nothing new.
-  entries.forEach(({ n }, i) => {
-    if (n.op !== 6 || !n.cameras?.length) return;
-    const cam = nodes[i];
-    cam.refs = [];
-    for (const b of n.cameras) {
-      const t = b + 1;
-      if (!meshObjects[t] || composed[i].resolved !== 1) continue;
-      const ch = Float64Array.from(composed[i].ch ?? []);
-      if (!ch.length) continue;
-      concat(ch, composed[t].ch ?? new Float64Array(24));
-      // The link borrows the target's geometry and keeps the camera's own
-      // cx/cy/scale, texture and clip — `stw r12, 0x20(r30)` copies the lists
-      // INTO the camera node and draws through it.
-      const fresh = { type: 5, built: 0, vertices: entries[t].mesh.vertices.map((v) => ({
-        x: v.p[0], y: v.p[1], z: v.p[2],
-        c0: v.rgba[0], c1: v.rgba[1], c2: v.rgba[2], c3: v.rgba[3],
-        nx: v.n[0], ny: v.n[1], nz: v.n[2],
-      })) };
-      publishNode(fresh, ch, 1);
-      cam.refs.push({
-        ...cam, type: 5, built: 0, refs: null,
-        objects: entries[t].mesh.faces.map((f) => ({
-          faces: [{ ...f, vertices: f.vertices.map((k) => {
-            const v = fresh.vertices[k];
-            return { p: [v.ox, v.oy, v.oz], scaled: [v.o0, v.o1, v.o2, v.o3],
-              uv: [0, 0], gouraud: 1 };
-          }) }],
-        })),
-      });
-    }
-  });
-
+  const draws = engine.frame(scene.part, scene.order, frame.t, -1, activeCamera);
   let faces = 0, meshNodes = 0;
-  for (const n of nodes) {
-    if (n.type === 5) { meshNodes++; faces += n.objects.length; }
-  }
-  const draws = showScene(nodes, activeCamera);
-  // NOT ONE of them lands entirely off the 640x480 screen, which rules out the
-  // trivial-reject test at 0x100062f8 as the explanation for the overdraw.
-  return { draws, faces, meshNodes, nodes };
+  S.meshes.forEach((m) => { if (m) { meshNodes++; faces += m.faces.length; } });
+  return { draws, faces, meshNodes, nodes: S.nodes };
 }
 
 // THE OVERLAY IS A SCENE TO anim_all AND NOT ONE TO draws.json, which folds its
@@ -347,8 +188,16 @@ const matchFrame = (got, want) => {
 // its own, and its primitives were being counted but never matched. Both halves
 // are fixed — it gets the union of every scene's ticks, and its draws go into
 // the same set everything else is matched against.
+//   p3/3 x5    THREE OP-3 NODES, #29, #30 and #35, among the thirteen that
+//              chancheck names: their generated sub-objects disagree with the
+//              arena on every channel, which is what a mis-read operand looks
+//              like rather than wrong arithmetic. 181 of the 194 op-3 nodes are
+//              exact. These frames were EXACT while the pipeline took op 3's
+//              sub-objects out of the dump; computing them costs five frames
+//              and buys the last recorded input to the geometry.
 const KNOWN_INEXACT = new Set([
   'p1/17@138', 'p1/17@416', 'p1/17@692', 'p1/17@970', 'p1/17@1246',
+  'p3/3@147', 'p3/3@441', 'p3/3@735', 'p3/3@1029', 'p3/3@1323',
 ]);
 const inexact = [];
 

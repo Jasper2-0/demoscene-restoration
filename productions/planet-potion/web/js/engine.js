@@ -23,20 +23,15 @@
 // part one's programs and scenes, and seg4 for part three's. Shipping only the
 // synth's seg0 and seg4 leaves eighteen of the twenty-nine scenes undecodable.
 //
-// NOT WIRED INTO THE PAGE YET, and two things are why:
+// work/re/pipeline.mjs RUNS THIS FILE, against 140 recorded frames and 45,327
+// primitives, so there is one implementation of the eleven stages rather than
+// one shipped and one checked.
 //
-//   * OP 3's SUB-OBJECTS ARE GENERATED, not decoded. `0x10002b08` reads ten
-//     operand bytes and synthesises five, seventeen or eight of them through
-//     `0x100023a8`, and that generator is not ported. op 3 is the commonest
-//     node type — 194 of the 395 — so without it the type 0-3 draws are mostly
-//     missing.
-//   * geom.js does not build the geometry node's SPRITE chain, so `programOf`
-//     has to hand this geo.json until it does.
-//
-// Landed now rather than after, because both gaps are named and the structure
-// around them is what work/re/pipeline.mjs already proves against 45,327
-// recorded primitives. The alternative is a second implementation of eleven
-// stages living only inside a check.
+// ONE GAP LEFT before the page can drop geo.json: geom.js builds a geometry
+// node's vertices, triangles and materials exactly, and does not build its
+// SPRITE chain, so `programOf` hands this the export until it does. Everything
+// else — the scene stream, op 3's generated sub-objects, the three animation
+// passes, the camera reference lists, the clipper — comes out of the segments.
 
 import { decodeScene, buildMesh } from './scene.js';
 import { decodeProgram } from './geom.js';
