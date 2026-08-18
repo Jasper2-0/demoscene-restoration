@@ -60,16 +60,20 @@ document.head.insertAdjacentHTML('beforeend',
   + 'html,body{width:100%;height:100%;margin:0;background:#000;overflow:hidden}'
   + 'body{display:grid;place-items:center;color:#fff;font:14px system-ui,sans-serif}'
   + 'canvas{width:min(100vw,calc(100vh*4/3));height:min(100vh,calc(100vw*3/4))}'
-  + '#status{position:fixed;inset:auto 1rem 1rem;opacity:.75}'
-  + '#start{position:fixed;inset:1rem 1rem auto auto;padding:.6rem 1rem;color:#fff;'
-  + 'border:1px solid #777;background:#111c;cursor:pointer}'
-  + '#start[hidden]{display:none}'
+  + '#status{position:fixed;inset:calc(50% + 2.4rem) 0 auto;text-align:center;'
+  + 'opacity:.75;line-height:1.6;pointer-events:none;white-space:pre-line;z-index:1}'
+  + '#fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none}'
+  + '#start{position:fixed;inset:0;margin:auto;width:max-content;'
+  + 'height:max-content;padding:.7rem 1.4rem;font:inherit;letter-spacing:.04em;color:#fff;'
+  + 'border:1px solid #777;background:#111c;cursor:pointer;z-index:1}'
+  + '#start[hidden],#status[hidden]{display:none}'
   + '</style>');
 document.title = 'planet potion — Potion (2002)';
 document.body.innerHTML =
   '<canvas id=screen width=640 height=480></canvas>'
-  + '<button id=start type=button>Start with sound</button>'
-  + '<div id=status>planet potion</div>';
+  + '<button id=start type=button>Start Intro</button>'
+  + '<div id=status>planet potion</div>'
+  + '<div id=fade></div>';
 
 // --------------------------------------------- 2. answer the runtime's fetches
 // main.js asks for seven files by relative path and there is no server here.

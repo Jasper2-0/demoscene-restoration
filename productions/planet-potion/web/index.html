@@ -8,16 +8,29 @@
     html, body { width: 100%; height: 100%; margin: 0; background: #000; overflow: hidden; }
     body { display: grid; place-items: center; color: #fff; font: 14px system-ui, sans-serif; }
     canvas { width: min(100vw, calc(100vh * 4 / 3)); height: min(100vh, calc(100vw * 3 / 4)); }
-    #status { position: fixed; inset: auto 1rem 1rem; opacity: .75; }
-    #start { position: fixed; inset: 1rem 1rem auto auto; padding: .6rem 1rem; color: #fff;
-      border: 1px solid #777; background: #111c; cursor: pointer; }
-    #start[hidden] { display: none; }
+    /* Both centred: the button is the only thing on screen before the intro
+       runs, and the status line sits under it as a precalc readout rather than
+       as a debug overlay in the corner. Both are hidden once the show starts. */
+    #status { position: fixed; inset: calc(50% + 2.4rem) 0 auto; text-align: center;
+      opacity: .75; line-height: 1.6; pointer-events: none;
+      white-space: pre-line; z-index: 1; }
+    #start { position: fixed; inset: 0; margin: auto; width: max-content;
+      height: max-content; padding: .7rem 1.4rem; color: #fff; font: inherit;
+      letter-spacing: .04em; border: 1px solid #777; background: #111c;
+      cursor: pointer; z-index: 1; }
+    #start:hover { background: #222d; }
+    #start[hidden], #status[hidden] { display: none; }
+    /* The fade at the end of part three. Over the whole viewport, not the
+       canvas, so the letterbox goes with it. */
+    #fade { position: fixed; inset: 0; background: #000; opacity: 0;
+      pointer-events: none; }
   </style>
 </head>
 <body>
   <canvas id="screen" width="640" height="480"></canvas>
-  <button id="start" type="button">Start with sound</button>
-  <div id="status">Planet Potion — Warp3D shim only, no engine yet</div>
+  <button id="start" type="button">Start Intro</button>
+  <div id="status">Planet Potion</div>
+  <div id="fade"></div>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

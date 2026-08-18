@@ -54,7 +54,36 @@ const statusEl = document.getElementById('status');
 const startEl = document.getElementById('start');
 const params = new URLSearchParams(location.search);
 
-const say = (s) => { if (statusEl) statusEl.textContent = s; };
+const fadeEl = document.getElementById('fade');
+const say = (s) => {
+  if (!statusEl) return;
+  statusEl.hidden = false;
+  statusEl.textContent = s;
+};
+/**
+ * The precalc readout.
+ *
+ * The intro builds about nine megabytes of textures, geometry and audio before
+ * it can draw anything, and on a cold cache that is several seconds of a black
+ * screen. This says WHICH of them is running and what it is working on, and
+ * stamps each finished step with how long it took — so a slow load reads as
+ * progress rather than as a hang.
+ */
+let stageAt = 0;
+let stageLog = [];
+const stage = (text, detail = '') => {
+  const now = performance.now();
+  if (stageAt) stageLog[stageLog.length - 1] += ` — ${((now - stageAt) / 1000).toFixed(1)}s`;
+  stageAt = now;
+  stageLog.push(text);
+  if (stageLog.length > 3) stageLog.shift();
+  say(`Planet Potion\n${stageLog.join('\n')}${detail ? `\n${detail}` : ''}`);
+};
+/** Nothing on screen but the intro. */
+const hideChrome = () => {
+  if (statusEl) statusEl.hidden = true;
+  if (startEl) startEl.hidden = true;
+};
 
 async function loadJSON(path) {
   const r = await fetch(path);
@@ -169,6 +198,7 @@ async function main() {
   if (params.has('clearcache')) await clearCache();
   const cache = { key: '0', skip: params.has('nocache'), report: [] };
   if (!wantsRecorded) {
+    stage('reading the intro\u2019s own bytecode', 'seg0, seg2, seg3, seg4');
     try {
       const seg = await loadSegments();
       cache.key = hashBytes(seg.seg0, seg.seg3, seg.seg4);
@@ -215,6 +245,8 @@ async function main() {
   try {
     const [programs, kernels] = await Promise.all([
       loadJSON('./data/tex_programs.json'), loadJSON('./data/tex_kernels.json')]);
+    stage('generating textures',
+      `${programs.length ?? 69} programs through the texture VM`);
     textures = await textureBinder(w3d, programs, kernels, stages.textures,
       cache, texFilter);
   } catch {
@@ -444,12 +476,15 @@ async function main() {
 
   /** Generate, sequence and mix one part, then show it against its own clock. */
   async function playPart(ctx, spec) {
-    say(`${spec.label}: running the softsynth …`);
+    stage(`generating ${spec.label}'s soundtrack`,
+      'the intro\u2019s own softsynth, from its bytecode');
     // Yield so the line above paints: generating part one is about 1.6 seconds
     // of straight-line arithmetic and it blocks the thread.
     await new Promise((r) => setTimeout(r, 0));
     const mod = parseDBM(await moduleBytes(spec.part));
-    say(`${spec.label}: mixing ${mod.info?.channels ?? '?'} channels …`);
+    stage(`mixing ${spec.label}`,
+      `${mod.info?.channels ?? '?'} channels, `
+      + `${mod.instruments?.length ?? mod.info?.instruments ?? '?'} instruments`);
     // render() is synchronous and takes about a second for part one, so yield
     // once and let the line above actually paint before the thread blocks.
     await new Promise((r) => setTimeout(r, 0));
@@ -480,13 +515,29 @@ async function main() {
     const spans = spansFor(spec.part);
     const t0 = ctx.currentTime + 0.06;   // a beat of slack so frame 0 is not late
     src.start(t0);
+    // From here the screen is the intro and nothing else.
+    hideChrome();
+    // THE FADE AT THE END. Two seconds of black over the tail of the last part,
+    // so the show closes rather than stopping mid-frame. It is the viewport
+    // rather than the canvas so the letterbox goes with it, and it is CSS
+    // rather than a drawn quad so it is independent of which framebuffer the
+    // shim is rendering into.
+    const FADE = 2;
+    const isLast = spec === SHOW[SHOW.length - 1];
 
     await new Promise((done) => {
       let shown = '';
       let lastTick = -1;
       const step = () => {
         const elapsed = ctx.currentTime - t0;
-        if (elapsed >= seconds) { src.stop(); src.disconnect(); done(); return; }
+        if (isLast && fadeEl) {
+          const into = elapsed - (seconds - FADE);
+          fadeEl.style.opacity = into <= 0 ? 0 : Math.min(1, into / FADE);
+        }
+        if (elapsed >= seconds) {
+          if (isLast && fadeEl) fadeEl.style.opacity = 1;
+          src.stop(); src.disconnect(); done(); return;
+        }
         if (elapsed >= 0) {
           const tick = Math.floor(elapsed * TICKS_PER_SECOND);
           const hit = frameAt(spans, tick);
@@ -525,18 +576,18 @@ async function main() {
               } catch (e) {
                 say(`${spec.label} ${hit.slot} — engine: ${e.message}`);
               }
-              if (info) {
-                say(`${spec.label} ${hit.slot} — ${elapsed.toFixed(1)}s / `
-                  + `${seconds.toFixed(0)}s, ${info.objects} draws (computed)`);
-              }
+              // NOTHING SAID PER FRAME. The status line was a running readout
+              // of scene, time and draw count in the corner of every frame of
+              // the intro; it is a debugging aid and the intro is not being
+              // debugged while somebody watches it. `?inspect=1` and the check
+              // suites read the same numbers off `__demo` and the tick loop.
+              void info;
             }
           } else if (hit) {
             const key = `${hit.scene}:${hit.frame}`;
             if (key !== shown) {
               shown = key;
-              const info = renderRecorded(hit.scene, hit.frame);
-              say(`${spec.label} ${hit.slot} — ${elapsed.toFixed(1)}s / `
-                + `${seconds.toFixed(0)}s, ${info?.objects ?? 0} draws`);
+              renderRecorded(hit.scene, hit.frame);
             }
           }
         }
@@ -775,7 +826,7 @@ async function main() {
       if (ctx.state === 'suspended') await ctx.resume();
       try {
         for (const spec of SHOW) await playPart(ctx, spec);
-        say('the show is over — reload to run it again');
+        say('Planet Potion — Potion, 2002\nreload to run it again');
       } catch (e) {
         say(`sound failed: ${e.message}`);
       } finally {
@@ -784,9 +835,11 @@ async function main() {
     }, { once: true });
   }
 
-  say(`Warp3D shim ready (${SCREEN_W}x${SCREEN_H}); ${tex}. `
-    + 'Press “Start with sound” for the real soundtrack with the recorded '
-    + 'frames locked to it, or add ?scene=N&t=M for one frame.');
+  // The last thing said before the button is what got built, not what the
+  // shim is. `cache.report` already collects one line per generated stage with
+  // whether it was cached and how long it took.
+  say(`Planet Potion — Potion, 2002\n${cache.report.join('\n') || tex}\n`
+    + `${SCREEN_W}\u00d7${SCREEN_H}, generated from the intro\u2019s own bytecode`);
 }
 
 main();
