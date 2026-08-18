@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Thirty-one checks accumulated over the work and there is no point in
-# remembering thirty-one invocations. Each passes or names what drifted; none of them
+# Thirty-two checks accumulated over the work and there is no point in
+# remembering thirty-two invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py used to be the one check expected to FAIL, at 0/29. It passes
@@ -228,6 +228,13 @@ run "scenegram — every scene stream decodes to the nodes the original built" \
 # as a divergence from the original rather than going unnoticed.
 run "scenecheck — the scene decoder the page uses" \
   node "$HERE/scenecheck.mjs" "$FLAT" "$HERE/out/arena.json"
+
+# The emitter, checked on its own before the clipper and node walk that feed it
+# exist: the recorded stream is 144,727 vertices of its output, and the
+# projection inverts exactly, so the round trip is a real test of the
+# arithmetic.
+run "emitcheck — the emitter reproduces the recorded projection" \
+  node "$HERE/emitcheck.mjs" "$DATA/draws.json"
 
 if [ $rc -eq 0 ]; then
   printf '\nall suites that could run passed'
