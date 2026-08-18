@@ -309,7 +309,9 @@ function meshDraws(node) {
       });
       const d = drawPrimitive(shaded,
         { ...node, texture: face.textureIndex }, face.prim ?? 'trifan');
-      if (d) out.push(d);
+      // Which shading mode produced it — for attribution in the checks only;
+      // nothing in the draw path reads it.
+      if (d) { d.shading = face.shading; out.push(d); }
     }
   }
   for (const d of spriteDraws(node)) { d.sprite = true; out.push(d); }

@@ -142,6 +142,7 @@ const FIELDS = ['x', 'y', 'z', 'w', 'u', 'v', 'r', 'g', 'b', 'a'];
 const fieldOK = FIELDS.map(() => 0);
 const fieldBad = FIELDS.map(() => 0);
 const byKind = new Map();
+const byKindC = new Map();   // the same, for the colours
 const SHOW = [];
 const matchFrame = (got, want, label = '') => {
   const by = new Map();
@@ -179,6 +180,11 @@ const matchFrame = (got, want, label = '') => {
           if (Math.abs(a - b) <= tol) fieldOK[f]++;
           else {
             fieldBad[f]++;
+            if (f >= 6 && f <= 8) {
+              const kc = `${d.sprite ? 'sprite' : (d.srcKind ?? '?')}`
+                + `${d.cut ? ' cut' : ' whole'} shade${d.shading ?? '?'}`;
+              byKindC.set(kc, (byKindC.get(kc) ?? 0) + 1);
+            }
             if (f === 4 || f === 5) {
               const k = `${d.sprite ? 'sprite' : (d.srcKind ?? '?')}`
                 + `${d.cut ? ' cut' : ' whole'}`;
@@ -407,10 +413,19 @@ ok('every frame on the accounted-for list still disagrees', fixed.length === 0,
 // harness artefact. Shading mode 4 environment-maps, and half the mesh faces in
 // the demo are mode 4.
 //
-// WHAT IS KNOWN about what is left: 5,803 vertices of 141,220 carry a different
-// colour, all on meshes.
+// WHAT IS KNOWN about what is left, and it is now narrow: every remaining
+// colour mismatch is on SHADING MODE 2 and on no other mode — the breakdown
+// below says so, and mode 2 is the flat-shaded one that multiplies its face
+// colour by |face[+0x50]|, the transformed normal's z.
+//
+// Half of that gap closed when the object chain was actually populated: it was
+// an empty array, so `publishMesh` never walked it, `face.intensity` was
+// undefined and `Math.abs` of it was NaN. What is left is which faces get a
+// REFRESHED intensity. Pass 3 walks `+0x60`, the base triangles; a layer hangs
+// off `+0x5c` and keeps the builder's value. Excluding layers changed nothing
+// measurable, so the grouping is not the whole story and the rest is unfound.
 {
-  const FLOOR = { r: 135417, g: 135417, b: 135417 };
+  const FLOOR = { r: 137901, g: 135609, b: 135609 };
   const worse = Object.entries(FLOOR)
     .filter(([f, n]) => fieldOK[FIELDS.indexOf(f)] < n)
     .map(([f, n]) => `${f} ${fieldOK[FIELDS.indexOf(f)]} < ${n}`);
@@ -419,6 +434,11 @@ ok('every frame on the accounted-for list still disagrees', fixed.length === 0,
       : Object.keys(FLOOR).map((f) =>
         `${f} ${fieldOK[FIELDS.indexOf(f)]}/${fieldOK[FIELDS.indexOf(f)]
           + fieldBad[FIELDS.indexOf(f)]}`).join(' '));
+}
+if (byKindC.size) {
+  console.log('     colour mismatches by source: '
+    + [...byKindC].sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => `${k} ${n}`).join(', '));
 }
 if (byKind.size) {
   console.log('     uv mismatches by source: '

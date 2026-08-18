@@ -156,6 +156,20 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
         c0: v.rgba[0], c1: v.rgba[1], c2: v.rgba[2], c3: v.rgba[3],
         nx: v.n[0], ny: v.n[1], nz: v.n[2],
       }));
+      // THE OBJECT CHAIN, which existed as an empty array and was never filled,
+      // so `publishMesh`'s second loop had nothing to walk and the face
+      // intensity was never computed at all — `face.intensity` came out
+      // undefined and mode 2's `Math.abs` of it was NaN.
+      //
+      // Pass 3 walks it at 0x100056b8: each object's normal at +0x3c goes
+      // through the node's 3x3 into +0x48/+0x4c/+0x50, and that third component
+      // IS the face intensity mode 2 multiplies its colour by. It has to be
+      // recomputed every frame because it is the normal after the node's
+      // rotation — a flat-shaded face changes brightness as the object turns,
+      // which is the whole point of it.
+      o.objects = mesh.faces.map((f) => ({
+        nx: f.normal?.[0] ?? 0, ny: f.normal?.[1] ?? 0, nz: f.normal?.[2] ?? 0,
+      }));
     }
     publishNode(o, composed[i].ch ?? new Float64Array(24), composed[i].resolved);
     // THE FACE'S OWN TEXTURE COORDINATES, one pair per CORNER. `uv: [0, 0]`
@@ -164,8 +178,12 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
     // sampling one texel of its texture was invisible to it and to all 45,327
     // primitives it matched. It is not invisible on screen: it is the
     // difference between a textured picture and a flat grey one.
-    const faces = mesh ? mesh.faces.map((f) => ({
+    const faces = mesh ? mesh.faces.map((f, fi) => ({
       faces: [{ ...f,
+        // The transformed normal's z, this frame — but only for a base
+        // triangle. A layer is not on the +0x60 chain pass 3 walks, so its
+        // intensity is still the builder's untransformed one.
+        intensity: f.layer ? (f.normal?.[2] ?? 0) : (o.objects[fi]?.onz ?? 0),
         vertices: f.vertices.map((k, corner) => {
           const v = o.vertices[k];
           return { p: [v.ox, v.oy, v.oz], scaled: [v.o0, v.o1, v.o2, v.o3],

@@ -576,6 +576,12 @@ export function buildMesh(program) {
       // material, so they are extra primitives over the same geometry — 1,616
       // of them across the 39 programs.
       for (const t2 of [t, ...(t.layers ?? [])]) faces.push({
+        // A LAYER IS NOT ON THE OBJECT CHAIN. Pass 3 refreshes the face
+        // intensity by walking `+0x60`, which threads the BASE triangles; a
+        // layer hangs off its triangle's `+0x5c` and is never visited, so its
+        // `+0x50` keeps whatever the builder left there. Flagged here because
+        // by the time the renderer sees a face the two are indistinguishable.
+        layer: t2 !== t,
         count: t2.count,
         vertices: t2.idx.map((i) => base + i),
         cull: t2.cull,
