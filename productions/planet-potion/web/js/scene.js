@@ -307,3 +307,64 @@ export function decodeScene(bytes, at) {
   resolveParents(nodes);
   return { nodes, consumed: c.at, length };
 }
+
+// ---------------------------------------------------------------------------
+// `0x100027b8` — scene op 5's handler, and the seam between the intro's two
+// largest data structures.
+//
+// It COPIES rather than references: a geometry program is a template and every
+// scene using one gets its own vertices and faces, which is why the same mesh
+// can be animated differently in two places.
+
+/**
+ * Build a scene mesh node's vertex and face chains from a geometry program.
+ *
+ * A GEOMETRY NODE WITH ITS VISIBLE FLAG CLEAR IS SKIPPED. Every build handler
+ * sets `+0x12` to 1, and op3's eval then clears it on whatever node it CLONED —
+ * so a source that has been copied is hidden and only the copy is drawn.
+ *
+ * THE VERTEX INDICES ARE PER SOURCE NODE, NOT GLOBAL. `0x1000277c` resolves an
+ * index by walking `+0x68` from the first vertex THIS geometry node
+ * contributed, so a program with several nodes needs a fresh base for each.
+ * Indexing the whole list works perfectly for single-node programs and gets
+ * every multi-node mesh wrong.
+ *
+ * THE COLOUR CHANGES ADDRESS ON THE WAY ACROSS: geometry `+0x0c` becomes scene
+ * `+0x30`. That is why the geometry builder's own `+0x30` is zero everywhere —
+ * it writes its colours somewhere else and this routine moves them.
+ */
+export function buildMesh(program) {
+  const vertices = [];
+  const faces = [];
+  for (const node of program.nodes) {
+    if (!node.visible) continue;
+    const base = vertices.length;
+    for (const v of node.vertices) {
+      vertices.push({
+        p: [...v.p],
+        n: [...v.n],
+        // The four the geometry vertex allocator preset to 1.0, landing in the
+        // slot everything downstream reads as the source colour.
+        rgba: [1, 1, 1, 1],
+      });
+    }
+    for (const t of node.triangles) {
+      faces.push({
+        count: t.count,
+        vertices: t.idx.map((i) => base + i),
+        cull: t.cull,
+        // The material quad is positional, not named: slot 0 is the ALPHA and
+        // 1..3 are the colours, which is the order the shading step reads.
+        alpha: t.rgba[0],
+        rgb: [t.rgba[1], t.rgba[2], t.rgba[3]],
+        normal: t.normal,
+        uv: t.uv,
+        texture: t.texture,
+        textureIndex: t.texIndex,
+        prim: t.prim,
+        shading: t.kind,
+      });
+    }
+  }
+  return { vertices, faces };
+}

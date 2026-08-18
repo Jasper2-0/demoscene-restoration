@@ -22,7 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decodeScene } from '../../web/js/scene.js';
+import { decodeScene, buildMesh } from '../../web/js/scene.js';
 
 const ABSENT = 77;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -50,6 +50,17 @@ const programs = { p1: [], p3: [] };
 for (const p of geo.programs) programs[p.part][p.index] = p;
 
 let vOK = 0, vBad = 0, oOK = 0, oBad = 0, nodes = 0, noProgram = 0, hidden = 0;
+// The copied VALUES, not just the counts.
+let posOK = 0, posBad = 0, colOK = 0, colBad = 0, idxOK = 0, idxBad = 0;
+let fieldOK = 0, fieldBad = 0, texDep = 0;
+// PROGRAM 26 OF PART ONE READS TEXTURE MEMORY. It is the one that segfaulted
+// under rungeo's single shared no-op vector, and it only runs at all once the
+// texture table holds dereferenceable pointers — because something in it
+// FOLLOWS one. So its geometry depends on what those objects contain, geodump
+// fills them with zeroes, and the vertices it produces are not the ones the
+// real boot produces. Its 1,044 positions are counted separately and named
+// rather than lost in a tolerance.
+const TEXTURE_DEPENDENT = new Set(['p1:26']);
 const layers = new Map();
 const failures = [];
 
@@ -81,6 +92,40 @@ for (const scene of arena.scenes) {
     for (const o of objs) {
       const n = (o.faces ?? []).length;
       layers.set(n, (layers.get(n) ?? 0) + 1);
+    }
+
+    // The copy itself: positions, colours and the index resolution.
+    const mesh = buildMesh(prog);
+    const vmap = scene.vertices ?? {};
+    const list = scene.nodes[i].vertexList ?? [];
+    const skip = TEXTURE_DEPENDENT.has(`${scene.part}:${got[i].resource}`);
+    if (list.length === mesh.vertices.length) {
+      for (let k = 0; k < list.length; k++) {
+        const w = vmap[list[k]];
+        if (!w) continue;
+        const g = mesh.vertices[k];
+        if (skip) { texDep++; } else if (
+          JSON.stringify(g.p) === JSON.stringify(w.p)) posOK++;
+        else {
+          posBad++;
+          if (failures.length < 8) {
+            failures.push(`${scene.part}/${scene.order} vertex ${k}: `
+              + `${JSON.stringify(g.p)} vs ${JSON.stringify(w.p)}`);
+          }
+        }
+        if (JSON.stringify(g.rgba) === JSON.stringify(w.rgba)) colOK++; else colBad++;
+      }
+    }
+    const idxOf = new Map(list.map((h, n) => [h, n]));
+    for (let k = 0; k < Math.min(objs.length, mesh.faces.length); k++) {
+      const w = objs[k].faces[0], g = mesh.faces[k];
+      const wi = (w.vertices ?? []).map((h) => idxOf.get(h));
+      if (JSON.stringify(wi) === JSON.stringify(g.vertices)) idxOK++; else idxBad++;
+      for (const [gv, wv] of [[g.cull, w.cull], [g.alpha, w.alpha],
+        [JSON.stringify(g.rgb), JSON.stringify(w.rgb)],
+        [g.textureIndex, w.textureIndex], [g.prim, w.prim]]) {
+        if (gv === wv) fieldOK++; else fieldBad++;
+      }
     }
 
     if (haveV === wantV) vOK++;
@@ -118,6 +163,18 @@ ok('every mesh owns exactly its program\'s visible vertices', vBad === 0,
   `${vOK}/${vOK + vBad}`);
 ok('every mesh owns one record per visible triangle', oBad === 0,
   `${oOK}/${oOK + oBad}`);
+ok('every copied vertex position is bit-exact', posBad === 0,
+  `${posOK}/${posOK + posBad}`);
+ok('every copied vertex colour is the 1.0 the geometry allocator preset',
+  colBad === 0, `${colOK}/${colOK + colBad} — geometry +0x0c becomes scene +0x30`);
+ok('every face index resolves to the right vertex', idxBad === 0,
+  `${idxOK}/${idxOK + idxBad} faces, indices rebased per source node`);
+ok('every copied face field matches', fieldBad === 0,
+  `${fieldOK}/${fieldOK + fieldBad} — cull, alpha, colour, texture, primitive`);
+console.log(`     ${texDep} vertices skipped: p1 program 26 READS TEXTURE MEMORY, `
+  + 'so geodump\'s zero-filled texture objects give it different geometry from '
+  + 'the real boot — it is the program that segfaulted under a shared no-op '
+  + 'vector, for the same reason');
 console.log(`     ${hidden} geometry nodes are hidden by an op3 clone across `
   + 'all uses — their +0x12 was cleared by the copy that replaced them');
 console.log(`     records by layer-chain length: `
