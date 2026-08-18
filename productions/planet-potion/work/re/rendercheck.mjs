@@ -146,8 +146,13 @@ for (const t of targets) {
     root: 'productions/planet-potion/web', path: '/index.html', query,
     extraArgs: EXTRA,
   }, async ({ page, errors, failedRequests }) => {
-    // The oracle path renders synchronously during module init, but the canvas
-    // is only guaranteed populated once a frame has been presented.
+    // WAIT FOR THE PAGE TO SAY SO. This used to assume the oracle path rendered
+    // during module init and wait two animation frames; the page now awaits its
+    // dataset, its textures and its generator cache first, and the assumption
+    // silently read a blank canvas and reported the shim broken. The canvas is
+    // still only guaranteed presented after a frame, so both waits stand.
+    await page.waitForFunction('window.__frameReady === true', { timeout: 120000 })
+      .catch(() => {});
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
     const status = await page.$eval('#status', (e) => e.textContent).catch(() => '');
     const px = await page.evaluate(PROBE);

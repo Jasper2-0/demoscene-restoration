@@ -46,6 +46,8 @@ import { createEngine } from './engine.js';
 import { flattenDraws } from './render.js';
 import { sinus } from './tables.js';
 import { glyphTable, layoutText } from './font.js';
+import { cached, hashBytes, clearCache } from './cache.js';
+import { Sequencer } from './dbmplayer.js';
 
 const canvas = document.getElementById('screen');
 const statusEl = document.getElementById('status');
@@ -94,10 +96,16 @@ const loadSegments = async () => (segments ??= {
  * when the part changes. Uploading is cheap; regenerating is not, so the pixels
  * are built once and kept.
  */
-async function textureBinder(w3d, programs, kernels, side) {
-  const { byPart, failures } = side === 'recorded'
-    ? await loadTextures(programs)
-    : buildTextures(programs, kernels);
+async function textureBinder(w3d, programs, kernels, side, cache) {
+  // 69 programs of texture VM is the second-biggest thing between a reload and
+  // a picture. The pixels are a pure function of the bytecode, so they cache.
+  const built = side === 'recorded'
+    ? { value: await loadTextures(programs), hit: false, ms: 0 }
+    : await cached(`tex:${cache.key}`, 'v1',
+      async () => buildTextures(programs, kernels), { skip: cache.skip });
+  const { byPart, failures } = built.value;
+  cache.report.push(`textures ${built.hit ? 'cached' : 'built'} `
+    + `${(built.ms / 1000).toFixed(1)}s`);
   let live = null;
   return {
     failures, side,
@@ -127,6 +135,27 @@ async function main() {
   // picture it is looking at rather than assuming it.
   const { choice: stages, errors: stageErrors } = resolveStages(params);
 
+  // ?oracle and ?scene ASK FOR A RECORDED FRAME by name. Deciding that up here
+  // matters for more than the fetch below: it is also what keeps those modes
+  // from paying for the engine's setup — the segments, the cache key, the scene
+  // decode — none of which a recorded frame uses.
+  const wantsRecorded = params.has('oracle')
+    || (params.has('scene') && !params.has('tick'));
+
+  // THE CACHE, and its key. The segments are the only input to any generator
+  // here, so hashing them means a re-export invalidates everything that came
+  // out of them without anyone having to remember. `?nocache=1` skips the read
+  // and rewrites; `?clearcache=1` throws the store away first, for the case
+  // where a generator changed and its version constant did not.
+  if (params.has('clearcache')) await clearCache();
+  const cache = { key: '0', skip: params.has('nocache'), report: [] };
+  if (!wantsRecorded) {
+    try {
+      const seg = await loadSegments();
+      cache.key = hashBytes(seg.seg0, seg.seg3, seg.seg4);
+    } catch { /* the fetches below report their own failure */ }
+  }
+
   let dataset = null;
   let textures = null;
   // The four fog presets. `setFog` has existed in the shim since it was written
@@ -147,11 +176,8 @@ async function main() {
   try {
     schedule = await loadJSON('./data/showorder.json');
   } catch { /* the computed path says so below */ }
-  // ?oracle and ?scene ASK FOR A RECORDED FRAME by name, so they get one even
-  // when the emit stage is computed — otherwise the mode whose whole purpose is
-  // to show the recording silently shows nothing.
-  const wantsRecorded = params.has('oracle')
-    || (params.has('scene') && !params.has('tick'));
+  // A recorded frame gets the recording even when the emit stage is computed —
+  // otherwise the mode whose whole purpose is to show it silently shows nothing.
   if (stages.emit !== 'computed' || !schedule || wantsRecorded) {
     try {
       dataset = await loadJSON('./data/draws.json');
@@ -164,7 +190,7 @@ async function main() {
   try {
     const [programs, kernels] = await Promise.all([
       loadJSON('./data/tex_programs.json'), loadJSON('./data/tex_kernels.json')]);
-    textures = await textureBinder(w3d, programs, kernels, stages.textures);
+    textures = await textureBinder(w3d, programs, kernels, stages.textures, cache);
   } catch {
     // Without the bytecode there is nothing to generate FROM. The draw stream
     // still replays, untextured, which is worth saying rather than showing.
@@ -190,7 +216,7 @@ async function main() {
   };
 
   let engine = null;
-  if (stages.emit === 'computed') {
+  if (stages.emit === 'computed' && !wantsRecorded) {
     try {
       const seg = await loadSegments();
       const glyphs = glyphTable(seg.seg0);
@@ -270,6 +296,22 @@ async function main() {
   // modules at load time — 8.3 MB of samples out of 99 KB of segments, and
   // byte-identical to what the original produces: work/re/synthdiff.mjs checks
   // all 94 samples individually and both module digests against audio.json.
+  /**
+   * One part's module, generated or remembered.
+   *
+   * 8.3 MB of samples out of 99 KB of segments, and about 1.6 seconds of
+   * straight-line arithmetic for part one. Byte-identical every time, which is
+   * exactly what makes it worth keeping.
+   */
+  const moduleBytes = async (part) => {
+    const seg = await loadSegments();
+    const got = await cached(`mod:${part}:${cache.key}`, 'v1',
+      async () => generateModule(seg.seg0, seg.seg4, part), { skip: cache.skip });
+    cache.report.push(`${part} module ${got.hit ? 'cached' : 'built'} `
+      + `${(got.ms / 1000).toFixed(1)}s`);
+    return got.value;
+  };
+
   const SHOW = [
     { part: 'p1', label: 'part one' },
     { part: 'p3', label: 'part three' },
@@ -328,11 +370,10 @@ async function main() {
   /** Generate, sequence and mix one part, then show it against its own clock. */
   async function playPart(ctx, spec) {
     say(`${spec.label}: running the softsynth …`);
-    const { seg0, seg4 } = await loadSegments();
     // Yield so the line above paints: generating part one is about 1.6 seconds
     // of straight-line arithmetic and it blocks the thread.
     await new Promise((r) => setTimeout(r, 0));
-    const mod = parseDBM(generateModule(seg0, seg4, spec.part));
+    const mod = parseDBM(await moduleBytes(spec.part));
     say(`${spec.label}: mixing ${mod.info?.channels ?? '?'} channels …`);
     // render() is synchronous and takes about a second for part one, so yield
     // once and let the line above actually paint before the thread blocks.
@@ -481,11 +522,14 @@ async function main() {
     // of seconds and is the whole reason this mode installs a function on
     // `window` rather than rendering once and stopping: a sweep over the
     // capture wants forty frames out of one page load, not forty page loads.
+    // THE CUES ONLY, so no PCM is mixed. `Sequencer.run()` walks the pattern
+    // data and reports every effect-7 with its tick; `render()` does that too
+    // and then spends a second mixing 438 seconds of audio nobody is going to
+    // hear. The module itself comes out of the cache.
     let cues = [];
     try {
-      const seg = await loadSegments();
-      const mod = parseDBM(generateModule(seg.seg0, seg.seg4, part));
-      cues = render(mod, { sampleRate: 48000 }).cues ?? [];
+      const seq = new Sequencer(parseDBM(await moduleBytes(part)));
+      cues = seq.run().cues ?? [];
     } catch (e) {
       say(`could not read the music's cues: ${e.message}`);
     }
@@ -510,18 +554,54 @@ async function main() {
     for (const c of cues) cueAt.set(c.ticks50, c.value);
     const spans = spansFor(part);
     const lastTick = spans.reduce((m, s2) => Math.max(m, s2.end), 0);
+    // ONLY THE SCENES ASKED FOR, and only as far as they are asked for.
+    //
+    // A scene's animation objects are created with origin 0 and pass 1 only
+    // runs for the scene on screen, so a scene's clock genuinely starts at zero
+    // when it starts — which means sampling it needs its own span stepped and
+    // not the whole part. THE OVERLAY IS THE EXCEPTION: it runs on the PART's
+    // clock, so it is stepped forward once across the sweep, in tick order,
+    // and never rewound.
+    //
+    // Walking all 14,421 ticks of part one costs about 45 seconds. Looking at
+    // one scene now costs its own span plus the overlay's lead-in, which is the
+    // difference between iterating on the picture and waiting for it.
     const sweep = (ticks, grab) => {
-      const want = new Set(ticks);
+      const want = [...ticks].sort((a, b) => a - b);
       const seen = new Map();
       engine.rewind();
-      for (let k = 0; k <= lastTick; k++) {
+      const ov = engine.overlay;
+      const hasOverlay = part === ov.part;
+      let ovAt = 0;      // how far the overlay has been stepped
+      let lastScene = null;
+      for (const k of want) {
         const h = frameAt(spans, k);
         if (!h) continue;
         const order = engine.orderOfSlot(h.span.part, h.span.slot);
         if (order == null) continue;
-        const info = renderComputed(h.span, h.local, cueAt.get(k) ?? -1, k,
-          want.has(k));
-        if (want.has(k)) seen.set(k, grab ? grab(info) : info);
+        const from = h.span.sceneStart ?? h.span.start;
+        // The overlay first, forward only.
+        if (hasOverlay && order !== ov.order) {
+          for (; ovAt < k; ovAt++) {
+            engine.frame(ov.part, ov.order, ovAt, cueAt.get(ovAt) ?? -1);
+          }
+        }
+        // Then this scene, from its own beginning — unless the last sample was
+        // in the same scene and earlier, in which case carry on from there.
+        const key = `${h.span.part}/${h.span.slot}/${from}`;
+        let start = from;
+        if (lastScene && lastScene.key === key && lastScene.at <= k) {
+          start = lastScene.at + 1;
+        } else {
+          engine.rewindScene(h.span.part, order);
+        }
+        let info = null;
+        for (let t = start; t <= k; t++) {
+          const hh = frameAt(spans, t) ?? h;
+          info = renderComputed(hh.span, t - from, cueAt.get(t) ?? -1, t, t === k);
+        }
+        lastScene = { key, at: k };
+        seen.set(k, grab ? grab(info) : info);
       }
       return ticks.map((t) => seen.get(t) ?? null);
     };
@@ -534,7 +614,7 @@ async function main() {
     say(`${part} ready to sweep: ${lastTick} ticks, ${cues.length} cues, `
       + `textures ${textures ? `${textures.side} `
         + Object.entries(textures.counts).map(([k, v]) => `${k}:${v}`).join(',')
-        : 'ABSENT'}`);
+        : 'ABSENT'} — ${cache.report.join(', ')}`);
     window.__ppReady = true;
     return;
   }
@@ -555,6 +635,7 @@ async function main() {
           + `${info.objects} draws, ${info.triangles} triangles, `
           + `glError ${info.glError}`
         : 'no scene at that index');
+      window.__frameReady = true;
       return;
     }
     const info = renderRecorded(s, t);
@@ -562,6 +643,12 @@ async function main() {
       ? `recorded ${info.part} ${info.slot} t=${info.t}: `
         + `${info.objects} draws, ${info.triangles} triangles, glError ${info.glError}`
       : 'no recorded stream for that scene');
+    // A SIGNAL RATHER THAN AN ASSUMPTION. This used to render during module
+    // init, so a harness could wait two animation frames and be sure. It now
+    // awaits the dataset, the textures and the cache first, and a check that
+    // waits on the old assumption reads a blank canvas and reports the shim
+    // broken.
+    window.__frameReady = true;
     return;
   }
 

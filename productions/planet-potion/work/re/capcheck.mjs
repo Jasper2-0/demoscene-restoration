@@ -63,6 +63,10 @@ const SAMPLES = Number(arg('samples', 20));
 // and a frame-rate mismatch, fine enough that two different scenes cannot
 // score alike.
 const GX = 64, GY = 48;
+// A persistent profile, so the page's IndexedDB cache of the generated textures
+// and modules survives between runs.
+const PROFILE = process.env.PP_PROFILE ?? '/tmp/pp-chrome-profile';
+const PROFILE = process.env.PP_PROFILE ?? '/tmp/pp-chrome-profile';
 
 let failed = 0;
 const ok = (name, pass, detail = '') => {
@@ -161,7 +165,8 @@ const draws = [];
 await withPage({
   root: 'productions/planet-potion/web', path: '/index.html',
   query: `?show=p1&at=0${arg('texenv', null) ? `&texenv=${arg('texenv')}` : ''}`,
-  extraArgs: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'],
+  extraArgs: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader',
+    `--user-data-dir=${PROFILE}`],
 }, async ({ page }) => {
   await page.waitForFunction('window.__ppReady === true', { timeout: 180000 });
   const got = await page.evaluate(

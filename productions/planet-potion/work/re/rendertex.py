@@ -19,6 +19,31 @@ import ppcrun as H
 TS = 128
 
 
+def png_grey(path, w, h, plane):
+    """One 8-bit channel, as a greyscale PNG.
+
+    WHY THIS EXISTS. The colour PNG drops byte 0 of every texel, and byte 0 is
+    the MASK — `255 - coverage`, the channel `toARGB` fills first. For 22 of the
+    69 textures the RGB is a single flat colour and the entire picture is in
+    that byte, so the exported PNG is a solid black or white rectangle and looks
+    like a generator that produced nothing. It produced a mask.
+
+    Three textures really are flat in every channel: p1[1] and p3[4], p3[12].
+    """
+    rows = b''
+    for y in range(h):
+        rows += b'\0' + plane[y * w:(y + 1) * w]
+
+    def chunk(t, d):
+        c = t + d
+        return (struct.pack('>I', len(d)) + c
+                + struct.pack('>I', zlib.crc32(c) & 0xffffffff))
+    open(path, 'wb').write(b'\x89PNG\r\n\x1a\n'
+                          + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 0, 0, 0, 0))
+                          + chunk(b'IDAT', zlib.compress(rows, 9))
+                          + chunk(b'IEND', b''))
+
+
 def png(path, w, h, argb):
     rows = b''
     for y in range(h):
@@ -58,7 +83,7 @@ def main():
         os.makedirs(raw_dir, exist_ok=True)
 
     jobs = [('p1', 0x2642, 48), ('p3', 0x27a6, 21)]
-    images, ok = [], 0
+    images, ok, masks = [], 0, 0
     raws = {}
     for part, disp, n in jobs:
         blob = bytearray(n * TS * TS * 4)
@@ -68,6 +93,12 @@ def main():
                 print(f'  {part}[{i:02}] {prog:#x} FAILED {err.strip()[:80]}')
                 continue
             png(f'{out}/{part}_{i:02d}.png', TS, TS, data)
+            # AND THE MASK, whenever it carries anything. Without it a third of
+            # the set exports as blank rectangles.
+            mask = bytes(data[0::4])
+            if len(set(mask)) > 1:
+                png_grey(f'{out}/{part}_{i:02d}_mask.png', TS, TS, mask)
+                masks += 1
             blob[i * TS * TS * 4:(i + 1) * TS * TS * 4] = data
             images.append(data)
             ok += 1
@@ -77,6 +108,8 @@ def main():
             print(f'  {part}: {n} textures, {len(raws[part])} bytes '
                   f'-> {raw_dir}/tex_{part}.bin')
     print(f'rendered {ok}/{sum(n for _, _, n in jobs)} textures into {out}/')
+    print(f'  {masks} of them also wrote a _mask.png — the channel the colour '
+          f'PNG drops, and for 22 textures the only one with a picture in it')
 
     COLS, GAP = 10, 2
     rows_n = (len(images) + COLS - 1) // COLS

@@ -202,9 +202,14 @@ export class Warp3D {
     const { gl } = this;
     let tex = this.textures.get(index);
     if (!tex) { tex = gl.createTexture(); this.textures.set(index, tex); }
+    const rgba = new Uint8Array(pixels.length);
+    for (let i = 0; i < pixels.length; i += 4) {
+      rgba[i] = pixels[i + 1]; rgba[i + 1] = pixels[i + 2];
+      rgba[i + 2] = pixels[i + 3]; rgba[i + 3] = pixels[i];
+    }
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, TEX_SIZE, TEX_SIZE, 0,
-      gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      gl.RGBA, gl.UNSIGNED_BYTE, rgba);
     // W3D_LINEAR for both min and mag — bilinear, and NO mipmaps: the Permedia 2
     // driver never exposed them on this path, so a port that generates them is
     // sharper than the original at distance.
