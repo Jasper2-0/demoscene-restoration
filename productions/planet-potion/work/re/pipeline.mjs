@@ -143,7 +143,7 @@ const fieldOK = FIELDS.map(() => 0);
 const fieldBad = FIELDS.map(() => 0);
 const byKind = new Map();
 const SHOW = [];
-const matchFrame = (got, want) => {
+const matchFrame = (got, want, label = '') => {
   const by = new Map();
   want.forEach((w, i) => {
     const k = kindOf(w.prim, w.texture, w.v.length / 10);
@@ -183,8 +183,10 @@ const matchFrame = (got, want) => {
               const k = `${d.sprite ? 'sprite' : (d.srcKind ?? '?')}`
                 + `${d.cut ? ' cut' : ' whole'}`;
               byKind.set(k, (byKind.get(k) ?? 0) + 1);
-              if (SHOW.length < 5 && f === 4 && j === 0) {
-                SHOW.push(`${k} tex${d.texture} n=${d.v.length} clip=${d.clip}`
+              if (SHOW.length < 5 && f === 4 && j === 0
+                && !KNOWN_INEXACT.has(label)
+                && (!process.env.UVWHOLE || !d.cut)) {
+                SHOW.push(`${label} ${k} tex${d.texture} n=${d.v.length} clip=${d.clip}`
                   + `\n         ours uv ${d.v.map((q) =>
                     `(${q.u.toFixed(1)},${q.v.toFixed(1)})`).join(' ')}`
                   + `\n        their uv ${Array.from({ length: d.v.length },
@@ -292,7 +294,7 @@ for (const scene of A.scenes) {
       }
     }
     const allDraws = over ? r.draws.concat(overDraws) : r.draws;
-    let hit = matchFrame(allDraws, df.draws), cam = 0;
+    let hit = matchFrame(allDraws, df.draws, `${scene.part}/${scene.order}@${frame.t}`), cam = 0;
     const nCameras = r.nodes.filter((x) => x.type === 6).length;
     for (let k = 1; k < nCameras; k++) {
       let alt; try { alt = runScene(scene, frame, k); } catch { continue; }
@@ -382,29 +384,37 @@ ok('every frame on the accounted-for list still disagrees', fixed.length === 0,
 // asserted apart. Lumping them would let a position regression hide behind a
 // texture-coordinate gap that is already known.
 {
-  const geom = ['x', 'y', 'z', 'w', 'a'];
+  // u AND v ARE IN HERE NOW. They sat on the ratchet at 85,257 of 141,220 --
+  // 40% of the demo's texture coordinates wrong -- until shading mode 4 turned
+  // out to environment-map off the transformed normal instead of using the
+  // face's uv fields at all. See meshDraws in render.js. Once that was right
+  // they went exact in one step, so they belong with the fields that cannot
+  // drift rather than with the ones that are still being chased.
+  const geom = ['x', 'y', 'z', 'w', 'a', 'u', 'v'];
   const bad = geom.filter((f) => fieldBad[FIELDS.indexOf(f)] > 0);
-  ok('every position and alpha of every matched vertex is exact', bad.length === 0,
-    bad.length ? bad.join(' ') : `${geom.join(', ')} across ${fieldOK[0]} vertices`);
+  ok('every position, alpha and texture coordinate is exact', bad.length === 0,
+    bad.length ? bad.map((f) => `${f} ${fieldBad[FIELDS.indexOf(f)]} differ`).join(' ')
+      : `${geom.join(', ')} across ${fieldOK[0]} vertices`);
 }
-// A RATCHET, with the numbers written down. u, v and the three colours differ
-// on the mesh draws and nowhere else, and the floor is what it measured the day
+// A RATCHET, with the numbers written down. The three colours still differ on
+// the mesh draws and nowhere else, and the floor is what it measured the day
 // the gap was found — so it cannot quietly get worse, and improving it means
 // editing this line.
 //
-// WHAT IS KNOWN. Every face's texture coordinates are exact: 28,338 of 28,338
-// against the arena, layers included. What is not known is why the EMITTED ones
-// diverge on meshes and only on meshes. The matcher pairs primitives by
-// position, and a layer face sits on exactly the same three vertices as the
-// face it layers, so one candidate is that it is pairing a base with a layer —
-// in which case the mismatch is the comparison's and not the port's. That is a
-// hypothesis; the floor is a measurement.
+// u AND v HAVE LEFT THIS LIST. They were on it at 85,257 of 141,220, with a
+// comment guessing that the matcher might be pairing a base face with its
+// layer; it was not, and the guess would have made a real defect look like a
+// harness artefact. Shading mode 4 environment-maps, and half the mesh faces in
+// the demo are mode 4.
+//
+// WHAT IS KNOWN about what is left: 5,803 vertices of 141,220 carry a different
+// colour, all on meshes.
 {
-  const FLOOR = { u: 85257, v: 85257, r: 135417, g: 135417, b: 135417 };
+  const FLOOR = { r: 135417, g: 135417, b: 135417 };
   const worse = Object.entries(FLOOR)
     .filter(([f, n]) => fieldOK[FIELDS.indexOf(f)] < n)
     .map(([f, n]) => `${f} ${fieldOK[FIELDS.indexOf(f)]} < ${n}`);
-  ok('the texture coordinates and colours are no worse than when last measured',
+  ok('the vertex colours are no worse than when last measured',
     worse.length === 0, worse.length ? worse.join(', ')
       : Object.keys(FLOOR).map((f) =>
         `${f} ${fieldOK[FIELDS.indexOf(f)]}/${fieldOK[FIELDS.indexOf(f)]

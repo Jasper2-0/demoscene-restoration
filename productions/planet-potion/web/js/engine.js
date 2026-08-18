@@ -169,7 +169,13 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
         vertices: f.vertices.map((k, corner) => {
           const v = o.vertices[k];
           return { p: [v.ox, v.oy, v.oz], scaled: [v.o0, v.o1, v.o2, v.o3],
-            uv: f.uv?.[corner] ?? [0, 0], gouraud: v.onz };
+            // THE TRANSFORMED NORMAL, all three components. Shading mode 3
+            // wants only z, which is why this used to carry `gouraud` alone;
+            // mode 4 environment-maps off x and y. Pass 3 writes it to
+            // +0x5c/+0x60/+0x64 at 0x100056a4 by rotating the source normal at
+            // +0x50 through the node's 3x3.
+            uv: f.uv?.[corner] ?? [0, 0],
+            normal: [v.onx, v.ony, v.onz], gouraud: v.onz };
         }) }],
     })) : [];
     meshObjects[i] = faces;
@@ -212,7 +218,8 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
           faces: [{ ...f, vertices: f.vertices.map((k, corner) => {
             const v = fresh.vertices[k];
             return { p: [v.ox, v.oy, v.oz], scaled: [v.o0, v.o1, v.o2, v.o3],
-              uv: f.uv?.[corner] ?? [0, 0], gouraud: v.onz };
+              uv: f.uv?.[corner] ?? [0, 0],
+              normal: [v.onx, v.ony, v.onz], gouraud: v.onz };
           }) }],
         })),
       });

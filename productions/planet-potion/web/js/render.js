@@ -114,13 +114,21 @@ function clipPlane(poly, axis, s, k) {
   // v2, v0, v1.
   let prev = poly[0];
   let dPrev = dist(prev);
+  // Whether this plane actually changed anything, so `cut` can mean CUT. The
+  // walk emits a wholly-inside polygon as v0..vn in the order it arrived, so
+  // handing the input array straight back is the same polygon and lets the
+  // caller tell "was clipped" from "had clipping enabled" -- which the identity
+  // test alone could not, because this function used to allocate either way and
+  // so reported every clip-enabled primitive as cut.
+  let changed = false;
   for (let i = 1; i <= poly.length; i++) {
     const cur = poly[i === poly.length ? 0 : i];
     const dCur = dist(cur);
     // `ble` on the PREVIOUS distance: strictly greater than zero is inside, so
     // a vertex exactly on the plane counts as outside and is dropped.
-    if (dPrev > 0) out.push(prev);
+    if (dPrev > 0) out.push(prev); else changed = true;
     if ((dPrev > 0) !== (dCur > 0)) {
+      changed = true;
       const t = dCur / (dCur - dPrev);
       // Every one of the eight goes out through `stfs`, so it TRUNCATES. The
       // pass-through vertices are already single and lose nothing; the cut ones
@@ -137,7 +145,7 @@ function clipPlane(poly, axis, s, k) {
     prev = cur;
     dPrev = dCur;
   }
-  return out;
+  return changed ? out : poly;
 }
 
 /**
@@ -265,6 +273,26 @@ function meshDraws(node) {
         const k = Math.abs(face.intensity);
         fr *= k; fg *= k; fb *= k;
       }
+      // SHADING MODE 4 DOES NOT USE THE FACE'S TEXTURE COORDINATES AT ALL, it
+      // environment-maps. Both per-face routines end on the same dispatch --
+      // `beq cr3` at 0x10005fdc and `bne cr3` at 0x10006140 -- and modes 0 to 3
+      // copy the face's three uv pairs onto its three vertices, while mode 4
+      // falls into 0x10006144 and computes one per vertex from the TRANSFORMED
+      // NORMAL:
+      //
+      //     u = normal.x * face[+0x1c] + face[+0x14]
+      //     v = normal.y * face[+0x20] + face[+0x18]
+      //
+      // so the first two "uv pairs" are really an offset and a scale. Both are
+      // fused, and both go out through `stfs`.
+      //
+      // It is half the mesh geometry in the demo -- 14,016 faces of 28,338 --
+      // and until this was found those faces took the offset and the scale as
+      // literal texture coordinates, which is why the 3D objects looked like
+      // they had no proper mapping. Nothing in the geometry oracle could see
+      // it: `geo.json` records the face's uv fields, which ARE right, and the
+      // per-vertex values only exist during a frame.
+      const env = face.shading === 4;
       const shaded = vs.map((v) => {
         const k = face.shading === 3 ? Math.abs(v.gouraud ?? 1) : 1;
         return {
@@ -273,7 +301,10 @@ function meshDraws(node) {
           rgb: [Math.min(fr * v.scaled[1] * k, 1.0),
             Math.min(fg * v.scaled[2] * k, 1.0),
             Math.min(fb * v.scaled[3] * k, 1.0)],
-          uv: v.uv,
+          uv: env && v.normal && face.uv
+            ? [f32(fma(v.normal[0], face.uv[1][0], face.uv[0][0])),
+              f32(fma(v.normal[1], face.uv[1][1], face.uv[0][1]))]
+            : v.uv,
         };
       });
       const d = drawPrimitive(shaded,
