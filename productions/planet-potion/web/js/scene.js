@@ -23,6 +23,16 @@
 // declared end rather than passing it, so the byte sitting at `length - 1` is
 // read as an opcode and thrown away.
 
+import { f32 } from './fp.js';
+
+// `[r2+0x2e5e]` — degrees to sine-table units, 32768/360. The rotate group is
+// stored already scaled, which is why the animation pass can index the table
+// directly.
+const DEG = 91.02222442626953;
+// The projection defaults `0x1000259c` writes before the group is read:
+// half of 640 and half of 480, so an absent group centres the node.
+const CX0 = 320.0, CY0 = 240.0;
+
 /** Node sizes from `r2+0x28ca`. Opcode 7 is the synthesised root. */
 export const SIZES = [44, 48, 52, 108, 212, 44, 56, 60];
 
@@ -100,21 +110,43 @@ function readAnim(c, skipAlpha) {
   const n = c.u8();
   for (let i = 0; i <= n; i++) {
     const v = c.u16();
-    const k = { hold: v >> 15, time: v & 0x7fff };
-    if (!(gate & 1)) k.translate = [c.s16(), c.s16(), c.s16()];
-    if (!(gate & 2)) k.rotate = [c.s16(), c.s16(), c.s16()];
-    if (!(gate & 4)) {
-      if (!skipAlpha) k.alpha = c.u8();
-      k.rgb = [c.u8(), c.u8(), c.u8()];
+    // Each group writes the FIRST float of one 16-byte block; the other three
+    // are polynomial coefficients a later pass fills in. `0x10002768` presets
+    // the alpha and colour blocks to 1.0 before every keyframe, so an absent
+    // colour group is opaque white rather than black.
+    const k = { hold: v >> 15, time: v & 0x7fff, t0: f32(v & 0x7fff),
+      blocks: new Array(15).fill(null) };
+    k.blocks[6] = 1.0; k.blocks[7] = 1.0; k.blocks[8] = 1.0; k.blocks[9] = 1.0;
+    if (!(gate & 1)) {
+      k.blocks[0] = f32(c.s16()); k.blocks[1] = f32(c.s16());
+      k.blocks[2] = f32(c.s16());
     }
+    if (!(gate & 2)) {
+      // THE MIDDLE ANGLE IS NEGATED. `fmul`, then `fnmadd f0, f0, f14, f31`
+      // with f31 zero — so the y rotation comes out with the opposite sign from
+      // its neighbours, and reading all three as `fmul` mirrors every scene.
+      k.blocks[3] = f32(c.s16() * DEG);
+      k.blocks[4] = f32(-(c.s16() * DEG));
+      k.blocks[5] = f32(c.s16() * DEG);
+    }
+    if (!(gate & 4)) {
+      if (!skipAlpha) k.blocks[6] = f32(c.u8() / 255.0);
+      k.blocks[7] = f32(c.u8() / 255.0);
+      k.blocks[8] = f32(c.u8() / 255.0);
+      k.blocks[9] = f32(c.u8() / 255.0);
+    }
+    k.blocks[14] = CX0; k.blocks[12] = CX0; k.blocks[13] = CY0;
     if (!(gate & 0x10)) {
       // A RAW 32-BIT READ, not one of the four operand readers: one byte
-      // doubled and two SIGNED twelve-bit fields.
+      // doubled and two SIGNED twelve-bit fields, and they land in blocks
+      // 14, 13, 12 in that order — cx, cy, scale, stored backwards.
       const w = c.u32();
       const s12 = (x) => ((x & 0xfff) >= 0x800 ? (x & 0xfff) - 0x1000 : (x & 0xfff));
-      k.project = [(w >>> 24) * 2, s12(w >>> 12), s12(w)];
+      k.blocks[14] = f32((w >>> 24) * 2);
+      k.blocks[13] = f32(s12(w >>> 12));
+      k.blocks[12] = f32(s12(w));
     }
-    if (!(gate & 8)) k.pan = [c.s16(), c.s16()];
+    if (!(gate & 8)) { k.blocks[10] = f32(c.s16()); k.blocks[11] = f32(c.s16()); }
     anim.keys.push(k);
   }
   return anim;

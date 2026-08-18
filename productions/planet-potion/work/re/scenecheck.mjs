@@ -23,6 +23,10 @@ const ABSENT = 77;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const flat = process.argv[2] ?? path.join(HERE, 'flat');
 const file = process.argv[3] ?? path.join(HERE, 'out', 'arena.json');
+// anim_all.json carries the keyframe TRACKS the decoder now produces values
+// for. Optional: without it the structural assertions still run, and the check
+// says which half it managed.
+const animFile = process.argv[4] ?? path.join(HERE, 'out', 'anim_all.json');
 
 const SEGMENTS = [
   { base: 0x10030000, name: 'seg3_DATA_10030000.bin' },
@@ -42,6 +46,8 @@ const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
 
 let nodesOK = 0, nodesBad = 0, streamsOK = 0, streamsBad = 0, fields = 0;
 let texts = 0, printable = 0;
+let kOK = 0, kBad = 0, kFields = 0;
+const kByBlock = new Array(15).fill(0);
 const seenOps = new Set();
 const failures = [];
 const samples = [];
@@ -94,6 +100,35 @@ for (const scene of doc.scenes) {
   if (good) streamsOK++; else streamsBad++;
 }
 
+// THE KEYFRAME VALUES, NOT JUST THEIR COUNT. Each of the five gated groups
+// writes the FIRST float of one 16-byte block, and comparing those is what
+// turns "the walk stays in step" into "the animation data is right" — a
+// grammar can consume the correct number of bytes and still interpret them as
+// the wrong fields.
+if (fs.existsSync(animFile)) {
+  const anim = JSON.parse(fs.readFileSync(animFile, 'utf8'));
+  for (const scene of anim.scenes) {
+    const addr = parseInt(scene.stream, 16);
+    const seg = segs.find((s) => addr >= s.base && addr < s.base + s.data.length);
+    if (!seg) continue;
+    const got = decodeScene(seg.data, addr - seg.base).nodes;
+    const want = scene.frames[0].nodes;
+    for (let i = 0; i < Math.min(got.length, want.length); i++) {
+      const gk = got[i].anim.keys, wk = want[i].track ?? [];
+      for (let j = 0; j < Math.min(gk.length, wk.length); j++) {
+        if (gk[j].empty) continue;
+        if (gk[j].time !== wk[j].tick) { kBad++; continue; }
+        for (let b = 0; b < 15; b++) {
+          if (gk[j].blocks[b] === null) continue;
+          kFields++;
+          if (gk[j].blocks[b] === wk[j].blocks[b][0]) kOK++;
+          else { kBad++; kByBlock[b]++; }
+        }
+      }
+    }
+  }
+}
+
 let failed = 0;
 const ok = (name, pass, detail = '') => {
   console.log(`${pass ? 'ok  ' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`);
@@ -112,6 +147,14 @@ ok('all eight opcodes are exercised', seenOps.size === 8,
 // A walk one byte out of step anywhere earlier reads some other byte as a
 // length, so readable English here is evidence the field comparisons cannot
 // give on their own.
+if (kFields) {
+  ok('every keyframe value the stream carries is bit-exact', kBad === 0,
+    `${kOK}/${kFields} block values`
+    + (kBad ? `, worst blocks ${kByBlock.map((v, i) => (v ? i : null))
+      .filter((v) => v !== null).join(',')}` : ''));
+} else {
+  console.log('     keyframe VALUES not checked: no anim_all.json here');
+}
 ok('every text node decodes to a printable string', printable === texts,
   `${printable}/${texts} — ${samples.map((t) => JSON.stringify(t)).join(', ')}`);
 

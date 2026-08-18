@@ -227,7 +227,8 @@ run "scenegram — every scene stream decodes to the nodes the original built" \
 # same grammar against the same oracle, so a divergence between them shows up
 # as a divergence from the original rather than going unnoticed.
 run "scenecheck — the scene decoder the page uses" \
-  node "$HERE/scenecheck.mjs" "$FLAT" "$HERE/out/arena.json"
+  node "$HERE/scenecheck.mjs" "$FLAT" "$HERE/out/arena.json" \
+  "$HERE/out/anim_all.json"
 
 # The emitter, checked on its own before the clipper and node walk that feed it
 # exist: the recorded stream is 144,727 vertices of its output, and the
