@@ -314,6 +314,32 @@ export function createEngine({ seg0, seg3, seg4, table, layoutText,
     },
 
     /**
+     * `_play_scene_new_camera`'s side effect, which is not about cameras.
+     *
+     * `0x10004fb0` walks the whole node list and, for each node, the whole
+     * chain of sub-objects on `+0x74`, storing the CURRENT TIME into `+0x6c` —
+     * the animation origin. So switching camera RESTARTS THE SCENE'S CLOCK, and
+     * it is the only caller: no other driver resets anything.
+     *
+     * That is what makes part one's replayed scenes work. 0x25da, 0x25d6 and
+     * 0x25de each play four times over under cameras 0 to 3, roughly 228 ticks
+     * apiece, and every camera node's track is 300 ticks long and CLAMPS at the
+     * end. Run on one continuous scene clock, camera 0 moves, camera 1 clamps
+     * part way through and cameras 2 and 3 are frozen solid — which is exactly
+     * what the port did. Restarted per segment, each camera plays its own move.
+     *
+     * ORIGIN ONLY. The original does not touch the track cursor here, and
+     * `rewindScene` does; they are different operations and this is the one the
+     * show performs.
+     */
+    restartScene(part, order, tick) {
+      const S = sceneOf(part, order);
+      const put = (a) => { a.origin = tick; };
+      S.anims.forEach(put);
+      S.subAnims.forEach((list) => list.forEach(put));
+    },
+
+    /**
      * Put a scene's animation state where it would be at `tick`, without
      * having played the ticks before it.
      *

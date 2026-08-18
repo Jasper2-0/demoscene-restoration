@@ -265,7 +265,19 @@ export class Warp3D {
   clear(rgb = [0, 0, 0]) {
     const { gl } = this;
     gl.clearColor(rgb[0], rgb[1], rgb[2], 1);
+    // THE DEPTH MASK GATES THE DEPTH CLEAR, not just drawing. `glClear` is
+    // subject to the write masks, so clearing while `depthMask` is false --
+    // which is exactly the state a frame opens in, because `_show_scene`
+    // disables both z states before its first node -- leaves the depth buffer
+    // holding the PREVIOUS frame's values. With Warp3D's reversed depth those
+    // are compared GEQUAL against a cleared 1.0, so every fragment fails and
+    // the scene renders black. That is what happened the first time the z
+    // buffer was wired up, and it looks exactly like geometry that is not being
+    // submitted at all.
+    const wrote = gl.getParameter(gl.DEPTH_WRITEMASK);
+    if (!wrote) gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (!wrote) gl.depthMask(false);
   }
 
   /**
@@ -284,6 +296,12 @@ export class Warp3D {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
     gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STREAM_DRAW);
 
+    // THE DEPTH STATE THE ORIGINAL WAS IN WHEN IT SUBMITTED THIS. 1 is
+    // W3D_ENABLE and 2 is W3D_DISABLE, and both z states move together in the
+    // original -- the test and the write are never set apart. Absent means the
+    // caller is replaying a recording made before drawlog carried it, and the
+    // old behaviour was depth off, so that is what absent gets.
+    if (draw.z !== undefined) this.setZBuffer(draw.z === 1, draw.z === 1);
     const tex = draw.texture != null ? this.textures.get(draw.texture) : null;
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, tex ?? null);

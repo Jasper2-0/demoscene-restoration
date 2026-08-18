@@ -270,6 +270,18 @@ async function main() {
     // the renderer compares against each camera node's ordinal, and three of
     // part one's scenes carry four cameras and play three times over.
     const cam = span.camera ?? 0;
+    // ENTERING A `new_camera` ENTRY RESTARTS THE SCENE'S CLOCK. That is what
+    // `_play_scene_new_camera` does before it renders anything — see
+    // engine.restartScene — and without it the second and third cameras of
+    // 0x25da, 0x25d6 and 0x25de sit past the end of their 300-tick tracks and
+    // do not move at all.
+    //
+    // Keyed on the tick rather than on having seen the span before, so that a
+    // sweep which rewinds and replays the same span gets the same answer.
+    if (span.driver === 'new_camera'
+      && tick === span.start - (span.sceneStart ?? span.start)) {
+      engine.restartScene(span.part, order, tick);
+    }
     let draws = engine.frame(span.part, order, tick, signal, cam);
     // THE SCENE'S clear colour, taken before the overlay is appended — and
     // taken from the scene rather than the overlay on purpose. The original
@@ -296,6 +308,8 @@ async function main() {
     }
     textures?.use(span.part);
     w3d.setFog(fogFor(span.fog));
+    // The state `_show_scene` opens every frame in; each draw then carries the
+    // one its own node asked for. See showScene in render.js.
     w3d.setZBuffer(false, false);
     // The engine computes the clear colour as the last thing `_calc_matrix`
     // does, and it is NOT black: part one opens on white and part three's
@@ -374,6 +388,9 @@ async function main() {
         if (e.slot) { slot = e.slot; sceneStart = e.startTick ?? 0; }
         return {
           scene: i, frames: [], slot, fog: e.fog, camera: e.camera, sceneStart,
+          // `new_camera` does not merely select a camera: it restarts the
+          // scene's animation clock. See engine.restartScene.
+          driver: e.driver,
           start: e.startTick ?? 0, end: (e.startTick ?? 0) + (e.durTicks ?? 0),
           part,
         };
@@ -466,8 +483,23 @@ async function main() {
               for (let t = lastTick + 1; t < tick; t++) {
                 // Catch up any tick a dropped frame skipped, so the animation
                 // state is stepped once per tick whatever the display does.
-                try { renderComputed(hit.span, t - hit.span.start,
-                  cueAt.get(t) ?? -1, t); } catch { /* reported below */ }
+                //
+                // RESOLVED PER TICK, AND ON THE SCENE'S OWN CLOCK. This used to
+                // step `hit.span` at `t - hit.span.start`, which is wrong twice
+                // over: a skipped tick can belong to an earlier span than the
+                // one now on screen, and `start` is where this SCHEDULE ENTRY
+                // began rather than where the scene did. Three of part one's
+                // scenes are replayed four times over by `new_camera` entries,
+                // so across those boundaries the two differ by hundreds of
+                // ticks and the engine was handed a clock that jumped backwards
+                // every frame — the keyframe cursors and loop origins accumulate
+                // forward, so what came out was a camera that would not move.
+                const h = frameAt(spans, t);
+                if (!h) continue;
+                // `paint` false: an intermediate tick is overdrawn immediately,
+                // so it needs the ANIMATION stepped and none of the GL.
+                try { renderComputed(h.span, h.local, cueAt.get(t) ?? -1, t, false); }
+                catch { /* reported below */ }
               }
               lastTick = tick;
               let info = null;

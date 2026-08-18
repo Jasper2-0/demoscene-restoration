@@ -40,10 +40,11 @@ const seg3 = new Uint8Array(fs.readFileSync(path.join(DATA, 'seg3.bin')));
 const seg4 = new Uint8Array(fs.readFileSync(path.join(DATA, 'seg4.bin')));
 const show = JSON.parse(fs.readFileSync(path.join(DATA, 'showorder.json'), 'utf8'));
 const glyphs = glyphTable(seg0);
-const engine = createEngine({
+const mkEngine = () => createEngine({
   seg0, seg3, seg4, table: sinus(),
   layoutText: (t) => layoutText(glyphs, t),
 });
+const engine = mkEngine();
 
 // Every 25 ticks — half a second of a 50 Hz show. Fine enough that a scene
 // which only draws briefly is still seen, coarse enough to finish.
@@ -140,6 +141,102 @@ ok('no scene spends its entire span drawing nothing', deadSlots.length === 0,
 // fails here even though every frame-level suite still passes.
 ok('and it draws a show, not a handful of primitives', totalDraws > 200000,
   `${totalDraws} draws, busiest frame ${maxDraws}`);
+
+// --- THE REPLAYED SCENES, AND WHETHER THEIR CAMERAS MOVE ------------------
+//
+// Part one plays 0x25da, 0x25d6 and 0x25de four times over: a `synchro` entry
+// and then three `new_camera` ones, about 228 ticks each. Every camera node's
+// track is 300 ticks long and CLAMPS at the end, so on one continuous scene
+// clock camera 0 moves, camera 1 clamps part way and cameras 2 and 3 never
+// move at all. `_play_scene_new_camera` restarts the clock — engine.restartScene
+// — and that is what makes each camera play its own move.
+//
+// Measured as screen motion per tick, with the un-restarted clock as a CONTROL,
+// because "the camera does not move" is not something the frame-level suites
+// can see: every vertex is still bit-exact against the recording, and the
+// recording samples each scene inside ONE of the four segments.
+{
+  const spans = [];
+  let slot = null, sceneStart = 0;
+  for (const e of show.p1.schedule) {
+    if (e.slot) { slot = e.slot; sceneStart = e.startTick ?? 0; }
+    spans.push({ slot, driver: e.driver, cam: e.camera ?? 0,
+      start: e.startTick ?? 0, dur: e.durTicks ?? 0, sceneStart });
+  }
+  const REPLAYED = ['0x25da', '0x25d6', '0x25de'];
+
+  /** Mean screen motion per tick, per camera segment. */
+  const motion = (restart) => {
+    // A FRESH ENGINE PER MEASUREMENT. `rewindScene` puts the origins and track
+    // cursors back, but the two passes differ precisely in what they do to the
+    // origins, and running them against one engine made the control report one
+    // frozen segment instead of six — measuring the leftovers of the pass
+    // before rather than the clock under test.
+    const engine = mkEngine();
+    const out = [];
+    for (const target of REPLAYED) {
+      const order = engine.orderOfSlot('p1', target);
+      if (order === null) continue;
+      engine.rewindScene('p1', order);
+      const segs = spans.filter((x) => x.slot === target);
+      const ss = segs[0].sceneStart;
+      const acc = new Map();
+      let prev = null;
+      for (const sp of segs) {
+        for (let t = sp.start; t < sp.start + sp.dur; t++) {
+          const local = t - ss;
+          if (restart && sp.driver === 'new_camera' && local === sp.start - ss) {
+            engine.restartScene('p1', order, local);
+          }
+          const d = engine.frame('p1', order, local, -1, sp.cam);
+          const cur = d.length
+            ? d.slice(0, 20).flatMap((q) => [q.v[0].x, q.v[0].y]) : [];
+          if (prev && prev.length === cur.length && cur.length) {
+            let m = 0;
+            for (let i = 0; i < cur.length; i++) m += Math.abs(cur[i] - prev[i]);
+            const e = acc.get(sp.cam) ?? { s: 0, n: 0 };
+            e.s += m / cur.length; e.n++; acc.set(sp.cam, e);
+          }
+          prev = cur;
+        }
+      }
+      for (const [cam, e] of acc) {
+        out.push({ slot: target, cam, px: e.n ? e.s / e.n : 0 });
+      }
+    }
+    return out;
+  };
+
+  const live = motion(true);
+  const stalled = live.filter((r) => r.px < 0.5);
+  ok('every camera of every replayed scene moves', stalled.length === 0,
+    `${live.length} segments across ${REPLAYED.length} scenes, slowest `
+    + `${Math.min(...live.map((r) => r.px)).toFixed(2)} px/tick`
+    + (stalled.length
+      ? ` — stalled: ${stalled.map((r) => `${r.slot}/cam${r.cam}`).join(' ')}`
+      : ''));
+
+  // CONTROL, AS A RATIO RATHER THAN A THRESHOLD. Without the restart the later
+  // cameras are past the end of their tracks and their own contribution is
+  // frozen, but the scenes carry animated mesh nodes too and those keep moving,
+  // so the measured figure does not fall to zero — it falls to about an eighth.
+  // Asserting "frozen" here would be asserting something untrue and would fail
+  // for the wrong reason; asserting the RATIO is what actually distinguishes
+  // the two clocks.
+  const held = motion(false);
+  if (process.env.CAMDEBUG) {
+    for (const r of held) console.log(`     [control] ${r.slot} cam${r.cam} ${r.px.toFixed(3)} px/tick`);
+    for (const r of live) console.log(`     [live]    ${r.slot} cam${r.cam} ${r.px.toFixed(3)} px/tick`);
+  }
+  const later = (rows) => {
+    const r = rows.filter((x) => x.cam >= 2);
+    return r.reduce((t, x) => t + x.px, 0) / (r.length || 1);
+  };
+  const ratio = later(live) / (later(held) || 1e-9);
+  ok('and they barely move without the clock restart — the control', ratio >= 3,
+    `cameras 2 and 3 average ${later(live).toFixed(2)} px/tick restarted `
+    + `against ${later(held).toFixed(2)} held — ${ratio.toFixed(1)}x`);
+}
 
 ok('a tick fits in the 50 Hz budget', worstMs < 20,
   `worst ${worstMs.toFixed(2)} ms of 20.00, at ${worstScene} — the engine's `

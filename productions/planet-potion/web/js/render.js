@@ -362,12 +362,32 @@ export function showScene(nodes, activeCamera = 0) {
   let src = -1;
   let srcKind = '?';
   const push = (list) => {
-    for (const d of list) { d.src = src; d.srcKind = srcKind; draws.push(d); }
+    for (const d of list) {
+      d.src = src; d.srcKind = srcKind;
+      // THE Z-BUFFER STATE THIS DRAW IS MADE UNDER. The original does not put
+      // it on the draw: it calls W3D_SetState when the byte changes and the
+      // hardware keeps it until the next change. Carrying it per draw is the
+      // same thing said in a form the shim can apply, and it survives the
+      // draws being concatenated or reordered, which a running state does not.
+      d.z = state;
+      draws.push(d);
+    }
   };
   for (const node of nodes) {
     src++;
     if (!node.drawGate) continue;
-    if (node.at0d !== state) state = node.at0d;      // render-state change
+    // `+0x0d` IS THE Z-BUFFER, and it is per node. `_show_scene` opens with
+    // both z states DISABLED (0x10005d54 sets the action to 2 and calls the
+    // pair at 0x100069d4), then for every node it draws compares +0x0d against
+    // the state it last set and calls the pair again only when they differ —
+    // 0x10005d90..0x10005d98, where `bnel` is the conditional call and setZ's
+    // own `mr r20, r25` is what makes r20 the running state.
+    //
+    // Seven of part one's eighteen scenes turn it on: 0x25d6, 0x25da, 0x25de,
+    // 0x25e2, 0x25e6, 0x25ea and 0x25ee — its whole second half, the 3D ones.
+    // The page had it hardcoded off, so those scenes drew in submission order
+    // with no depth at all.
+    if (node.at0d !== state) state = node.at0d;
     if (node.type === 7) continue;                    // the root draws nothing
     // THE CAMERA IS A DRAW HANDLER, not just a source of cx/cy/scale.
     // `0x1000644c` walks its reference chain at `+0x2c`, and for each link
@@ -418,7 +438,7 @@ export function flattenDraws(draws) {
     d.v.forEach((q, i) => {
       v.set([q.x, q.y, q.z, q.w, q.u, q.v, q.r, q.g, q.b, q.a], i * 10);
     });
-    return { prim: d.prim, texture: d.texture, v };
+    return { prim: d.prim, texture: d.texture, z: d.z, v };
   });
 }
 
