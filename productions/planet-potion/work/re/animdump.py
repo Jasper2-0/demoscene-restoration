@@ -401,11 +401,17 @@ JOBS = [
 ]
 
 
-def dump_all(flat, times):
+def dump_all(flat, times, per_scene=None):
     """Every scene, so pass 1 can be checked against more than one loop mode.
 
     Seven of the eight modes occur across the 29 scenes — only `0x20` restart
     never does — and one scene exercises exactly one of them.
+
+    `per_scene` maps a stream pointer to that scene's OWN tick list. A fixed set
+    of times is what the pass-1 fixture wants; the end-to-end check wants the
+    ticks draws.json actually recorded, and those differ per scene — 86 distinct
+    values across the 29, five each. Sampling all 86 everywhere would be 29
+    times the work for the same 140 joinable frames.
     """
     seg0 = next(f for f in os.listdir(flat) if f.startswith('seg0_'))
     d0 = open(os.path.join(flat, seg0), 'rb').read()
@@ -414,8 +420,9 @@ def dump_all(flat, times):
     for part, disps, txt, obj in JOBS:
         for order, disp in enumerate(disps):
             stream = struct.unpack_from('>I', d0, r2 + disp - 0x10000000)[0]
+            want = (per_scene or {}).get(stream, times)
             try:
-                doc = dump(flat, stream, times, txt_tab=txt, obj_tab=obj)
+                doc = dump(flat, stream, want, txt_tab=txt, obj_tab=obj)
             except SystemExit as e:
                 print(f'{part} {order:2} {hex(disp)}  {e}')
                 continue
@@ -425,19 +432,29 @@ def dump_all(flat, times):
             tr = sum(1 for f in doc['frames'] for x in f['nodes'] if x['track'])
             print(f'{part} {order:2} {hex(disp)}  {n:3} nodes, {tr} tracks')
     return {'note': 'every scene at the same times, for checking pass 1',
-            'times': times, 'scenes': out}
+            'times': times, 'perScene': bool(per_scene), 'scenes': out}
 
 
 def main():
     if sys.argv[1:2] == ['--all']:
         flat, dest = sys.argv[2], sys.argv[3]
-        times = [int(x) for x in sys.argv[4:]] or [92, 200, 400]
+        rest = sys.argv[4:]
+        # `--all flat/ dest draws.json` takes each scene's OWN recorded ticks.
+        per_scene = None
+        if rest and rest[0].endswith('.json'):
+            D = json.load(open(rest[0]))
+            per_scene = {int(sc['stream'], 16):
+                         sorted({f['t'] for f in sc['frames']})
+                         for sc in D['scenes']}
+            rest = rest[1:]
+        times = [int(x) for x in rest] or [92, 200, 400]
         drawlog.setflat(flat)
         seg0 = next(f for f in os.listdir(flat) if f.startswith('seg0_'))
         d0 = open(os.path.join(flat, seg0), 'rb').read()
         H.fix_glyph_scan(d0)
         H.preload_tables(d0)
-        json.dump(_clean(dump_all(flat, times)), open(dest, 'w'), allow_nan=False)
+        json.dump(_clean(dump_all(flat, times, per_scene)), open(dest, 'w'),
+                  allow_nan=False)
         print(f'wrote {dest}')
         return
     flat, stream, dest = sys.argv[1], int(sys.argv[2], 16), sys.argv[3]
