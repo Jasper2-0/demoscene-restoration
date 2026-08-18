@@ -1,4 +1,4 @@
-// emitcheck.mjs — the emitter's arithmetic, against the recorded draw stream.
+// emitcheck.mjs — the emitter and the clip planes, against the recorded stream.
 //
 //   node work/re/emitcheck.mjs web/data/draws.json
 //
@@ -26,7 +26,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { project } from '../../web/js/render.js';
+import { project, planeDistances } from '../../web/js/render.js';
 
 const ABSENT = 77;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -42,6 +42,9 @@ if (!fs.existsSync(file)) {
 const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
 let n = 0, zw = 0, recover = 0, exact = 0, worstXY = 0, worstAt = null;
 let uvrgb = 0;
+// The clip planes, split by the per-draw clip flag: only a CLIPPED primitive
+// has to satisfy them.
+const plane = { on: { n: 0, in: 0, worst: 0 }, off: { n: 0, in: 0, worst: 0 } };
 const prims = new Set();
 
 for (const scene of doc.scenes) {
@@ -65,6 +68,13 @@ for (const scene of doc.scenes) {
         if (e > worstXY) { worstXY = e; worstAt = `${scene.part}/${scene.order}`; }
         if (p.u === u && p.v === v && p.r === r && p.g === g && p.b === b
           && p.a === a) uvrgb++;
+
+        const st = d.clip ? plane.on : plane.off;
+        st.n++;
+        const worstPlane = Math.min(
+          ...planeDistances([xe, ye, ze], d.cx, d.cy, d.scale));
+        if (worstPlane >= -1e-2) st.in++;
+        else st.worst = Math.max(st.worst, -worstPlane);
       }
     }
   }
@@ -88,9 +98,23 @@ ok('re-projecting the recovered eye point reproduces w and z bit for bit',
   exact === recover, `${exact}/${recover}`);
 ok('the passthrough fields survive unchanged', uvrgb === recover,
   `${uvrgb}/${recover} — u, v, r, g, b and the per-primitive alpha`);
+// THE CLIP PLANES, VALIDATED BY THE DATA RATHER THAN BY READING. Every vertex
+// of a CLIPPED primitive must satisfy all four, and the split by the clip flag
+// is what makes that a real test: get a coefficient wrong — the (W - cx) on the
+// right plane, say, or the divide by scale — and the clipped side fails
+// immediately. The unclipped side is reported beside it as the control, and it
+// does NOT satisfy them, which is the whole point of the flag.
+ok('every clipped vertex is inside all four clip planes',
+  plane.on.in === plane.on.n, `${plane.on.in}/${plane.on.n}`
+  + (plane.on.worst ? `, worst outside ${plane.on.worst.toExponential(2)}` : ''));
+console.log(`     control: ${plane.off.n - plane.off.in} of ${plane.off.n} `
+  + 'UNCLIPPED vertices fall outside, as they must — a check that both sides '
+  + 'passed would be testing nothing');
+
 console.log(`     worst |diff| on x or y: ${worstXY.toExponential(2)} px`
   + (worstAt ? ` at ${worstAt}` : '')
   + ' — from the divide this check needs to recover an eye x, not from the port');
 
 if (failed) process.exit(1);
-console.log('\nthe emitter reproduces the recorded projection');
+console.log('\nthe emitter reproduces the recorded projection, and the clip '
+  + 'planes bound every clipped vertex');

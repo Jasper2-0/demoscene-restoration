@@ -64,3 +64,87 @@ export function project(v, cx, cy, scale, alpha) {
 export function emit(vertices, cx, cy, scale, alpha) {
   return vertices.map((v) => project(v, cx, cy, scale, alpha));
 }
+
+
+// ---------------------------------------------------------------------------
+// The clipper, `0x10006738` and `0x10006870`. Sutherland-Hodgman in EYE space
+// against four planes, ping-ponging between the two vertex arrays
+// `_init_scene_show` allocated — 99 usable slots each, which is the real bound
+// on how many vertices a primitive can grow to.
+//
+// The plane function is `component * s + z * k`, and both passes run the same
+// code with different (s, k):
+//
+//     left    x * ( 1) + z * (cx / scale)
+//     top     y * ( 1) + z * (cy / scale)
+//     right   x * (-1) + z * ((W - cx) / scale)
+//     bottom  y * (-1) + z * ((H - cy) / scale)
+//
+// EIGHT FIELDS INTERPOLATE, NOT NINE. x, y, z, the three colours and the two
+// texture coordinates — `0x1000692c` does exactly eight `fsub`/`fmadd` pairs.
+// The alpha at +0x0c is left alone because it is per-PRIMITIVE, taken from the
+// first source vertex, and interpolating it would make a clipped triangle fade
+// across its own cut edge.
+//
+// THE PARAMETER IS `d_cur / (d_cur - d_prev)` AND IT LERPS FROM `cur`, not from
+// `prev`: `out = cur + t * (prev - cur)`. Writing the more natural
+// `prev + t' * (cur - prev)` needs the other t, and the two agree only in exact
+// arithmetic — through a `fdiv` and a fused `fmadd` they do not.
+
+const W = 640.0;
+const H = 480.0;
+
+/** One Sutherland-Hodgman pass. `axis` is 0 for x or 1 for y. */
+function clipPlane(poly, axis, s, k) {
+  if (!poly.length) return poly;
+  const out = [];
+  const dist = (v) => fma(v.p[axis], s, v.p[2] * k);
+  let prev = poly[poly.length - 1];
+  let dPrev = dist(prev);
+  for (const cur of poly) {
+    const dCur = dist(cur);
+    // `ble` on the PREVIOUS distance: strictly greater than zero is inside, so
+    // a vertex exactly on the plane counts as outside and is dropped.
+    if (dPrev > 0) out.push(prev);
+    if ((dPrev > 0) !== (dCur > 0)) {
+      const t = dCur / (dCur - dPrev);
+      const mix = (a, b) => fma(t, a - b, b);
+      out.push({
+        p: [mix(prev.p[0], cur.p[0]), mix(prev.p[1], cur.p[1]),
+          mix(prev.p[2], cur.p[2])],
+        rgb: [mix(prev.rgb[0], cur.rgb[0]), mix(prev.rgb[1], cur.rgb[1]),
+          mix(prev.rgb[2], cur.rgb[2])],
+        uv: [mix(prev.uv[0], cur.uv[0]), mix(prev.uv[1], cur.uv[1])],
+      });
+    }
+    prev = cur;
+    dPrev = dCur;
+  }
+  return out;
+}
+
+/**
+ * Clip one primitive against all four planes.
+ *
+ * A fan left with fewer than three vertices, or a strip with fewer than two, is
+ * dropped entirely rather than emitted degenerate.
+ */
+export function clip(poly, cx, cy, scale, prim) {
+  let p = poly;
+  p = clipPlane(p, 0, 1, cx / scale);
+  p = clipPlane(p, 1, 1, cy / scale);
+  p = clipPlane(p, 0, -1, (W - cx) / scale);
+  p = clipPlane(p, 1, -1, (H - cy) / scale);
+  const floor = prim === 'linestrip' ? 2 : 3;
+  return p.length >= floor ? p : [];
+}
+
+/** The four plane distances of an eye-space point, for checking. */
+export function planeDistances(v, cx, cy, scale) {
+  return [
+    fma(v[0], 1, v[2] * (cx / scale)),
+    fma(v[1], 1, v[2] * (cy / scale)),
+    fma(v[0], -1, v[2] * ((W - cx) / scale)),
+    fma(v[1], -1, v[2] * ((H - cy) / scale)),
+  ];
+}
