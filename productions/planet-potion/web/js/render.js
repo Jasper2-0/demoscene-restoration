@@ -276,7 +276,7 @@ function meshDraws(node) {
  * applies the cull and the four shading modes, and only then reaches
  * `drawPrimitive`; it is a separate piece with its own oracle in arena.json.
  */
-export function showScene(nodes) {
+export function showScene(nodes, activeCamera = 0) {
   const draws = [];
   let state = 2;
   for (const node of nodes) {
@@ -290,6 +290,10 @@ export function showScene(nodes) {
     // enters the mesh renderer past its gate. Everything else about the draw —
     // cx, cy, scale, texture, clip — stays the camera's own.
     if (node.type === 6) {
+      // `0x10006468` compares the camera's ordinal against the show's active
+      // camera and returns if they differ. Three scenes carry four cameras
+      // each and render one of them at a time.
+      if ((node.ordinal ?? 0) !== activeCamera) continue;
       for (const ref of node.refs ?? []) draws.push(...meshDraws(ref));
       continue;
     }

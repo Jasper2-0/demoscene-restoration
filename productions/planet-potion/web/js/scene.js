@@ -259,6 +259,7 @@ export function decodeScene(bytes, at) {
   const body = bytes.subarray(at + 2, at + 2 + length);
   const c = new Cursor(body, 0);
   const nodes = [];
+  let cameraCount = 0;   // reset per stream, `0x100021cc`
   let op = 7, clip = 0;
   try {
     for (;;) {
@@ -295,6 +296,13 @@ export function decodeScene(bytes, at) {
       } else if (op === 6) {
         // A count, then one byte per camera sub-structure — the chain on
         // +0x2c/+0x64 that pass 3's camera tail pushes its block down.
+        // EVERY CAMERA GETS AN ORDINAL, from a counter the scene builder
+        // resets per stream (`0x100021cc`) and bumps here (`0x10002f28`). The
+        // renderer draws a camera's references only when this equals the show's
+        // active-camera global, which `_play_scene_new_camera` sets — so a
+        // scene with four cameras renders one of them at a time.
+        node.ordinal = cameraCount++;
+        node.at30 = node.anim.flags2 & 1;   // `node[4] & 1`, 0x10002f38
         const n = c.u8();
         node.cameras = [];
         for (let i = 0; i < n; i++) node.cameras.push(c.u8());

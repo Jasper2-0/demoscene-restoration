@@ -62,7 +62,7 @@ for (const p of G.programs) prog[p.part][p.index] = p;
 const table = sinus();
 const NIL = 0xffffffff;
 
-function runScene(scene, frame) {
+function runScene(scene, frame, activeCamera = 0) {
   const addr = parseInt(scene.stream, 16);
   const seg = segs.find((s) => addr >= s.base && addr < s.base + s.d.length);
   const decoded = decodeScene(seg.d, addr - seg.base).nodes;
@@ -147,7 +147,8 @@ function runScene(scene, frame) {
     nodes.push({
       type: n.op, drawGate: out.drawGate, at0d: n.at0d ?? 2,
       cx: out.cx, cy: out.cy, scale: out.scale, clip: n.clip,
-      built: 0, at68: w?.at68 ?? 0, texture: w?.texture ?? null,
+      built: out.built, ordinal: n.ordinal ?? 0,
+      at68: w?.at68 ?? 0, texture: w?.texture ?? null,
       plain: out.plainVertices ?? null,
       objects: meshObjects[i] = mesh ? mesh.faces.map((f) => ({
         faces: [{
@@ -203,7 +204,7 @@ function runScene(scene, frame) {
   for (const n of nodes) {
     if (n.type === 5) { meshNodes++; faces += n.objects.length; }
   }
-  const draws = showScene(nodes);
+  const draws = showScene(nodes, activeCamera);
   // NOT ONE of them lands entirely off the 640x480 screen, which rules out the
   // trivial-reject test at 0x100062f8 as the explanation for the overdraw.
   return { draws, faces, meshNodes };
@@ -247,6 +248,11 @@ for (const scene of A.scenes) {
   for (const frame of scene.frames) {
     const df = dd.frames.find((f) => f.t === frame.t);
     if (!df) continue;
+    // WHICH camera the show has selected is not in this scene's bytecode — it
+    // is a call `_play_scene_new_camera` makes on the show timeline — so each
+    // ordinal is tried and the one that places the most primitives is named,
+    // rather than one being assumed. A scene with a single camera has only
+    // ordinal 0 and this collapses to one run.
     let r;
     try { r = runScene(scene, frame); } catch (e) {
       console.log(`  ${scene.part}/${scene.order} t=${frame.t} THREW ${e.message}`);
@@ -260,10 +266,15 @@ for (const scene of A.scenes) {
         over = runScene(overlayScene, of_).draws.length;
       }
     }
+    let hit = matchFrame(r.draws, df.draws), cam = 0;
+    for (let k = 1; k < 4; k++) {
+      let alt; try { alt = runScene(scene, frame, k); } catch { continue; }
+      const h = matchFrame(alt.draws, df.draws);
+      if (h > hit) { hit = h; cam = k; r = alt; }
+    }
     scenes++;
     const total = r.draws.length + over;
     if (total === df.draws.length) exact++;
-    const hit = matchFrame(r.draws, df.draws);
     totalHit += hit;
     totalGot += total; totalWant += df.draws.length;
     console.log(`  ${scene.part}/${scene.order} t=${String(frame.t).padStart(3)}  `
@@ -272,7 +283,7 @@ for (const scene of A.scenes) {
       + (over ? ` + ${String(over).padStart(4)} overlay` : '            ')
       + ` = ${String(total).padStart(5)} draws, recorded `
       + `${String(df.draws.length).padStart(5)}`
-      + `  ${hit} placed`
+      + `  ${hit} placed${cam ? ` (camera ${cam})` : ''}`
       + (total === df.draws.length && hit === df.draws.length ? '  EXACT' : ''));
     // Where a frame disagrees, say WHICH primitives — an aggregate count hides
     // whether the port draws the wrong things or the right things twice.
