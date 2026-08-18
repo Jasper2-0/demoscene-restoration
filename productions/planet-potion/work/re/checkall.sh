@@ -241,6 +241,13 @@ run "scenecheck — the scene decoder the page uses" \
 run "chancheck — every node's channels, in every scene, at every tick" \
   node "$HERE/chancheck.mjs" "$FLAT" "$HERE/out/anim_all.json"
 
+# THE WHOLE THING, END TO END. Scene bytecode in, screen primitives out,
+# compared against the recording frame by frame. Everything upstream has its own
+# suite; this is the one that would notice two of them being wrong in ways that
+# cancel.
+run "pipeline — the renderer reproduces the recording, from bytecode" \
+  node "$HERE/pipeline.mjs"
+
 # The emitter, checked on its own before the clipper and node walk that feed it
 # exist: the recorded stream is 144,727 vertices of its output, and the
 # projection inverts exactly, so the round trip is a real test of the

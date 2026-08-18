@@ -43,7 +43,21 @@
 // off-screen, so the unported trivial-reject at 0x100062f8 was never the cause.
 
 import fs from 'node:fs';
-const R = '/Users/scjas/Developer/01 - Jasper2-0/02 - Github Public/demoscene-restoration/productions/planet-potion';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ABSENT = 77;
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const R = path.resolve(HERE, '..', '..');
+const NEED = [`${R}/web/data/anim_all.json`, `${R}/web/data/geo.json`,
+  `${R}/web/data/draws.json`, `${R}/work/re/flat/seg0_CODE_10000000.bin`];
+for (const f of NEED) {
+  if (!fs.existsSync(f)) {
+    console.log(`pipeline: need ${f} — ./ppcbox.sh python3 animdump.py --all `
+      + 'flat/ out/anim_all.json out/draws.json, and geodump. Skipping.');
+    process.exit(ABSENT);
+  }
+}
 const { decodeScene, buildMesh } = await import(`${R}/web/js/scene.js`);
 const { evaluateNode, composeHierarchy, composeNode, publishNode, concat } =
   await import(`${R}/web/js/anim.js`);
@@ -316,6 +330,24 @@ const matchFrame = (got, want) => {
   return hit;
 };
 
+// THE FRAMES THAT ARE NOT EXACT, NAMED. A count would let a new fault hide
+// behind a fixed one; this fails the moment a frame joins the list, AND when a
+// listed one leaves it, so the only way to move the number is to change this
+// line and say why.
+//
+//   p1/17 x5   geometry that READS TEXTURE MEMORY. joincheck already names the
+//              program, p1:26, and geodump fills the texture objects with
+//              zeroes, so its 33x33 grid is flat here and displaced in the
+//              original. Everything else in those frames matches: the whole
+//              disagreement is that one node's 2,048 triangles.
+//   p1/5, p1/14, p1/15   short by three, two and two, each at the scene's
+//              EARLIEST sampled tick and at no other.
+const KNOWN_INEXACT = new Set([
+  'p1/17@138', 'p1/17@416', 'p1/17@692', 'p1/17@970', 'p1/17@1246',
+  'p1/5@23', 'p1/14@46', 'p1/15@46',
+]);
+const inexact = [];
+
 let totalGot = 0, totalWant = 0, scenes = 0, exact = 0, totalHit = 0;
 for (const scene of A.scenes) {
   // JOIN ON THE STREAM POINTER, NOT ON (part, order). The two exports number
@@ -368,7 +400,8 @@ for (const scene of A.scenes) {
     }
     scenes++;
     const total = r.draws.length + over;
-    if (total === df.draws.length) exact++;
+    if (total === df.draws.length && hit === df.draws.length) exact++;
+    else inexact.push(`${scene.part}/${scene.order}@${frame.t}`);
     totalHit += hit;
     totalGot += total; totalWant += df.draws.length;
     console.log(`  ${scene.part}/${scene.order} t=${String(frame.t).padStart(3)}  `
@@ -413,3 +446,28 @@ console.log(`\n${scenes} frames, ${exact} exact: `
   console.log('  vertices per primitive, computed vs recorded: '
     + [...c].sort((a, b) => a[0] - b[0]).map(([k, [a, b]]) => `${k}: ${a}v${b}`).join('  '));
 }
+
+let failed = 0;
+const ok = (name, pass, detail = '') => {
+  console.log(`${pass ? 'ok  ' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`);
+  if (!pass) failed++;
+};
+console.log('');
+const surprise = inexact.filter((k) => !KNOWN_INEXACT.has(k));
+const fixed = [...KNOWN_INEXACT].filter((k) => !inexact.includes(k));
+ok('no frame disagrees that is not already accounted for', surprise.length === 0,
+  surprise.length ? surprise.slice(0, 12).join(' ')
+    + (surprise.length > 12 ? ` (+${surprise.length - 12})` : '')
+    : `${exact}/${scenes} exact`);
+// The other direction, so a fix has to be WRITTEN DOWN rather than absorbed.
+ok('every frame on the accounted-for list still disagrees', fixed.length === 0,
+  fixed.length ? `${fixed.join(' ')} now matches — take it off the list`
+    : `${KNOWN_INEXACT.size} known`);
+ok('every matched primitive is inside the export\'s own rounding',
+  worstMatched <= TOL, `worst ${worstMatched.toExponential(2)} of ${TOL}`);
+ok('the whole set of frames is joined and compared', scenes >= 140,
+  `${scenes} frames across ${A.scenes.length} scenes`);
+if (failed) process.exit(1);
+console.log('\nthe renderer reproduces the recording from raw bytecode: scene '
+  + 'stream, keyframes, three animation passes, geometry, mesh copy, camera '
+  + 'references, node walk, cull, shading, sprites, glyphs, clip and project');
