@@ -691,9 +691,10 @@ So a node is `opcode byte, resource byte, then the handler's own operands`, and
 up from a table by that byte. Type 6 skips the lookup but still consumes the
 byte; type 7 skips both.
 
-Every width table in this section counted one byte per node too few — and adding
-it **still does not make `scenegram.py` walk a stream**: 0/29, dying at the same
-byte.
+Every width table in this section counted one byte per node too few. Adding it
+did not fix the walk on its own — **the animation object was still missing**,
+and that is most of a node — but it was right, and it is one of the three
+pieces the working grammar needs. See the resolution above: 29/29.
 
 **Bit-flip probes map which header bytes matter.** Flipping one bit of each and
 rebuilding the scene, against an unpatched `[3, 3, 3, 4, 4]`:

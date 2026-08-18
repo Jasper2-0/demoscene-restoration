@@ -2327,6 +2327,12 @@ to `/dev/null` is what hid it.
 
 ## The scene stream — six wrong causes, and what actually settled them
 
+**RESOLVED: 29/29.** The seventh answer is at the end of this section. The
+six below are kept because the shape of the mistake is the lesson — every
+one of them looked for the error INSIDE the grammar, and the grammar was
+not wrong, it was incomplete. Most of a node is a structure the handlers
+never mention.
+
 Kept here in order, because the order is the point.
 
 A twenty-line checker (`scenegram.py`) applied the operand widths read from the
@@ -2362,6 +2368,40 @@ disproved rather than merely doubted. The stream format is still unknown;
 The general lesson went to `METHOD.md`: count the population before naming a
 field, and prefer perturbing the running program to reading it once reading has
 produced two answers that disagree.
+
+### The seventh answer: measure the walk instead of reading the handlers
+
+`scenewalk.py` patches the stream's OWN u16 length and watches the node count.
+The walk is bounded by that length, so the count is a step function whose steps
+sit exactly on the opcode boundaries; bisecting for each step recovers every
+opcode's byte offset without knowing what any of them consume.
+
+The first run answered the question all six attempts had been arguing about. The
+synthesised root consumes **nine** bytes and a typical op-3 node **forty-one** —
+against the eleven the handler-derived grammar predicted. A thirty-byte gap is
+not a width being off by one; it is a whole structure missing.
+
+It is the ANIMATION OBJECT. `0x1000243c` runs before every handler and reads
+loop mode, an encoded parent, an optional trigger, a keyframe count and that
+many keyframe records with five independently gated channel groups. The seven
+handlers account for at most ten bytes of a forty-one byte node. Reading them
+harder was never going to find it, and six attempts is what that cost.
+
+Two smaller things came with it. The bound is `bge`, not `bgt` — the walk stops
+when the cursor REACHES the declared end. And handlers for ops 0, 1, 2 and 4
+call `0x1000243c` AGAIN, two, three, four and one more times, for the
+sub-objects on `+0x74`; op 6 reads a count and then one byte per camera
+sub-structure.
+
+`scenegram.py` and `web/js/scene.js` both decode all 29 streams and are checked
+against the node list the original built: 395 nodes, 2,341 field comparisons,
+all eight opcodes, and 50 text nodes that come out as readable English.
+
+**The general lesson, and it is the second time this project has paid for it.**
+The geometry stream's widths were recorded as unmodellable for the same reason:
+the reading was of the wrong routine. When a grammar fails everywhere rather
+than somewhere, suspect a missing structure before a wrong width — and find an
+instrument that measures the answer rather than an argument that derives it.
 
 ## The softsynth, ported — four ways it passes state where a call graph shows none
 
