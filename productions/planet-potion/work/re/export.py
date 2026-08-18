@@ -376,7 +376,12 @@ def export_segments(flat, out):
     # the geometry and scene builders need seg3 as well, because every part-one
     # stream lives at 0x1003xxxx. Shipping only the synth's two left the page
     # unable to compute anything for eighteen of the twenty-nine scenes.
-    for pre in ('seg0_', 'seg3_', 'seg4_'):
+    # SEG2 IS THE FONT. 2,048 bytes of 1bpp mask that `_init_txtgen` expands
+    # into a 128x128 atlas and writes into the texture slot the text draws from
+    # — p1[1], p3[4] and p3[12], which are exactly the three textures the VM
+    # leaves flat in every channel. Without it every glyph in the intro is a
+    # blank quad.
+    for pre in ('seg0_', 'seg2_', 'seg3_', 'seg4_'):
         src = next(f for f in os.listdir(flat) if f.startswith(pre))
         data = open(os.path.join(flat, src), 'rb').read()
         open(f'{out}/{pre[:4]}.bin', 'wb').write(data)

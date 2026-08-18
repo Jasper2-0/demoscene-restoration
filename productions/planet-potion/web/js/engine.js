@@ -35,8 +35,8 @@
 
 import { decodeScene, buildMesh } from './scene.js';
 import { decodeProgram, buildGeometry } from './geom.js';
-import { evaluateNode, composeHierarchy, composeSub, publishNode, concat }
-  from './anim.js';
+import { evaluateNode, composeHierarchy, composeSub, publishNode, concat,
+  clearColour } from './anim.js';
 import { showScene } from './render.js';
 
 const SEG0 = 0x10000000;
@@ -219,7 +219,14 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
     }
   });
 
-  return showScene(out, activeCamera);
+  // The frame's clear colour, which `_calc_matrix` computes LAST, from the
+  // first node's channels after all three passes have run — see anim.js. It
+  // rides on the draw list as a property rather than changing the return type:
+  // every consumer treats a frame as an array of draws, and one of them is the
+  // check that pins the emitter against the recording.
+  const draws = showScene(out, activeCamera);
+  draws.clear = clearColour(composed[0]?.ch);
+  return draws;
 }
 
 /**

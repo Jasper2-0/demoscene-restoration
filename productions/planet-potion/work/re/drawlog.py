@@ -243,7 +243,16 @@ def build(stream, frames, txt_tab, obj_tab, stop=99, overlay=None, signal=None,
         # Marker: r3 = the frame, r4 = the "scene finished" halfword _play_scene
         # spins on. A handler sets it when the scene's own timeline runs out, so
         # this is where each scene's length comes from.
-        c += [H.li(0, 1)] + H.load32(3, t) + [lhz(4, 2, 0x23ba)]
+        #
+        # r5 = the frame's CLEAR COLOUR. `_calc_matrix` ends by packing the first
+        # node's channels into r2+0x2846 (0x10004f90) and `0x10001df8` loads that
+        # into r4 for W3D_ClearDrawRegion — a call the harness never reaches,
+        # because it lives in the frame loop rather than in _show_scene. So the
+        # colour cannot be recorded by intercepting the vector; it has to be read
+        # out of the global after _calc_matrix has run, which is exactly here.
+        # Without it the recording says what to draw but not what to draw it on,
+        # and part one's pale scenes replay as black on black.
+        c += [H.li(0, 1)] + H.load32(3, t) + [lhz(4, 2, 0x23ba), lwz(5, 2, 0x2846)]
         c += H.call32(12, RECORDER)
 
     # An arbitrary extra region, dumped last — for asking whether some table the
@@ -324,7 +333,8 @@ def parse(out, nodes=0):
             tex[LOG + o] = len(tex)
             continue
         if tag == 1:                                   # frame marker
-            frames.append({'time': r[1], 'done': bool(r[2]), 'draws': cur}); cur = []
+            frames.append({'time': r[1], 'done': bool(r[2]),
+                           'clear': r[3] & 0xFFFFFF, 'draws': cur}); cur = []
             continue
         if tag not in DRAW:
             continue

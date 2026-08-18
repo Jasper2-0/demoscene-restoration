@@ -235,6 +235,12 @@ const KNOWN_INEXACT = new Set([
 const inexact = [];
 
 let totalGot = 0, totalWant = 0, scenes = 0, exact = 0, totalHit = 0;
+// The frame's CLEAR COLOUR, which `_calc_matrix` computes last and which the
+// recording carries as of `clearscan.py`. Kept separate from the vertex
+// comparison because it is a different subsystem failing in a different way:
+// every primitive can be bit-exact and the frame still be black on black.
+let clearOK = 0, clearBad = 0, clearMissing = 0;
+const clearFail = [];
 for (const scene of A.scenes) {
   // JOIN ON THE STREAM POINTER, NOT ON (part, order). The two exports number
   // their scenes differently — anim_all.json counts the OVERLAY as a scene and
@@ -265,6 +271,24 @@ for (const scene of A.scenes) {
       if (of_) {
         overDraws = runScene(overlayScene, of_).draws;
         over = overDraws.length;
+      }
+    }
+    // BEFORE the concat, which returns a fresh array and drops the property —
+    // and from the SCENE rather than the overlay, because the original runs
+    // `_calc_matrix` over the overlay first and the scene second, so the
+    // scene's is the value that survives into W3D_ClearDrawRegion.
+    if (df.clear === undefined) clearMissing++;
+    else {
+      const got = r.draws.clear;
+      const packed = ((got[0] << 16) | (got[1] << 8) | got[2]) >>> 0;
+      if (packed === df.clear) clearOK++;
+      else {
+        clearBad++;
+        if (clearFail.length < 6) {
+          clearFail.push(`${scene.part}/${scene.order} t=${frame.t}: `
+            + `${packed.toString(16).padStart(6, '0')} vs `
+            + `${df.clear.toString(16).padStart(6, '0')}`);
+        }
       }
     }
     const allDraws = over ? r.draws.concat(overDraws) : r.draws;
@@ -394,6 +418,17 @@ if (byKind.size) {
 for (const l of SHOW) console.log('     ' + l);
 ok('every matched primitive is inside the export\'s own rounding',
   worstMatched <= TOL, `worst ${worstMatched.toExponential(2)} of ${TOL}`);
+// EXACT, and it can fail: the value is three channels packed into a word, so a
+// wrong channel index or a rounding mode that is not `fctiw` moves it. Reading
+// channels 0-2 instead of 16-18 gives the first row of the matrix, which for an
+// unrotated root is (1, 0, 0) — every frame in the demo clearing to pure red,
+// and nothing about that looks uninitialised.
+ok('every frame clears to the colour the original clears to',
+  clearBad === 0 && clearMissing === 0, `${clearOK}/${clearOK + clearBad} frames`
+  + (clearMissing ? `, ${clearMissing} carry no recorded colour — rerun `
+    + 'clearscan.py' : ''));
+for (const f of clearFail) console.log(`     ${f}`);
+
 ok('the whole set of frames is joined and compared', scenes >= 140,
   `${scenes} frames across ${A.scenes.length} scenes`);
 if (failed) process.exit(1);

@@ -119,18 +119,42 @@ export function localTime(t, anim, musicSignal) {
 
 /**
  * The frame's clear colour, which is not a constant and is not black.
- * `_calc_matrix` finishes by reading the first node's animation channels at
- * +0x40/+0x44/+0x48, scaling each by 255 and packing them into `r2+0x2846`
- * (0x10004f50..0x10004f90). The shim currently clears to black, so this is
- * wired up but not yet used — recorded here because it is part of the same
- * function and would otherwise be found twice.
+ *
+ * `_calc_matrix` ENDS with this, at 0x10004f50..0x10004f90, after all three
+ * passes have run: it takes the FIRST node's animation object, reads three
+ * floats out of its channel block, scales each by the 255.0 at `r2+0x2dee`, and
+ * packs them into `r2+0x2846` — which `0x10001df8` then loads into r4 as the
+ * argument to W3D_ClearDrawRegion. That is the only write to that global and
+ * the only read of it in the whole binary.
+ *
+ * CHANNELS 16, 17 AND 18, and the addressing is worth spelling out because
+ * getting it wrong is quiet. The code loads the animation object, adds 0x0c to
+ * reach the channel block, and only then reads at +0x40/+0x44/+0x48 — so the
+ * indices are 16-18, not 0-2. Reading 0-2 instead returns the first ROW OF THE
+ * MATRIX, which for an unrotated root is (1, 0, 0), and every scene in the
+ * demo then clears to pure red without anything looking obviously uninitialised.
+ * They are the same three channels `composeSub` multiplies as a colour.
+ *
+ * IT IS WHY THE OPENING IS WHITE. Part one starts on a pale ground with grey
+ * ink: its first scenes draw black-on-black under a hardcoded black clear, and
+ * the capture correlates at -0.86 — not merely wrong but photographically
+ * inverted, which is the signature of missing the ground rather than the ink.
+ *
+ * `float2int`, not `Math.round`: the pack goes through the same `fctiw` as
+ * every table index, so a component landing exactly on .5 rounds to even.
+ * And the packing is a SHIFT AND OR, not a clamp — the original has no bounds
+ * check here at all, so a channel above 1.0 carries into the next byte up and a
+ * negative one sets the high bits. Reproduced rather than corrected: this
+ * returns the three bytes of the word the original actually builds.
  */
+export const CLEAR_CHANNEL = 16;
+
 export function clearColour(ch) {
-  const b = (v) => {
-    const n = Math.round(v * 255);
-    return n < 0 ? 0 : (n > 255 ? 255 : n);
-  };
-  return [b(ch[0]), b(ch[1]), b(ch[2])];
+  const comp = (i) => fctiw(f32(ch?.[CLEAR_CHANNEL + i] ?? 0) * 255.0);
+  let w = comp(0);
+  w = ((w << 8) | comp(1)) >>> 0;
+  w = ((w << 8) | comp(2)) >>> 0;
+  return [(w >>> 16) & 0xff, (w >>> 8) & 0xff, w & 0xff];
 }
 
 // --- pass 1, in full ---------------------------------------------------------

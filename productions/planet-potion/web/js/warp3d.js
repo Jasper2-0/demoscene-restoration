@@ -37,11 +37,23 @@ void main() {
   // Pixel centre to NDC. y flips: the original's origin is top-left.
   vec2 ndc = vec2(aPos.x / uViewport.x * 2.0 - 1.0,
                   1.0 - aPos.y / uViewport.y * 2.0);
-  // REVERSED DEPTH. Warp3D puts 1.0 at the front plane and 0.0 at the back and
-  // compares with GEQUAL, so the value passes through and the clear/compare are
-  // inverted instead (see setup()). The exact encoding the driver applies before
-  // normalising is one of the three things marked unknown in PORT_SPEC section 6.
-  gl_Position = vec4(ndc, aPos.z * 2.0 - 1.0, 1.0);
+  // PERSPECTIVE-CORRECT, and it has to be reconstructed rather than assumed.
+  // The vertices arrive ALREADY PROJECTED — x and y in pixels, w = 1/zsrc — so
+  // handing them to the rasteriser with w = 1.0 makes every varying interpolate
+  // AFFINELY across the triangle. That is the classic texture-swim of a
+  // software rasteriser without a divide, and it is not what this hardware did:
+  // the recorded render state has W3D_PERSPECTIVE true, and the Permedia 2
+  // divides per span.
+  //
+  // Multiplying the whole clip position back up by zsrc restores the homogeneous
+  // coordinate the projection divided out. x/w and z/w come back to exactly the
+  // values above, so nothing about the geometry moves; what changes is that the
+  // rasteriser now interpolates u, v and the colour by 1/w, which is what
+  // "perspective correct" means. On this intro's ground planes the UVs run past
+  // 5,000 texels, so an affine error there does not distort the texture, it
+  // scrambles which part of it is sampled.
+  float zsrc = 1.0 / max(aPos.w, 1e-9);
+  gl_Position = vec4(ndc * zsrc, (aPos.z * 2.0 - 1.0) * zsrc, zsrc);
 
   vUV    = aUV * uTexelScale;
   vColor = aColor;
@@ -66,6 +78,7 @@ uniform sampler2D uTex;
 uniform vec3  uFogColor;
 uniform float uTextured;
 uniform float uTexEnv;      // 0 replace, 1 modulate, 2 decal — see main()
+uniform float uTexAlpha;    // 1 = multiply in the texture's alpha; see main()
 
 out vec4 oColor;
 
@@ -97,8 +110,29 @@ void main() {
         : (uTexEnv < 1.5 ? texel.rgb * vColor.rgb
                          : mix(vColor.rgb, texel.rgb, texel.a));
   }
-  // Alpha modulates in every mode, and it is what drives the fades.
-  float a = texel.a * vColor.a;
+  // TEXTURE ALPHA REACHES THE BLEND, and the capture is what says so: dropping
+  // it costs 0.12 of correlation over part one and loses on 13 of 16 scenes,
+  // worst on 0x25ee at -0.50. That is worth stating because the font argues the
+  // other way and is wrong to -- _init_txtgen fills the glyph atlas with
+  // 0x00ffffff (lis r11, 0xff; ori r11, r11, 0xffff at 0x1000139c), alpha ZERO
+  // on every set pixel, so a strict reading makes the credits invisible. They
+  // are legible in the capture, so SOMETHING gives the glyph atlas an opaque
+  // alpha, and it is not this multiply -- see installFont in textures.js.
+  //
+  // WHICH WAY ROUND, though, is a separate question, because byte 0 of every
+  // texel is written as 255 - mask (toARGB in texturevm.js), so the channel is
+  // stored inverted with respect to coverage. If the hardware's alpha is the
+  // complement, the glyph quads become OPAQUE BLACK RECTANGLES WITH WHITE
+  // LETTERS -- which is exactly the black caption bar the capture shows under
+  // the credits, and which nothing in our render currently produces.
+  //
+  //   0  ignore the texture's alpha entirely
+  //   1  a = texel.a * vColor.a
+  //   2  a = (1 - texel.a) * vColor.a
+  //
+  // ?texalpha= picks; see the measurement in the comment on this.texAlpha.
+  float ta = uTexAlpha < 0.5 ? 1.0 : (uTexAlpha < 1.5 ? texel.a : 1.0 - texel.a);
+  float a = ta * vColor.a;
 
   oColor = vec4(mix(rgb, uFogColor, vFog), a);
 }`;
@@ -132,7 +166,8 @@ export class Warp3D {
     }
     this.prog = prog;
     this.u = Object.fromEntries(['uViewport', 'uTexelScale', 'uFog', 'uFogColor',
-      'uTex', 'uTextured', 'uTexEnv'].map((n) => [n, gl.getUniformLocation(prog, n)]));
+      'uTex', 'uTextured', 'uTexEnv', 'uTexAlpha']
+      .map((n) => [n, gl.getUniformLocation(prog, n)]));
 
     // 0 replace, 1 MODULATE, 2 decal. The recorded stream cannot decide this —
     // it carries the draw calls, and every value of this knob consumes them
@@ -153,7 +188,8 @@ export class Warp3D {
     // setting — W3D_SetState carries a texture-environment mode per draw and
     // the recorded stream does not carry it — but that is a hypothesis and this
     // comment is the evidence, not the answer. `?texenv=1` runs the other way.
-    this.texEnv = 0;
+    this.texEnv = 1;
+    this.texAlpha = 1;
 
     this.vao = gl.createVertexArray();
     this.vbo = gl.createBuffer();
@@ -202,14 +238,17 @@ export class Warp3D {
     const { gl } = this;
     let tex = this.textures.get(index);
     if (!tex) { tex = gl.createTexture(); this.textures.set(index, tex); }
-    const rgba = new Uint8Array(pixels.length);
-    for (let i = 0; i < pixels.length; i += 4) {
-      rgba[i] = pixels[i + 1]; rgba[i + 1] = pixels[i + 2];
-      rgba[i + 2] = pixels[i + 3]; rgba[i + 3] = pixels[i];
-    }
+    // ALREADY RGBA, AND IT MUST NOT BE SWIZZLED AGAIN. The arena's surface is
+    // A8R8G8B8, but `textures.js` converts on the way out of the VM
+    // (`argbToRGBA`, called at its line 84), so what arrives here is in the byte
+    // order GL wants. A second rotation here reads R from the green byte and
+    // blue from the alpha byte, which is opaque 255 for every texture in the
+    // intro — so every surface comes out saturated blue. That is what the
+    // ground looked like for a while, and it looked plausible enough to be
+    // blamed on fog and on the texture environment before it was measured.
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, TEX_SIZE, TEX_SIZE, 0,
-      gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+      gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     // W3D_LINEAR for both min and mag — bilinear, and NO mipmaps: the Permedia 2
     // driver never exposed them on this path, so a port that generates them is
     // sharper than the original at distance.
@@ -251,6 +290,7 @@ export class Warp3D {
     gl.uniform1i(this.u.uTex, 0);
     gl.uniform1f(this.u.uTextured, tex ? 1 : 0);
     gl.uniform1f(this.u.uTexEnv, this.texEnv);
+    gl.uniform1f(this.u.uTexAlpha, this.texAlpha);
     gl.uniform2f(this.u.uViewport, SCREEN_W, SCREEN_H);
     gl.uniform1f(this.u.uTexelScale, 1 / TEX_SIZE);
     gl.uniform3f(this.u.uFog, this.fog.start, this.fog.end, this.fog.enabled ? 1 : 0);

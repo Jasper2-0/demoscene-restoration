@@ -15,6 +15,59 @@
 // three's has 21 and uses 0..20.
 
 import { decode, run, toARGB, SIZE, PIXELS } from './texturevm.js';
+import { expandAtlas } from './font.js';
+
+// THE FONT SLOTS. The texture VM does not produce these: `_init_txtgen` expands
+// seg2's 1bpp mask into a 128x128 atlas and writes it into the texture buffer
+// directly, so the VM's program for those slots produces nothing and they come
+// out flat in every channel — which is how they were found. They are also
+// exactly the slots every text node in the intro draws from.
+export const FONT_SLOTS = { p1: [1], p3: [4, 12] };
+
+/** Overwrite the font slots with the expanded atlas, in place. */
+/**
+ * Give the glyph atlas the alpha it needs, which the intro does not store.
+ *
+ * AN OPEN QUESTION, MARKED AS ONE. `_init_txtgen` provably writes 0x00ffffff --
+ * `lis r11, 0xff` then `ori r11, r11, 0xffff` at 0x1000139c -- so every set
+ * pixel of the atlas has an alpha byte of ZERO, and the texture is allocated
+ * through the same single `W3D_AllocTexObj` site (0x10002064) and the same
+ * A8R8G8B8 format as every other texture. Taken literally the credits are
+ * invisible, and they are plainly legible in the capture.
+ *
+ * Two readings were tested against the capture and both lost. Ignoring texture
+ * alpha everywhere scores +0.336 over part one against +0.458 for using it, and
+ * complementing it -- which the `255 - mask` convention in `toARGB` makes a
+ * reasonable guess, and which would have drawn the credits' black bar for free
+ * -- scores +0.056. So the multiply is right and the atlas is the exception.
+ *
+ * Until the mechanism is found this supplies the alpha a font atlas obviously
+ * wants: opaque where a bit was set, transparent where it was not. That is a
+ * DEVIATION from the binary, deliberately narrow and confined to three texture
+ * slots, and it is the only one in the texture path.
+ */
+function coverAlpha(rgba) {
+  const out = new Uint8Array(rgba);
+  for (let i = 0; i < out.length; i += 4) out[i + 3] = rgba[i] ? 0xff : 0;
+  return out;
+}
+
+export function installFont(byPart, seg2) {
+  if (!seg2) return 0;
+  const atlas = expandAtlas(seg2);
+  let n = 0;
+  for (const [part, slots] of Object.entries(FONT_SLOTS)) {
+    for (const i of slots) {
+      // THROUGH THE SAME CONVERSION as everything else in this array.
+      // `expandAtlas` reproduces `_init_txtgen` faithfully, which means it
+      // returns the arena's A8R8G8B8 byte order; dropping that straight into a
+      // slot that holds RGBA rotates every channel by one and the intro's text
+      // comes out cyan -- which is what it did until this was measured.
+      if (byPart[part]?.[i]) { byPart[part][i] = coverAlpha(argbToRGBA(atlas)); n++; }
+    }
+  }
+  return n;
+}
 
 /**
  * A8R8G8B8 (the VM's own order, as `W3D_AllocTexObj` receives it) -> RGBA

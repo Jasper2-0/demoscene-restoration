@@ -121,7 +121,9 @@ for (const part of parts) {
   let frames = null;
   await withPage({
     root: 'productions/planet-potion/web', path: '/index.html',
-    query: `?show=${part}&at=0${arg('texenv', null) ? `&texenv=${arg('texenv')}` : ''}`,
+    query: `?show=${part}&at=0`
+      + (arg('texenv', null) !== null ? `&texenv=${arg('texenv')}` : '')
+      + (arg('texalpha', null) !== null ? `&texalpha=${arg('texalpha')}` : ''),
     // A PERSISTENT PROFILE, so the page's IndexedDB survives between runs and
     // the softsynth is paid for once rather than once per invocation. Puppeteer
     // hands every launch a fresh temp profile otherwise, which is right for a

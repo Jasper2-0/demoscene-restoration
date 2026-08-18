@@ -37,7 +37,7 @@
 // It is no longer an input to the picture.
 
 import { Warp3D, SCREEN_W, SCREEN_H } from './warp3d.js';
-import { buildTextures, loadTextures } from './textures.js';
+import { buildTextures, loadTextures, installFont } from './textures.js';
 import { parseDBM } from './dbm.js';
 import { render } from './dbmplayer.js';
 import { generateModule } from './synth.js';
@@ -78,6 +78,8 @@ async function loadBytes(path) {
 let segments = null;
 const loadSegments = async () => (segments ??= {
   seg0: await loadBytes('./data/seg0.bin'),
+  // 2 KB of 1bpp font mask. Small, and every glyph in the intro depends on it.
+  seg2: await loadBytes('./data/seg2.bin').catch(() => null),
   // SEG3 IS THE ENGINE'S, not the synth's: every part-one scene and geometry
   // program is at 0x1003xxxx, so without it eighteen of the twenty-nine scenes
   // cannot be decoded at all.
@@ -104,8 +106,13 @@ async function textureBinder(w3d, programs, kernels, side, cache) {
     : await cached(`tex:${cache.key}`, 'v1',
       async () => buildTextures(programs, kernels), { skip: cache.skip });
   const { byPart, failures } = built.value;
+  // The atlas goes in AFTER the cache, not into it: it is 64 KB the VM did not
+  // make, and caching a doctored set would make the cached and uncached paths
+  // differ in a way nothing would notice.
+  const fontSlots = installFont(byPart, cache.seg2);
   cache.report.push(`textures ${built.hit ? 'cached' : 'built'} `
-    + `${(built.ms / 1000).toFixed(1)}s`);
+    + `${(built.ms / 1000).toFixed(1)}s`
+    + (fontSlots ? `, font into ${fontSlots} slots` : ', NO FONT'));
   let live = null;
   return {
     failures, side,
@@ -129,6 +136,8 @@ async function main() {
   w3d.clear([0, 0, 0]);
   // ?texenv=0|1|2 — replace, modulate, decal. Undecided; see warp3d.js.
   if (params.has('texenv')) w3d.texEnv = Number(params.get('texenv'));
+  // ?texalpha=1 — put the texture's alpha back into the blend; see warp3d.js.
+  if (params.has('texalpha')) w3d.texAlpha = Number(params.get('texalpha'));
 
   // Which side of each pipeline stage to run. Reported through __demo.state()
   // whatever happens, so an inspector sweep records the provenance of the
@@ -153,6 +162,7 @@ async function main() {
     try {
       const seg = await loadSegments();
       cache.key = hashBytes(seg.seg0, seg.seg3, seg.seg4);
+      cache.seg2 = seg.seg2;
     } catch { /* the fetches below report their own failure */ }
   }
 
@@ -237,6 +247,10 @@ async function main() {
    * a scene to the schedule — the original draws it INTO each one — which is
    * why it has a slot of its own and never a span.
    */
+  /** 0-255 bytes as the shim's 0..1 floats; missing means the old black. */
+  const clearOf = (rgb) => (rgb ? [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255]
+    : [0, 0, 0]);
+
   const renderComputed = (span, tick, signal, showTick = null, paint = true) => {
     const order = engine.orderOfSlot(span.part, span.slot);
     if (order == null) return null;
@@ -245,6 +259,13 @@ async function main() {
     // part one's scenes carry four cameras and play three times over.
     const cam = span.camera ?? 0;
     let draws = engine.frame(span.part, order, tick, signal, cam);
+    // THE SCENE'S clear colour, taken before the overlay is appended — and
+    // taken from the scene rather than the overlay on purpose. The original
+    // runs `_calc_matrix` over the overlay first and the scene head second,
+    // and each run overwrites the same global, so the scene head is the one
+    // that survives to W3D_ClearDrawRegion. (It also has to be read here
+    // because `concat` returns a fresh array and would drop the property.)
+    const clear = draws.clear;
     // THE OVERLAY RUNS ON THE PART'S CLOCK, not the scene's — it fades once at
     // the start of part one and is invisible for the rest of it. Given the
     // scene's tick instead it restarts at every scene, and its quads are
@@ -264,7 +285,10 @@ async function main() {
     textures?.use(span.part);
     w3d.setFog(fogFor(span.fog));
     w3d.setZBuffer(false, false);
-    w3d.clear([0, 0, 0]);
+    // The engine computes the clear colour as the last thing `_calc_matrix`
+    // does, and it is NOT black: part one opens on white and part three's
+    // backgrounds are coloured and animated. See anim.js `clearColour`.
+    w3d.clear(clearOf(clear));
     const info = w3d.drawFrame({ draws: flattenDraws(draws) });
     return { ...info, slot: span.slot, part: span.part, t: tick };
   };
@@ -284,7 +308,13 @@ async function main() {
     w3d.setFog(scene.fog === null || scene.fog === undefined
       ? null : fogPresets[scene.fog]);
     w3d.setZBuffer(false, false);
-    w3d.clear([0, 0, 0]);
+    // Recorded frames carry the clear colour too, as of the drawlog change that
+    // reads r2+0x2846 into the frame marker — but a draws.json written before
+    // that has no `clear` field, and falling back to black there is what the
+    // page did for every frame until now.
+    w3d.clear(frame.clear === undefined ? [0, 0, 0]
+      : clearOf([(frame.clear >> 16) & 0xff, (frame.clear >> 8) & 0xff,
+        frame.clear & 0xff]));
     const info = w3d.drawFrame(frame);
     return { ...info, slot: scene.slot, part: scene.part, t: frame.t };
   };
