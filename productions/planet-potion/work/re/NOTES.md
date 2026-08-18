@@ -2641,3 +2641,37 @@ cx, cy and scale, worst |diff| 1.5e-5 on the one that moves, and the parented
 node's `flags3 0x20|0x10` copy of channels 21..23 holds exactly. It now fails
 when the node count is zero. This is METHOD.md's rule about checks that cannot
 exit non-zero, found in the suite that was written to enforce it.
+
+
+## The (prim, texture) diagnostic, and why it is not a check
+
+Matching every recorded draw against the (primitive, texture) pairs its scene
+offers reaches **73%** and stops there. It is written down here because it keeps
+looking like a check and is not one, and because two sessions have now spent
+time on it.
+
+What it did establish, and this part is solid: a mesh face's texture is
+`face+0x54` and a non-mesh node's is `node+0x04`. Correcting the decode base
+from `TEXCTR` to `FAKEOBJ` took the match from 38% to 73%, which is not the kind
+of jump a coincidence produces.
+
+What it cannot establish is the remaining 27%, and the reasons it cannot are
+worth listing so nobody re-derives them:
+
+* **the two sides are different mappings of the same pointer.** `drawlog` builds
+  a dict from `W3D_AllocTexObj` return values in CALL ORDER; `arenadump`
+  computes `(ptr - FAKEOBJ) / TEXSTRIDE`. They agree only if the stub hands out
+  exactly `FAKEOBJ + n * TEXSTRIDE` and nothing else allocates in between;
+* **it is a set-membership test, not a per-draw one.** It asks whether a texture
+  appears anywhere in the scene, which is weak where it passes and uninformative
+  where it fails;
+* **the failures are not a constant offset.** Searching every shift from -60 to
+  +60 finds no `k` that maps one side onto the other for any scene, so it is not
+  a simple ordinal skew;
+* **and at least one scene defeats the obvious reading entirely.** p3/1's faces
+  offer texture 0 and nothing else, its nodes offer 0, 2, 16 and 18, and its
+  draws are dominated by texture 11 — which is on neither list.
+
+**Do not spend more on it in this form.** The comparison that supersedes it is a
+per-draw one against `draws.json`, available once the pipeline runs end to end,
+and it will answer the question as a side effect rather than as an investigation.
