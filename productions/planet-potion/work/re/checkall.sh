@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Thirty checks accumulated over the work and there is no point in
-# remembering thirty invocations. Each passes or names what drifted; none of them
+# Thirty-one checks accumulated over the work and there is no point in
+# remembering thirty-one invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py used to be the one check expected to FAIL, at 0/29. It passes
@@ -222,6 +222,12 @@ run "geovertcheck — op0's generator, vertex positions bit for bit" \
 # the project's life.
 run "scenegram — every scene stream decodes to the nodes the original built" \
   python3 "$HERE/scenegram.py" "$FLAT" "$HERE/out/arena.json"
+
+# And the JavaScript twin, which is the one the page will use. Both walk the
+# same grammar against the same oracle, so a divergence between them shows up
+# as a divergence from the original rather than going unnoticed.
+run "scenecheck — the scene decoder the page uses" \
+  node "$HERE/scenecheck.mjs" "$FLAT" "$HERE/out/arena.json"
 
 if [ $rc -eq 0 ]; then
   printf '\nall suites that could run passed'
