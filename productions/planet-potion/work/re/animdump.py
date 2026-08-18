@@ -31,6 +31,7 @@ Structures are PORT_SPEC section 3a:
       +0x6c f32 time origin     +0x0fc u32 next
       +0x70 u16 music trigger   +0x100 u32 prev
 """
+import collections
 import json
 import os
 import struct
@@ -420,7 +421,7 @@ def dump_all(flat, times, per_scene=None):
     for part, disps, txt, obj in JOBS:
         for order, disp in enumerate(disps):
             stream = struct.unpack_from('>I', d0, r2 + disp - 0x10000000)[0]
-            want = (per_scene or {}).get(stream, times)
+            want = per_scene[stream] if per_scene is not None else times
             try:
                 doc = dump(flat, stream, want, txt_tab=txt, obj_tab=obj)
             except SystemExit as e:
@@ -446,6 +447,14 @@ def main():
             per_scene = {int(sc['stream'], 16):
                          sorted({f['t'] for f in sc['frames']})
                          for sc in D['scenes']}
+            # THE OVERLAY IS NOT A SCENE TO draws.json — it is drawn INTO every
+            # part-one scene rather than being one — so it has no ticks of its
+            # own and needs the union of everyone else's. Without this it gets
+            # the default three, and a part-one frame sampled at any other tick
+            # silently loses the overlay's primitives: p1/5, p1/14 and p1/15
+            # were short by three, two and two for exactly this reason.
+            union = sorted({t for ts in per_scene.values() for t in ts})
+            per_scene = collections.defaultdict(lambda: union, per_scene)
             rest = rest[1:]
         times = [int(x) for x in rest] or [92, 200, 400]
         drawlog.setflat(flat)

@@ -340,11 +340,14 @@ const matchFrame = (got, want) => {
 //              zeroes, so its 33x33 grid is flat here and displaced in the
 //              original. Everything else in those frames matches: the whole
 //              disagreement is that one node's 2,048 triangles.
-//   p1/5, p1/14, p1/15   short by three, two and two, each at the scene's
-//              EARLIEST sampled tick and at no other.
+// p1/5, p1/14 and p1/15 were on this list, short by three, two and two at their
+// earliest tick and at no other. They were the OVERLAY: animdump gave it only
+// the default ticks, because it is not a scene to draws.json and so has none of
+// its own, and its primitives were being counted but never matched. Both halves
+// are fixed — it gets the union of every scene's ticks, and its draws go into
+// the same set everything else is matched against.
 const KNOWN_INEXACT = new Set([
   'p1/17@138', 'p1/17@416', 'p1/17@692', 'p1/17@970', 'p1/17@1246',
-  'p1/5@23', 'p1/14@46', 'p1/15@46',
 ]);
 const inexact = [];
 
@@ -370,21 +373,26 @@ for (const scene of A.scenes) {
       continue;
     }
     // Draw the overlay on top, at the same tick, exactly as the show does.
-    let over = 0;
+    // ITS PRIMITIVES ARE PART OF THE FRAME, not an addendum to the count. They
+    // have to go into the same set everything is matched against, or a frame
+    // that draws all of them still reports as short.
+    let over = 0, overDraws = [];
     if (dd.overlay && overlayScene && scene.stream !== OVERLAY) {
       const of_ = overlayScene.frames.find((f) => f.t === frame.t);
       if (of_) {
-        over = runScene(overlayScene, of_).draws.length;
+        overDraws = runScene(overlayScene, of_).draws;
+        over = overDraws.length;
       }
     }
-    let hit = matchFrame(r.draws, df.draws), cam = 0;
+    const allDraws = over ? r.draws.concat(overDraws) : r.draws;
+    let hit = matchFrame(allDraws, df.draws), cam = 0;
     const nCameras = r.nodes.filter((x) => x.type === 6).length;
     for (let k = 1; k < nCameras; k++) {
       let alt; try { alt = runScene(scene, frame, k); } catch { continue; }
-      const h = matchFrame(alt.draws, df.draws);
+      const h = matchFrame(alt.draws.concat(overDraws), df.draws);
       if (h > hit) { hit = h; cam = k; r = alt; }
     }
-    for (const d of r.draws) bump(sizeGot, d.v.length);
+    for (const d of allDraws) bump(sizeGot, d.v.length);
     for (const d of df.draws) bump(sizeWant, d.v.length / 10);
     if (process.env.PIPEDEBUG === scene.stream) {
       r.nodes.forEach((nd, i) => { if (nd.type === 5) console.log(
@@ -423,7 +431,7 @@ for (const scene of A.scenes) {
         }
         return m;
       };
-      const m = tally(r.draws, 0);
+      const m = tally(allDraws, 0);
       for (const [key, [, b]] of tally(df.draws, 1)) {
         const e = m.get(key) ?? [0, 0]; e[1] = b; m.set(key, e);
       }
