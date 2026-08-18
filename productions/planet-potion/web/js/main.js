@@ -98,7 +98,7 @@ const loadSegments = async () => (segments ??= {
  * when the part changes. Uploading is cheap; regenerating is not, so the pixels
  * are built once and kept.
  */
-async function textureBinder(w3d, programs, kernels, side, cache) {
+async function textureBinder(w3d, programs, kernels, side, cache, pointSampled) {
   // 69 programs of texture VM is the second-biggest thing between a reload and
   // a picture. The pixels are a pure function of the bytecode, so they cache.
   const built = side === 'recorded'
@@ -119,7 +119,13 @@ async function textureBinder(w3d, programs, kernels, side, cache) {
     counts: Object.fromEntries(Object.entries(byPart).map(([k, v]) => [k, v.length])),
     use(part) {
       if (part === live || !byPart[part]) return;
-      byPart[part].forEach((rgba, i) => { if (rgba) w3d.uploadTexture(i, rgba); });
+      // The textures W3D_SetFilter is never called on keep AllocTexObj's
+      // default, which is point sampling — see uploadTexture. The list comes
+      // out of the recorded library log, in render_state.json.
+      const point = new Set(pointSampled?.[part]?.point_sampled ?? []);
+      byPart[part].forEach((rgba, i) => {
+        if (rgba) w3d.uploadTexture(i, rgba, point.has(i));
+      });
       live = part;
     },
   };
@@ -138,6 +144,8 @@ async function main() {
   if (params.has('texenv')) w3d.texEnv = Number(params.get('texenv'));
   // ?texalpha=1 — put the texture's alpha back into the blend; see warp3d.js.
   if (params.has('texalpha')) w3d.texAlpha = Number(params.get('texalpha'));
+  // ?filter=linear — bilinear instead of the original's point sampling.
+  if (params.has('filter')) w3d.filter = params.get('filter');
 
   // Which side of each pipeline stage to run. Reported through __demo.state()
   // whatever happens, so an inspector sweep records the provenance of the
@@ -172,8 +180,13 @@ async function main() {
   // and had never been called by anything — the intro turns linear fog on for
   // four of part one's scenes and the page was rendering all of them clear.
   let fogPresets = [];
+  // Which textures W3D_SetFilter is never called on, per part — they keep
+  // AllocTexObj's point sampling. See uploadTexture in warp3d.js.
+  let texFilter = null;
   try {
-    fogPresets = (await loadJSON('./data/render_state.json')).fog_presets ?? [];
+    const rs = await loadJSON('./data/render_state.json');
+    fogPresets = rs.fog_presets ?? [];
+    texFilter = rs.texture_filter ?? null;
   } catch {
     // Older dataset: no presets, so no fog. Not worth a message of its own.
   }
@@ -200,7 +213,8 @@ async function main() {
   try {
     const [programs, kernels] = await Promise.all([
       loadJSON('./data/tex_programs.json'), loadJSON('./data/tex_kernels.json')]);
-    textures = await textureBinder(w3d, programs, kernels, stages.textures, cache);
+    textures = await textureBinder(w3d, programs, kernels, stages.textures,
+      cache, texFilter);
   } catch {
     // Without the bytecode there is nothing to generate FROM. The draw stream
     // still replays, untextured, which is worth saying rather than showing.

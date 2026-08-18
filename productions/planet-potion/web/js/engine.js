@@ -228,12 +228,21 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
           x: v.p[0], y: v.p[1], z: v.p[2],
           c0: v.rgba[0], c1: v.rgba[1], c2: v.rgba[2], c3: v.rgba[3],
           nx: v.n[0], ny: v.n[1], nz: v.n[2],
+        })),
+        // The camera's copy needs the object chain too — it is the same mesh
+        // through a different matrix, so its face intensities are different
+        // numbers computed the same way.
+        objects: S.meshes[t].faces.map((f) => ({
+          nx: f.normal?.[0] ?? 0, ny: f.normal?.[1] ?? 0, nz: f.normal?.[2] ?? 0,
         })) };
       publishNode(fresh, ch, 1);
       out[i].refs.push({
         ...out[i], type: 5, built: 0, refs: null, sprites: [],
-        objects: S.meshes[t].faces.map((f) => ({
-          faces: [{ ...f, vertices: f.vertices.map((k, corner) => {
+        objects: S.meshes[t].faces.map((f, fi) => ({
+          faces: [{ ...f,
+            intensity: f.layer ? (f.normal?.[2] ?? 0)
+              : (fresh.objects[fi]?.onz ?? 0),
+            vertices: f.vertices.map((k, corner) => {
             const v = fresh.vertices[k];
             return { p: [v.ox, v.oy, v.oz], scaled: [v.o0, v.o1, v.o2, v.o3],
               uv: f.uv?.[corner] ?? [0, 0],

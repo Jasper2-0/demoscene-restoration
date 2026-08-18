@@ -190,6 +190,7 @@ export class Warp3D {
     // comment is the evidence, not the answer. `?texenv=1` runs the other way.
     this.texEnv = 1;
     this.texAlpha = 1;
+    this.filter = null;   // null = per texture; 'linear'/'nearest' force it
 
     this.vao = gl.createVertexArray();
     this.vbo = gl.createBuffer();
@@ -233,8 +234,8 @@ export class Warp3D {
       : { ...this.fog, enabled: false };
   }
 
-  /** W3D_AllocTexObj + W3D_UploadTexture + W3D_SetFilter(2, 2). */
-  uploadTexture(index, pixels) {
+  /** W3D_AllocTexObj + W3D_UploadTexture, and W3D_SetFilter on most of them. */
+  uploadTexture(index, pixels, pointSampled = false) {
     const { gl } = this;
     let tex = this.textures.get(index);
     if (!tex) { tex = gl.createTexture(); this.textures.set(index, tex); }
@@ -249,11 +250,28 @@ export class Warp3D {
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, TEX_SIZE, TEX_SIZE, 0,
       gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    // W3D_LINEAR for both min and mag — bilinear, and NO mipmaps: the Permedia 2
-    // driver never exposed them on this path, so a port that generates them is
-    // sharper than the original at distance.
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    // THE FILTER IS PER TEXTURE, and that is the whole of it. `_alloc_txt` has
+    // one W3D_SetFilter call site but it runs per texture and DOES NOT RUN FOR
+    // EVERY ONE — part one calls it on 44 of 48, part three on 14 of 21. The
+    // ones it skips keep whatever W3D_AllocTexObj left them.
+    //
+    // Which settles what the argument means. `W3D_SetFilter(2, 2)` is
+    // W3D_LINEAR, as the note always said, and the DEFAULT is point sampling:
+    // part one's vertical bands are texture 4, one of the four it skips, and
+    // along one scanline of 0x25aa the capture holds flat plateaus with hard
+    // steps — 203, then 1-2 for twenty-six pixels, then 76, then 200 — where
+    // bilinear gives a continuous ramp with no plateau anywhere. Meanwhile the
+    // second half's surfaces are visibly bilinear in the capture, and every
+    // texture they use is one SetFilter was called on.
+    //
+    // Reading the argument alone could not tell those apart. Only noticing that
+    // some textures never get the call could, and that is in the recorded
+    // library log rather than in the code — `scan_texture_filters` in export.py
+    // writes the list into render_state.json.
+    const f = this.filter === 'linear' ? gl.LINEAR
+      : (this.filter === 'nearest' || pointSampled ? gl.NEAREST : gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
     // No W3D_SetWrapMode call exists, so the default stands — and it must be
     // REPEAT, because recorded UVs reach 5888 on a 128-texel texture.
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);

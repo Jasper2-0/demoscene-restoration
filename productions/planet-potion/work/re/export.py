@@ -87,7 +87,54 @@ def export_font_atlas(flat, out):
     return sum(1 for i in range(0, len(img), 4) if img[i:i + 4] != b'\0' * 4)
 
 
-def export_render_state(d0, r2, out):
+def scan_texture_filters(sch):
+    """Which textures W3D_SetFilter is called on, and which it is not.
+
+    IT IS NOT A GLOBAL SETTING. `_alloc_txt` has one SetFilter call site
+    (0x10002098) but it runs per texture, and it does not run for every one:
+    part one calls it on 44 of 48 and part three on 14 of 21. The rest keep
+    whatever `W3D_AllocTexObj` left, and the two classes look different on
+    screen -- part one's vertical bands are texture 4, which is one of the ones
+    it skips, and the capture draws them as hard-edged flat plateaus where a
+    bilinear filter gives a continuous ramp.
+
+    So `W3D_SetFilter(2, 2)` is W3D_LINEAR after all, and the DEFAULT is point
+    sampling. Reading the argument alone could not tell those apart; only the
+    fact that some textures never get the call does.
+
+    Indices are in AllocTexObj order, which is the order the draw stream names
+    textures in and the order rendertex.py renders the programs.
+    """
+    jobs = [('p1', P1_OVERLAY, 0x2642, 0x2706), ('p3', None, 0x27a6, 0x27fe)]
+    res = {}
+    for part, over, txt, obj in jobs:
+        disp, start, dur, fog = next(iter(spans(sch[part]['schedule'])))
+        out, _ = drawlog.run(drawlog.g(disp), frames=(max(1, dur // 2),),
+                             txt_tab=txt, obj_tab=obj,
+                             overlay=drawlog.g(over) if over else None)
+        if not out:
+            res[part] = None
+            continue
+        end = struct.unpack('>I', out[:4])[0]
+        log = out[4:4 + drawlog.LOGSZ]
+        tex, filt = {}, {}
+        for o in range(0, min(end - drawlog.LOG, drawlog.LOGSZ), drawlog.REC):
+            r = struct.unpack_from('>16i', log, o)
+            if r[0] == -94:                      # W3D_AllocTexObj
+                tex[drawlog.LOG + o] = len(tex)
+            elif r[0] == -118:                   # W3D_SetFilter(ctx, tex, min, mag)
+                h = r[2] & 0xFFFFFFFF
+                if h in tex:
+                    filt[tex[h]] = [r[3] & 0xFFFFFFFF, r[4] & 0xFFFFFFFF]
+        res[part] = {
+            'count': len(tex),
+            'point_sampled': [i for i in range(len(tex)) if i not in filt],
+            'args': sorted({tuple(v) for v in filt.values()}),
+        }
+    return res
+
+
+def export_render_state(d0, r2, out, sch=None):
     fog = []
     for disp in FOG_PRESETS:
         a = r2 + disp - BASE
@@ -105,6 +152,11 @@ def export_render_state(d0, r2, out):
         'fog_mode': 'W3D_FOG_LINEAR (interpolated per-vertex on Permedia 2)',
         'fog_presets': fog,
         'filter': ['W3D_LINEAR', 'W3D_LINEAR'],
+        'filter_note': 'PER TEXTURE. SetFilter is not called on every texture; '
+                       'the ones it skips keep AllocTexObj\'s default, which '
+                       'the capture shows is point sampling. See '
+                       'texture_filter and scan_texture_filters.',
+        'texture_filter': scan_texture_filters(sch) if sch else None,
         'texture_format': 'W3D_A8R8G8B8 (format 6), 128x128',
         'primitives': ['W3D_DrawTriFan', 'W3D_DrawLineStrip'],
         'framebuffer': {'width': 640, 'height': 480, 'depth': 16,
@@ -411,7 +463,9 @@ def main():
                                        H.preload_tables(d0).items()))
     print('segments    ...', end=' ', flush=True); nb = export_segments(flat, out); print(f'{nb} bytes for the softsynth')
     print('font        ...', end=' ', flush=True); ng = export_font(d0, out); print(f'{ng} glyphs')
-    print('render state...', end=' ', flush=True); nf = export_render_state(d0, r2, out); print(f'{nf} fog presets')
+    print('render state...', end=' ', flush=True)
+    nf = export_render_state(d0, r2, out, showorder.schedule(flat, ()))
+    print(f'{nf} fog presets')
     print('font atlas  ...', end=' ', flush=True); na = export_font_atlas(flat, out); print(f'{na} set pixels')
     print('tex kernels ...', flush=True)
     sys.argv = ['x', flat, f'{out}/tex_kernels.json']; texconv.main()

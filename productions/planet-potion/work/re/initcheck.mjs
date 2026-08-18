@@ -149,7 +149,8 @@ ok('the two clip vertex arrays are 100 vertices of 0x24 apart',
 
 if (fs.existsSync(drawsJson) && fs.existsSync(stateJson)) {
   const draws = JSON.parse(fs.readFileSync(drawsJson, 'utf8'));
-  const presets = JSON.parse(fs.readFileSync(stateJson, 'utf8')).fog_presets ?? [];
+  const state = JSON.parse(fs.readFileSync(stateJson, 'utf8'));
+  const presets = state.fog_presets ?? [];
   ok('four fog presets are exported', presets.length === 4, `${presets.length}`);
   ok('and each names the displacement it came from',
     presets.every((p) => typeof p.disp === 'string'),
@@ -166,6 +167,29 @@ if (fs.existsSync(drawsJson) && fs.existsSync(stateJson)) {
     `${foggy.filter((s) => s.part === 'p3').length} p3 scenes with fog`);
   ok('every fog index addresses a preset that exists',
     foggy.every((s) => presets[s.fog]), `max index ${Math.max(...foggy.map((s) => s.fog))}`);
+  // THE TEXTURE FILTER, WHICH IS PER TEXTURE. `_alloc_txt`'s one SetFilter
+  // call site does not run for every texture, and the ones it skips keep
+  // AllocTexObj's default — point sampling, which the capture shows on part
+  // one's vertical bands. Pinned as the exact SETS, because the whole finding
+  // is which textures are missing from the call and a count would not say.
+  const tf = state.texture_filter;
+  const WANT = { p1: [2, 4, 5, 13], p3: [0, 1, 2, 7, 10, 11, 18] };
+  ok('the export records which textures W3D_SetFilter skips', Boolean(tf),
+    tf ? `p1 ${tf.p1?.count} textures, p3 ${tf.p3?.count}`
+      : 'no texture_filter — rerun export.py');
+  if (tf) {
+    for (const part of ['p1', 'p3']) {
+      const got = (tf[part]?.point_sampled ?? []).join(',');
+      ok(`${part}: the same textures are left point sampled`,
+        got === WANT[part].join(','), `[${got}] — pinned [${WANT[part]}]`);
+    }
+    // And the call it DOES make is the same one every time, so "linear where it
+    // is called" is a statement about one argument pair and not an average.
+    const args = [...new Set(['p1', 'p3'].flatMap((k) =>
+      (tf[k]?.args ?? []).map((a) => a.join(','))))];
+    ok('and every call it does make is W3D_SetFilter(2, 2)',
+      args.length === 1 && args[0] === '2,2', args.join(' | ') || 'none');
+  }
 } else {
   console.log('skipped the fog assertions — no draws.json/render_state.json');
 }
