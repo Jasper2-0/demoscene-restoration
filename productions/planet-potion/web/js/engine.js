@@ -64,6 +64,36 @@ const u32 = (d, o) => (d[o] << 24 | d[o + 1] << 16 | d[o + 2] << 8 | d[o + 3]) >
  * each frame would silently disable every loop mode and the beat sync with
  * them, and the picture would still look plausible.
  */
+/**
+ * A BEAT-TRIGGERED NODE STARTS ALREADY FINISHED, not at the beginning.
+ *
+ * `0x1000262c` runs once per node after its keyframes are built: if the loop
+ * mode is 0 it stores `currentTime - lastKey.tick` into the origin at +0x6c,
+ * and at build time the clock is zero, so the origin becomes MINUS THE TRACK'S
+ * LENGTH. `t - origin` therefore starts one whole track past the end, the walk
+ * clamps to the last keyframe, and the node sits at its final state — which for
+ * these is invisible — until its trigger fires and `0x10005048` resets the
+ * origin to the current tick.
+ *
+ * Without it every beat-triggered node plays from tick zero the moment its
+ * scene appears. Part three's 0x279e is eleven greetings on one screen: the
+ * original draws 9, 10 and 11 primitives at ticks 10, 40 and 80 and we drew 33,
+ * 72 and 85, all eleven names stacked on top of each other and then fading.
+ * Confirmed from the other side too — running the original through `drawlog`
+ * with a music signal of 3 adds exactly three draws at every tick, which is
+ * "procreation" and nothing else.
+ *
+ * 36 OF 43 exactly, against the origins `arena.json` exports before
+ * `_calc_matrix` has run. The other seven are mode 0, carry a trigger and a
+ * real track, and still start at zero; the guard the original uses for them is
+ * a register whose provenance is not yet read, so this is a rule that fits the
+ * data rather than one lifted from the code. `origincheck.mjs` pins the split.
+ */
+function initialOrigin(anim, keys) {
+  if (anim.mode !== 0 || !(anim.trigger > 0) || !keys.length) return 0;
+  return -keys[keys.length - 1].tick;
+}
+
 function prepareScene(nodes, meshOf) {
   const anims = nodes.map((n) => ({
     flags2: n.anim.flags2, flags3: n.anim.flags3, mode: n.anim.mode,
@@ -79,11 +109,16 @@ function prepareScene(nodes, meshOf) {
     prev: j > 0 ? j : 0,
   }));
   const keys = nodes.map((n) => keysOf(n.anim));
+  anims.forEach((a, i) => { a.origin = initialOrigin(a, keys[i]); });
   const subAnims = nodes.map((n) => n.subs.map((s) => ({
     flags2: s.flags2, flags3: s.flags3, mode: 0, parent: NIL,
     trigger: s.trigger ?? 0, loopMode: s.loopMode, origin: 0, track: 0,
   })));
   const subKeys = nodes.map((n) => n.subs.map(keysOf));
+  // The sub-objects run the same rule off their own tracks.
+  subAnims.forEach((list, i) => list.forEach((a, j) => {
+    a.origin = initialOrigin(a, subKeys[i][j]);
+  }));
 
   // A node the scene builder marked built-already is exactly one a CAMERA
   // references: `0x100022f8` walks the camera's list and stamps +0x0f on each.
@@ -337,14 +372,18 @@ export function createEngine({ seg0, seg3, seg4, table, layoutText,
     rewind() { sceneCache.clear(); },
 
     /**
-     * Put one scene's animation objects back to how they were built: origin 0,
-     * no track cursor. What a scene gets when it comes on screen.
+     * Put one scene's animation objects back to how they were BUILT — which is
+     * origin 0 for most and minus the track length for a beat-triggered node,
+     * not zero for everything. Resetting those to zero starts them playing.
      */
     rewindScene(part, order) {
       const S = sceneOf(part, order);
-      const put = (a) => { a.origin = 0; a.track = 0; };
-      S.anims.forEach(put);
-      S.subAnims.forEach((list) => list.forEach(put));
+      S.anims.forEach((a, i) => {
+        a.origin = initialOrigin(a, S.keys[i]); a.track = 0;
+      });
+      S.subAnims.forEach((list, i) => list.forEach((a, j) => {
+        a.origin = initialOrigin(a, S.subKeys[i][j]); a.track = 0;
+      }));
     },
 
     /**

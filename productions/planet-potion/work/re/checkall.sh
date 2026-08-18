@@ -256,6 +256,9 @@ run "pipeline — the renderer reproduces the recording, from bytecode" \
 run "showcheck — the whole schedule runs end to end through the engine" \
   node "$HERE/showcheck.mjs"
 
+run "origincheck — where a beat-triggered node's clock starts" \
+  node "$HERE/origincheck.mjs" "$DATA/arena.json"
+
 run "beatcheck — the beat sync, driven by the music's own cues" \
   node "$HERE/beatcheck.mjs" "$MODS"
 

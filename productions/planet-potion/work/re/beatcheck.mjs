@@ -151,7 +151,11 @@ ok('stepped on the scene clock it does not — the control',
 // here so that a change to the loop modes or to `localTime` has to be noticed
 // and re-blessed rather than silently altering how much of part one is
 // covered.
-const PINNED = { lit: 6686, prims: 8162 };
+// 6686 / 8162 until beat-triggered nodes were given their built origin. A node
+// with a trigger starts at MINUS its track length — already finished — instead
+// of at zero, so the overlay no longer plays every one of its ten nodes once
+// through at the start of part one before the music has asked for any of them.
+const PINNED = { lit: 6637, prims: 7679 };
 ok('the overlay covers exactly as much of part one as when last measured',
   right.lit === PINNED.lit && right.prims === PINNED.prims,
   `${right.lit} ticks / ${right.prims} primitives `
