@@ -45,19 +45,17 @@ Every row here is a measurement, and the check that made it is named. Run
 | geometry: visibility, layers, point sprites | exact, 181/181 nodes | `buildGeometry` vs geodump — 1,616 layer fields, 241 sprite fields |
 | scene stream | 29/29 streams, 395/395 nodes | `scenegram`, `scenecheck` |
 | animation passes 1-3 | bit-exact | `chancheck` — 2,783 node blocks, 809 decoded sub-objects, 310 camera matrices |
-| op 3's generated sub-objects | 181 of 194 nodes | `chancheck` — thirteen named |
-| renderer, end to end | 130 of 140 frames | `pipeline` — 44,180 of 45,327 primitives on every vertex |
+| op 3's generated sub-objects | **bit-exact, 10,131** | `chancheck` — all 194 nodes |
+| renderer, end to end | 135 of 140 frames | `pipeline` — 44,190 of 45,327 primitives on every vertex |
 | Warp3D → WebGL2 | verified | `rendercheck`, `lvocheck` |
 | the page, computing rather than replaying | draws in a real browser | `stagecheck` — all eight stages report a computed side |
 
 **What still keeps a recorded input in the loop, in the order it matters:**
 
-1. **Thirteen op-3 nodes**, all in part three, all failing on every one of their
-   sub-objects — the signature of an operand read rather than of the arithmetic.
-2. **`p1/26` node 11's displacement map.** Specified in full at `0x10003868`
+1. **`p1/26` node 11's displacement map.** Specified in full at `0x10003868`
    and reproduced to 1,015 of 1,089 vertices with `geodump --textures`; the
    residue is a twelve-texel offset in u with no explanation yet.
-3. **The show timeline.** `anim.origin` is the beat sync — a music signal
+2. **The show timeline.** `anim.origin` is the beat sync — a music signal
    matching a node's trigger resets it — so a harness that jumps to a tick has
    to be told the origins and a page that plays from the start does not. That is
    the one value `pipeline.mjs` still reads from the dump. The page has what it

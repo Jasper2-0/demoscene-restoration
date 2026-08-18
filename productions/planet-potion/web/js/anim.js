@@ -498,10 +498,22 @@ export function composeNode(ch, parentCh, gates) {
  * well, which is what the PROJECT gate would do, takes it to zero.
  */
 export function composeSub(ch, parentCh, generated) {
+  if (generated) {
+    // `0x100058a4`, the publish tail types 0 to 3 share. CHANNEL 15 IS COPIED,
+    // NOT MULTIPLIED — `stfs f24, 0x3c(r31)` stores the NODE's alpha over the
+    // sub-object's — while 16, 17 and 18 are products and 19 and 20 are sums.
+    // It reads as an inconsistency and it is what the instruction stream does;
+    // it is invisible in shipped data because a generated sub-object's own
+    // alpha is always the 1.0 `0x10002768` preset, so copy and multiply agree.
+    ch[15] = parentCh[15];
+    for (let i = 16; i <= 18; i++) ch[i] = f32(ch[i] * parentCh[i]);
+    for (let i = 19; i <= 20; i++) ch[i] = f32(ch[i] + parentCh[i]);
+    leftConcat(ch, parentCh);
+    return;
+  }
   for (let i = 15; i <= 18; i++) ch[i] = f32(ch[i] * parentCh[i]);
   for (let i = 19; i <= 20; i++) ch[i] = f32(ch[i] + parentCh[i]);
-  if (generated) leftConcat(ch, parentCh);
-  else for (let i = 12; i <= 14; i++) ch[i] = f32(ch[i] + parentCh[i]);
+  for (let i = 12; i <= 14; i++) ch[i] = f32(ch[i] + parentCh[i]);
 }
 
 /**

@@ -187,16 +187,12 @@ const matchFrame = (got, want) => {
 // its own, and its primitives were being counted but never matched. Both halves
 // are fixed — it gets the union of every scene's ticks, and its draws go into
 // the same set everything else is matched against.
-//   p3/3 x5    THREE OP-3 NODES, #29, #30 and #35, among the thirteen that
-//              chancheck names: their generated sub-objects disagree with the
-//              arena on every channel, which is what a mis-read operand looks
-//              like rather than wrong arithmetic. 181 of the 194 op-3 nodes are
-//              exact. These frames were EXACT while the pipeline took op 3's
-//              sub-objects out of the dump; computing them costs five frames
-//              and buys the last recorded input to the geometry.
+//
+// p3/3's five were here while op 3's generated sub-objects were wrong. They are
+// not any more: all 10,131 of them are bit-exact, and the frames came back
+// without being asked to.
 const KNOWN_INEXACT = new Set([
   'p1/17@138', 'p1/17@416', 'p1/17@692', 'p1/17@970', 'p1/17@1246',
-  'p3/3@147', 'p3/3@441', 'p3/3@735', 'p3/3@1029', 'p3/3@1323',
 ]);
 const inexact = [];
 

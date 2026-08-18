@@ -401,7 +401,19 @@ export function decodeScene(bytes, at) {
 // That never survives: the first evaluation rebuilds the block from the
 // keyframe, whose blocks 12-14 are zero, and the arena agrees — every op-3
 // sub-object reads 0, 0, 0 there.
-const K5 = 0.5, K4 = 0.032, K3 = 0.016, K2 = 0.008;
+// THE ARC CONSTANTS ARE FLOAT32 VALUES OUT OF THE EXECUTABLE'S OWN POOL, not
+// decimal literals. `r2+0x2e46`, `+0x2e4a` and `+0x2e4e` are 0x3d03126f,
+// 0x3c83126f and 0x3c03126f, which are 0.032000001519918442,
+// 0.016000000759959221 and 0.0080000003799796104 — and writing 0.016 instead
+// puts every rounded corner's texture coordinate one ulp low. 280 * 0.016 comes
+// out as 4.4799995 rather than the 4.4800000 the arena holds, which is exactly
+// the difference between the two spellings and nothing else. Same trap as
+// tables.js's pi and 1e-4.
+const poolF32 = (bits) => new Float32Array(new Uint32Array([bits]).buffer)[0];
+const K5 = 0.5;
+const K4 = poolF32(0x3d03126f);
+const K3 = poolF32(0x3c83126f);
+const K2 = poolF32(0x3c03126f);
 
 // capstone's operand order is `op frD, frA, frC, frB`, so the addend is last.
 const madd = (a, c, b) => fma(a, c, b);

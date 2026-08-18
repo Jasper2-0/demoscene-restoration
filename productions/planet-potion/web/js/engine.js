@@ -121,7 +121,8 @@ function stepScene(S, table, tick, musicSignal, activeCamera) {
   const subs = nodes.map((n, i) => subAnims[i].map((a, j) => {
     if (!subKeys[i][j].length) return null;
     const ch = evaluateNode(a, subKeys[i][j], tick, musicSignal, table);
-    if (n.op !== 4 && composed[i].ch) {
+    // An UNRESOLVED node publishes nothing, sub-objects included.
+    if (n.op !== 4 && composed[i].ch && composed[i].resolved === 1) {
       composeSub(ch, composed[i].ch, Boolean(nodes[i].subs[j]?.generated));
     }
     return ch;
