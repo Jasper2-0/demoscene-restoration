@@ -395,6 +395,25 @@ export function showScene(nodes, activeCamera = 0) {
   return draws;
 }
 
+/**
+ * The draws in the shape the Warp3D shim takes: ten floats a vertex, flat.
+ *
+ * `project` returns a vertex per object because everything upstream compares
+ * fields by name; the shim wants exactly what draws.json holds, which is one
+ * Float32Array per primitive. Converting here rather than there keeps the shim
+ * unable to tell a computed frame from a recorded one — which is the whole
+ * point of having verified it against the recording first.
+ */
+export function flattenDraws(draws) {
+  return draws.map((d) => {
+    const v = new Float32Array(d.v.length * 10);
+    d.v.forEach((q, i) => {
+      v.set([q.x, q.y, q.z, q.w, q.u, q.v, q.r, q.g, q.b, q.a], i * 10);
+    });
+    return { prim: d.prim, texture: d.texture, v };
+  });
+}
+
 /** A stored vertex record's nine floats, as the clipper and emitter want them. */
 function toVertex(v) {
   return { p: [v[0], v[1], v[2]], a: v[3], rgb: [v[4], v[5], v[6]],

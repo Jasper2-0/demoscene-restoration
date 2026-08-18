@@ -51,6 +51,13 @@ export class Sequencer {
     const { mod } = this;
     const channels = mod.info?.channels ?? 0;
     const signals = [];
+    // EVERY effect-7, not just parameter 1. `signals` is the SCENE-CHANGE
+    // signal and stays exactly what it was; `cues` is the same effect read the
+    // other way the intro reads it — _calc_matrix compares the frame's signal
+    // against each node's trigger byte, and a match resets that node's origin,
+    // which is how the visuals lock to the track. Those triggers take values
+    // 3, 4, 7, 8, 9 and more, so a list filtered to 1 cannot drive them.
+    const cues = [];
     let absRow = 0, t = 0;
     for (let oi = 0; oi < this.order.length; oi++) {
       const pat = mod.patterns[this.order[oi]];
@@ -63,8 +70,9 @@ export class Sequencer {
             [cell.effect2, cell.param2]]) {
             if (e === SPEED_EFFECT && v) {
               if (v < 32) this.speed = v; else this.bpm = v;
-            } else if (e === SIGNAL_EFFECT && v === 1) {
-              signals.push({
+            } else if (e === SIGNAL_EFFECT) {
+              cues.push({ value: v, ticks50: Math.round(t * 50) });
+              if (v === 1) signals.push({
                 order: oi, pattern: this.order[oi], patternRow: r,
                 row: absRow + r, seconds: t, ticks50: Math.round(t * 50),
               });
@@ -95,7 +103,7 @@ export class Sequencer {
       }
       absRow += pat.rows;
     }
-    return { signals, rows: absRow, seconds: t };
+    return { signals, cues, rows: absRow, seconds: t };
   }
 }
 
@@ -723,6 +731,7 @@ export function render(mod, { sampleRate = 48000, seconds = null, song = 0, octa
 
   return {
     pcm: out, sampleRate, seconds: total.seconds, signals: total.signals,
+    cues: total.cues,
     peak, normalised: peak > 1,
   };
 }

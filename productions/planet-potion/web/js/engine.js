@@ -272,6 +272,14 @@ export function createEngine({ seg0, seg3, seg4, table, layoutText,
   return {
     counts: { p1: SCENES.p1.length, p3: SCENES.p3.length },
     scene: sceneOf,
+    /** The schedule names a scene by its small-data SLOT; this is its index. */
+    orderOfSlot(part, slot) {
+      const want = typeof slot === 'string' ? parseInt(slot, 16) : slot;
+      const i = (SCENES[part] ?? []).indexOf(want);
+      return i < 0 ? null : i;
+    },
+    /** Which scene the overlay is: part one draws it into every other scene. */
+    overlay: { part: 'p1', order: 0 },
     /** One tick. `musicSignal` is the replayer's effect-7 value, or -1. */
     frame(part, order, tick, musicSignal = -1, activeCamera = 0) {
       return stepScene(sceneOf(part, order), table, tick, musicSignal,

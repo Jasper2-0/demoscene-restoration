@@ -32,6 +32,10 @@ import { parseDBM } from './dbm.js';
 import { render } from './dbmplayer.js';
 import { generateModule } from './synth.js';
 import { resolveStages, provenance } from './stages.js';
+import { createEngine } from './engine.js';
+import { flattenDraws } from './render.js';
+import { sinus } from './tables.js';
+import { glyphTable, layoutText } from './font.js';
 
 const canvas = document.getElementById('screen');
 const statusEl = document.getElementById('status');
@@ -62,6 +66,10 @@ async function loadBytes(path) {
 let segments = null;
 const loadSegments = async () => (segments ??= {
   seg0: await loadBytes('./data/seg0.bin'),
+  // SEG3 IS THE ENGINE'S, not the synth's: every part-one scene and geometry
+  // program is at 0x1003xxxx, so without it eighteen of the twenty-nine scenes
+  // cannot be decoded at all.
+  seg3: await loadBytes('./data/seg3.bin'),
   seg4: await loadBytes('./data/seg4.bin'),
 });
 
@@ -136,6 +144,50 @@ async function main() {
     // still replays, untextured, which is worth saying rather than showing.
   }
 
+  // THE ENGINE, when the emit stage is computed. It reads the scene graph and
+  // the geometry out of the segments and runs the three animation passes, the
+  // node walk, the clipper and the projection — everything draws.json used to
+  // hold. Built once and STEPPED: `anim.origin` is the beat sync, so the state
+  // it accumulates tick by tick is part of the answer.
+  let engine = null;
+  if (stages.emit === 'computed') {
+    try {
+      const seg = await loadSegments();
+      const glyphs = glyphTable(seg.seg0);
+      engine = createEngine({
+        seg0: seg.seg0, seg3: seg.seg3, seg4: seg.seg4, table: sinus(),
+        layoutText: (text) => layoutText(glyphs, text),
+      });
+    } catch (e) {
+      say(`the engine could not start: ${e.message}`);
+    }
+  }
+
+  /**
+   * Draw one COMPUTED frame: the scene at `slot`, at this tick, with the
+   * music's current signal.
+   *
+   * The overlay is drawn on top for every part-one scene but itself. It is not
+   * a scene to the schedule — the original draws it INTO each one — which is
+   * why it has a slot of its own and never a span.
+   */
+  const renderComputed = (span, tick, signal) => {
+    const order = engine.orderOfSlot(span.part, span.slot);
+    if (order == null) return null;
+    let draws = engine.frame(span.part, order, tick, signal);
+    const ov = engine.overlay;
+    if (span.part === ov.part && order !== ov.order) {
+      draws = draws.concat(engine.frame(ov.part, ov.order, tick, signal));
+    }
+    textures?.use(span.part);
+    w3d.setFog(span.fog === null || span.fog === undefined
+      ? null : fogPresets[span.fog]);
+    w3d.setZBuffer(false, false);
+    w3d.clear([0, 0, 0]);
+    const info = w3d.drawFrame({ draws: flattenDraws(draws) });
+    return { ...info, slot: span.slot, part: span.part, t: tick };
+  };
+
   /** Draw one recorded frame. Deterministic and order-independent by design. */
   const renderRecorded = (sceneIndex, frameIndex) => {
     if (!dataset) return null;
@@ -172,7 +224,7 @@ async function main() {
   /** One part's scenes in schedule order, with the tick span each occupies. */
   const spansFor = (part) => (dataset?.scenes ?? [])
     .map((s, i) => ({
-      scene: i, frames: s.frames ?? [], slot: s.slot,
+      scene: i, frames: s.frames ?? [], slot: s.slot, fog: s.fog,
       start: s.startTick ?? 0, end: (s.startTick ?? 0) + (s.durTicks ?? 0),
       part: s.part,
     }))
@@ -193,7 +245,7 @@ async function main() {
         const local = tick - s.start;
         let k = 0;
         for (let j = 1; j < s.frames.length; j++) if (s.frames[j].t <= local) k = j;
-        return { scene: s.scene, frame: k, slot: s.slot };
+        return { scene: s.scene, frame: k, slot: s.slot, span: s, local };
       }
     }
     return null;
@@ -218,8 +270,14 @@ async function main() {
     // disassembly favours dbplayer and the correlation favours the oracle,
     // which is a disagreement an ear can settle and a metric cannot.
     const octaveShift = Number(params.get('octave') ?? 0) || 0;
-    const { pcm, sampleRate, seconds } = render(mod,
+    const { pcm, sampleRate, seconds, cues } = render(mod,
       { sampleRate: ctx.sampleRate, octaveShift });
+    // THE BEAT SYNC, as a lookup. Every effect-7 in the module, by the tick it
+    // lands on; _calc_matrix compares it against each node's trigger byte and a
+    // match restarts that node's animation. Without it a computed frame is
+    // arithmetically right and out of time with the music.
+    const cueAt = new Map();
+    for (const c of cues ?? []) cueAt.set(c.ticks50, c.value);
 
     const frames = pcm.length / 2;
     const buf = ctx.createBuffer(2, frames, sampleRate);
@@ -235,17 +293,45 @@ async function main() {
 
     await new Promise((done) => {
       let shown = '';
+      let lastTick = -1;
       const step = () => {
         const elapsed = ctx.currentTime - t0;
         if (elapsed >= seconds) { src.stop(); src.disconnect(); done(); return; }
         if (elapsed >= 0) {
-          const hit = frameAt(spans, elapsed * TICKS_PER_SECOND);
-          const key = hit && `${hit.scene}:${hit.frame}`;
-          if (hit && key !== shown) {
-            shown = key;
-            const info = renderRecorded(hit.scene, hit.frame);
-            say(`${spec.label} ${hit.slot} — ${elapsed.toFixed(1)}s / `
-              + `${seconds.toFixed(0)}s, ${info?.objects ?? 0} draws`);
+          const tick = Math.floor(elapsed * TICKS_PER_SECOND);
+          const hit = frameAt(spans, tick);
+          if (hit && engine) {
+            // EVERY TICK, not only when the scene changes. The recorded path
+            // has five stills a scene and nothing between them; a computed one
+            // has a new answer each tick, and stepping is also how the loop
+            // modes and the beat sync accumulate their state.
+            if (tick !== lastTick) {
+              for (let t = lastTick + 1; t < tick; t++) {
+                // Catch up any tick a dropped frame skipped, so the animation
+                // state is stepped once per tick whatever the display does.
+                try { renderComputed(hit.span, t - hit.span.start,
+                  cueAt.get(t) ?? -1); } catch { /* reported below */ }
+              }
+              lastTick = tick;
+              let info = null;
+              try {
+                info = renderComputed(hit.span, hit.local, cueAt.get(tick) ?? -1);
+              } catch (e) {
+                say(`${spec.label} ${hit.slot} — engine: ${e.message}`);
+              }
+              if (info) {
+                say(`${spec.label} ${hit.slot} — ${elapsed.toFixed(1)}s / `
+                  + `${seconds.toFixed(0)}s, ${info.objects} draws (computed)`);
+              }
+            }
+          } else if (hit) {
+            const key = `${hit.scene}:${hit.frame}`;
+            if (key !== shown) {
+              shown = key;
+              const info = renderRecorded(hit.scene, hit.frame);
+              say(`${spec.label} ${hit.slot} — ${elapsed.toFixed(1)}s / `
+                + `${seconds.toFixed(0)}s, ${info?.objects ?? 0} draws`);
+            }
           }
         }
         requestAnimationFrame(step);
@@ -309,6 +395,24 @@ async function main() {
   if (params.has('oracle') || params.has('scene')) {
     const s = Number(params.get('scene') ?? 1);
     const t = Number(params.get('t') ?? 0);
+    // ONE COMPUTED FRAME, deterministically, when the emit stage is computed
+    // and `?tick=` names an absolute tick. Without this the engine only ever
+    // runs inside the audio loop, and nothing in a browser can look at a
+    // computed frame without playing five minutes of music at it.
+    if (engine && params.has('tick')) {
+      const tick = Number(params.get('tick'));
+      const span = (dataset?.scenes ?? []).map((sc, i) => ({
+        scene: i, slot: sc.slot, part: sc.part, fog: sc.fog,
+        start: sc.startTick ?? 0,
+      }))[s];
+      const info = span ? renderComputed(span, tick, -1) : null;
+      say(info
+        ? `computed ${info.part} ${info.slot} tick=${tick}: `
+          + `${info.objects} draws, ${info.triangles} triangles, `
+          + `glError ${info.glError}`
+        : 'no scene at that index');
+      return;
+    }
     const info = renderRecorded(s, t);
     say(info
       ? `recorded ${info.part} ${info.slot} t=${info.t}: `

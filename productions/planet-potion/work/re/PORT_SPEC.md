@@ -48,6 +48,7 @@ Every row here is a measurement, and the check that made it is named. Run
 | op 3's generated sub-objects | 181 of 194 nodes | `chancheck` — thirteen named |
 | renderer, end to end | 130 of 140 frames | `pipeline` — 44,180 of 45,327 primitives on every vertex |
 | Warp3D → WebGL2 | verified | `rendercheck`, `lvocheck` |
+| the page, computing rather than replaying | draws in a real browser | `stagecheck` — all eight stages report a computed side |
 
 **What still keeps a recorded input in the loop, in the order it matters:**
 
@@ -59,7 +60,9 @@ Every row here is a measurement, and the check that made it is named. Run
 3. **The show timeline.** `anim.origin` is the beat sync — a music signal
    matching a node's trigger resets it — so a harness that jumps to a tick has
    to be told the origins and a page that plays from the start does not. That is
-   the one value `pipeline.mjs` still reads from the dump.
+   the one value `pipeline.mjs` still reads from the dump. The page has what it
+   needs: `dbmplayer`'s `cues` list carries every effect-7 with its parameter
+   and tick, and `main.js` steps the engine once per tick with it.
 
 ## 1. The schedule
 

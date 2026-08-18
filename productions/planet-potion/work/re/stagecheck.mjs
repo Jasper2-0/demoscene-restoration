@@ -92,7 +92,11 @@ if (!findChrome()) {
   // 1. The adapter reports every stage, and reports a refusal as a refusal.
   await withPage({
     root: 'productions/planet-potion/web', path: '/index.html',
-    query: '?inspect=1&anim=computed&textures=recorded',
+    // `tables=recorded` is the refusal now: the four lookup tables have no
+    // recorded side and never will. `anim=computed` used to be one and stopped
+    // being when the animation was ported — a test for a refusal has to name a
+    // stage that CANNOT be honoured, not one that merely was not yet.
+    query: '?inspect=1&tables=recorded&textures=recorded',
     extraArgs: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'],
   }, async ({ page }) => {
     await page.waitForFunction('window.__demoReady === true', { timeout: 20000 });
@@ -104,8 +108,8 @@ if (!findChrome()) {
       st.textures?.side === 'recorded', `textures=${st.textures?.side}`);
     ok('a refused request shows in the adapter as an error, and the stage keeps '
       + 'the side that exists',
-      st.stageErrors?.length === 1 && st.anim?.side === 'recorded',
-      `${st.stageErrors?.[0] ?? 'no error reported'}; anim=${st.anim?.side}`);
+      st.stageErrors?.length === 1 && st.tables?.side === 'computed',
+      `${st.stageErrors?.[0] ?? 'no error reported'}; tables=${st.tables?.side}`);
     // The fog plumbing needs two files to agree, and neither of rendercheck's
     // two target frames is one of the four scenes that use it — so without this
     // the wiring could be entirely absent and every suite would still pass.
@@ -113,6 +117,37 @@ if (!findChrome()) {
       `${st.fog?.presets} presets`);
     ok('and sees four scenes using them', st.fog?.scenes?.length === 4,
       (st.fog?.scenes ?? []).join(' ') || 'none');
+  });
+
+  // 1b. THE ENGINE DRAWS, in a real browser. Everything else about it is
+  // checked in node against the recording; this is the one assertion that says
+  // its output reaches a framebuffer at all, through the same shim the recorded
+  // path uses and with no recorded draw stream in the picture.
+  //
+  // IT IS NOT THE SAME FRAME THE RECORDING HOLDS and should not be read as one.
+  // The single-frame mode passes a music signal of -1, so no node's beat sync
+  // has fired and every origin is still zero — the arithmetic is the same and
+  // the phase is not. pipeline.mjs is where the frame is compared; this is
+  // where it is shown to reach a framebuffer.
+  await withPage({
+    root: 'productions/planet-potion/web', path: '/index.html',
+    query: '?scene=1&tick=92',
+    extraArgs: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'],
+  }, async ({ page }) => {
+    // No `inspect=1` here: that mode draws nothing on its own, which is the
+    // whole point of it. Wait on the status line instead.
+    await page.waitForFunction(
+      "/computed |no scene at/.test(document.getElementById('status')?.textContent ?? '')",
+      { timeout: 30000 });
+    const line = await page.evaluate(
+      "document.getElementById('status')?.textContent ?? ''");
+    const m = /computed \S+ (\S+) tick=(\d+): (\d+) draws, (\d+) triangles, glError (\d+)/
+      .exec(line);
+    ok('the engine renders a frame in the browser', Boolean(m) && Number(m[3]) > 0,
+      m ? `${m[3]} draws, ${m[4]} triangles — no recorded stream involved`
+        : line.slice(0, 90));
+    ok('and the shim reports no GL error on it', Boolean(m) && m[5] === '0',
+      m ? `glError ${m[5]}` : 'no computed frame');
   });
 
   // 2. The switch reaches the pixels, and the two sides agree where they can.

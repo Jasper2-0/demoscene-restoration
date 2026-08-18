@@ -42,25 +42,25 @@ export const PIPELINE = [
   {
     name: 'geometry',
     what: 'the mesh builder\'s vertices and faces',
-    computed: null,
+    computed: 'built from seg3 and seg4 (geom.js) — 181/181 nodes vs geodump',
     recorded: 'baked into data/draws.json',
   },
   {
     name: 'scene',
     what: 'the scene VM\'s node graph',
-    computed: null,
+    computed: 'decoded from the stream (scene.js) — 29/29, 395/395 nodes',
     recorded: 'baked into data/draws.json',
   },
   {
     name: 'anim',
     what: '_calc_matrix — keyframes to per-node transforms',
-    computed: null,
+    computed: 'all three passes, stepped per tick (anim.js) — 2,783 blocks exact',
     recorded: 'baked into data/draws.json',
   },
   {
     name: 'emit',
     what: '_show_scene — clipping and projection to primitives',
-    computed: null,
+    computed: 'the node walk, clipper and projection (render.js, engine.js)',
     recorded: 'data/draws.json, five frames per scene',
   },
   {
