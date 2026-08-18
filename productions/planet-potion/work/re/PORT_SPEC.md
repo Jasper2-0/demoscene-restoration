@@ -923,6 +923,47 @@ guards with `cmpwi r26, 0; beq`, so a type-3 node clearing it is consistent: the
 field means different things per type, and zero is the "nothing here" the mesh
 path already tests for.
 
+### 4a-bis. How a geometry program becomes a mesh — `0x100027b8`
+
+Scene op 5 consumes no stream operands, and this is what it does instead. It is
+the join between the two halves of the intro's data, and it is a COPY rather
+than a reference: the geometry program's output is a template, and every scene
+that uses it gets its own vertices.
+
+`node+0x04` is the geometry program's node list, looked up from the object table
+by the resource byte. For each geometry node whose `+0x12` is set:
+
+```
+  for each vertex on the geometry node's +0x04 chain:
+      v = alloc(0x6c), chained on +0x68, head at scene node+0x20
+      +0x24/28/2c  <- geometry +0x24/28/2c     position
+      +0x50/54/58  <- geometry +0x50/54/58     normal
+      +0x30/34/38/3c <- geometry +0x0c/10/14/18   COLOUR, AND NOTE THE OFFSETS
+  for each triangle on the geometry node's +0x08 chain:
+      f = alloc(0x64), chained on +0x60, head at scene node+0x24
+      +0x00        <- count
+      +0x04/08/0c  <- the three vertex INDICES resolved to POINTERS
+      +0x12        <- cull
+      +0x2c..+0x38 <- alpha and rgb
+      +0x3c..+0x44 <- the face normal
+      +0x14..      <- the texture coordinates
+```
+
+**THE COLOUR MOVES FROM +0x0c TO +0x30, and that resolves something §2b left
+open.** `geodump` found all 11,723 of the geometry builder's source colours at
+`+0x30` to be zero, and the check asserts it. They are zero because the geometry
+builder writes its colours at `+0x0c` — the four floats its vertex allocator
+sets to 1.0 — and it is THIS routine that moves them into the `+0x30` slot
+everything downstream reads. Neither half is wrong; the field simply changes
+address on the way across.
+
+**The two records are different shapes and only overlap by luck.** A geometry
+triangle is 0x52 bytes with u16 vertex INDICES at `+0x02/04/06`; a scene face is
+0x64 bytes with u32 vertex POINTERS at `+0x04/08/0c`. `0x1000277c` does the
+resolution, walking `+0x68` from the first vertex this geometry node contributed
+— not from the scene node's list head, so indices are per source node and not
+global.
+
 ### 4b. Geometry is built once — only one opcode evaluates per frame
 
 The geometry eval table at `0x1000a9c4` has five slots, and the slots for
