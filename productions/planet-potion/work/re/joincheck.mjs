@@ -53,30 +53,40 @@ let vOK = 0, vBad = 0, oOK = 0, oBad = 0, nodes = 0, noProgram = 0, hidden = 0;
 // The copied VALUES, not just the counts.
 let posOK = 0, posBad = 0, colOK = 0, colBad = 0, idxOK = 0, idxBad = 0;
 let fieldOK = 0, fieldBad = 0, texDep = 0;
-// PROGRAM 26 OF PART ONE COMES OUT DIFFERENT UNDER geodump THAN UNDER A REAL
-// BOOT, and the reason written here before — that it reads texture memory —
-// is DISPROVED. It does need the texture table to hold dereferenceable
-// pointers or it segfaults, so something follows one; but the vertices do not
-// depend on what is behind them:
+// PROGRAM 26 OF PART ONE READS TEXTURE MEMORY, and the routine is
+// `0x10003868`, the last call op 0's builder makes. It is a DISPLACEMENT MAP.
 //
-//   * filling geodump's whole 128 KB texture region with 0x01, and again with
-//     0xFF, changes not one of the 1,713 vertices. A dereference of a pointer
-//     read from there would fault on 0xFFFFFFFF, and it does not.
-//   * zeroing every entry of the texture TABLE, and swapping the two words of
-//     each entry, likewise change nothing.
+// It walks the record chain for one whose kind byte is 6, takes the node's
+// bounding box, and then for every vertex calls the same UV projection the
+// texture coordinates come from (`0x100036e8`), rounds the pair to 7 bits each,
+// indexes a 128x128 texture four bytes to the texel, and reads byte 0:
 //
-// What differs is one node: index 11, an op-0 33x33 grid of 1,089 vertices, of
-// which 1,044 differ. x is IDENTICAL in every one and z moves by at most about
-// three, so it is a displacement along y — up to 3.7e3 against a base grid that
-// only varies by 12. And it is structured, not noise: flat runs, linear ramps
-// and plateaux, 794 distinct heights.
+//     h = int2float(texel[0]) / 255.0 * record[+0x2c]
 //
-// It is not the geometry program's eval pass — op 0's eval vector is a bare
-// `blr` — and not the scene's mesh copy, which is a straight copy of +0x24,
-// +0x50 and +0x0c. So it is something about the CONTEXT geodump runs in, most
-// likely that it gives each program a fresh arena while the real boot runs all
-// thirty-nine into one. Counted separately and named rather than lost in a
-// tolerance.
+// and adds it along an axis chosen by the record's byte at +0x01 — 0x00 x,
+// 0x10 y, 0x20 z, or 0x30/0x40/0x50 to scale the other two by
+// `1 + h * frsqrte(a*a + b*b)`. The texture is `record[+0x18]`, which is the
+// SECOND word of the texture table entry the shared prologue looked up, so it
+// is that texture's texel data rather than its object.
+//
+// So geodump's zero-filled texture region gives a flat grid where the real boot
+// gives a landscape. Measured, with the environment actually reaching the
+// container: filling the region with 0x01 moves all 1,089 of node 11's
+// vertices and 0xFF moves them by 255 times as much, and zeroing the table
+// makes the program fault outright.
+//
+// A PREVIOUS VERSION OF THIS COMMENT CLAIMED THE OPPOSITE, on the strength of
+// those same experiments run before `ppcbox.sh` forwarded any environment at
+// all. The tool inside the container saw none of the variables, produced the
+// unmodified output every time, and "no change" read exactly like a disproof.
+// A knob that is not connected reports that nothing depends on it.
+//
+// The shared-arena theory that replaced it IS disproved, this time properly:
+// building every earlier program of the same part into the same arena first
+// takes the high-water mark from 456 KB to 2.7 MB and changes not one vertex.
+//
+// Node 11's 1,044 differing positions are counted separately and named rather
+// than lost in a tolerance.
 const TEXTURE_DEPENDENT = new Set(['p1:26']);
 const layers = new Map();
 const failures = [];

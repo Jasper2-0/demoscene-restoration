@@ -49,8 +49,21 @@ fi
 # --user keeps output owned by whoever ran this rather than by root: export.py
 # writes several thousand files into out/, and a root-owned tree is a nuisance
 # to clean up from the host.
+# THE CONTAINER DOES NOT INHERIT THE CALLER'S ENVIRONMENT, and for a long time
+# nothing said so. An experiment run as `FOO=1 ./ppcbox.sh python3 tool.py` sets
+# FOO in this shell and the tool inside sees nothing, so the experiment silently
+# measures the unmodified program and reports "no change" — which reads exactly
+# like a disproof. Name the variables to forward in PPCBOX_ENV:
+#
+#     PPCBOX_ENV="GEOCHAIN" GEOCHAIN=1 ./ppcbox.sh python3 geodump.py ...
+env_args=""
+for v in ${PPCBOX_ENV:-}; do
+  env_args="$env_args -e $v"
+done
+# shellcheck disable=SC2086
 exec docker run --rm -i \
   --user "$(id -u):$(id -g)" \
   -v "$HERE:/work" \
   -w /work \
+  $env_args \
   "$IMAGE" "$@"
