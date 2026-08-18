@@ -225,21 +225,85 @@ const overlayScene = A.scenes.find((s) => s.stream === OVERLAY);
 // share not one of them, so every frame is also matched as a MULTISET keyed by
 // the primitive, its texture, its vertex count and its first vertex's screen
 // position to two decimals — draws.json rounds to five, so two is safe.
-const key = (prim, tex, n, x, y) =>
-  `${prim}|${tex}|${n}|${x.toFixed(2)}|${y.toFixed(2)}`;
+// EVERY vertex, not just the first: two different primitives can share a first
+// corner, and keying on it alone credits a match that is not one.
+// `+x.toFixed(2) + 0` rather than `x.toFixed(2)`: a clipped edge that lands on
+// x = 0 comes out as NEGATIVE zero, which prints as "-0.00" and compares unequal
+// to the recording's "0.00" while being the same number.
+const p2 = (x) => String(+x.toFixed(2) + 0);
+const wantKey = (d) => {
+  let k = `${d.prim}|${d.texture}|${d.v.length / 10}`;
+  for (let i = 0; i < d.v.length; i += 10) {
+    k += `|${p2(d.v[i])},${p2(d.v[i + 1])}`;
+  }
+  return k;
+};
+const gotKey = (d) => `${d.prim}|${d.texture}|${d.v.length}`
+  + d.v.map((v) => `|${p2(v.x)},${p2(v.y)}`).join('');
 const matchFrame = (got, want) => {
   const bag = new Map();
   for (const d of want) {
-    const k = key(d.prim, d.texture, d.v.length / 10, d.v[0], d.v[1]);
+    const k = wantKey(d);
     bag.set(k, (bag.get(k) ?? 0) + 1);
   }
   let hit = 0;
+  const miss = [];
   for (const d of got) {
-    const k = key(d.prim, d.texture, d.v.length, d.v[0].x, d.v[0].y);
-    const c = bag.get(k);
-    if (c) { hit++; bag.set(k, c - 1); }
+    const c = bag.get(gotKey(d));
+    if (c) { hit++; bag.set(gotKey(d), c - 1); } else miss.push(d);
+  }
+  if (process.env.PIPEMISS && miss.length) {
+    const d = miss[0];
+    const near = want.filter((w) => w.prim === d.prim && w.texture === d.texture
+      && Math.abs(w.v[0] - d.v[0].x) < 0.01 && Math.abs(w.v[1] - d.v[0].y) < 0.01);
+    console.log('   MISS got ' + d.v.map((v) => `(${v.x.toFixed(2)},${v.y.toFixed(2)})`).join(' '));
+    for (const w of near.slice(0, 3)) {
+      const pts = [];
+      for (let i = 0; i < w.v.length; i += 10) pts.push(`(${w.v[i].toFixed(2)},${w.v[i + 1].toFixed(2)})`);
+      console.log('   near     ' + pts.join(' '));
+    }
   }
   return hit;
+};
+
+// HOW FAR OFF are the ones that do not match? A primitive that lands 0.3 px
+// away is a rounding question; one with no neighbour of the same primitive,
+// texture and size within ten pixels is a different primitive altogether, and
+// the two need completely different work. Counting only exact hits cannot tell
+// them apart.
+const BUCKETS = [0.005, 0.5, 2, 10, Infinity];
+const BUCKET_NAME = ['exact', '<0.5px', '<2px', '<10px', 'no neighbour'];
+const residual = BUCKETS.map(() => 0);
+let frameRes = BUCKETS.map(() => 0);
+let bySrc = new Map();
+const byCut = [[0, 0], [0, 0]];
+const sizeGot = new Map(), sizeWant = new Map();
+const bump = (m, k) => m.set(k, (m.get(k) ?? 0) + 1);
+const nearest = (got, want) => {
+  const by = new Map();
+  for (const d of want) {
+    const k = `${d.prim}|${d.texture}|${d.v.length / 10}`;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(d);
+  }
+  for (const d of got) {
+    const k = `${d.prim}|${d.texture}|${d.v.length}`;
+    let best = Infinity;
+    for (const w of by.get(k) ?? []) {
+      const dx = d.v[0].x - w.v[0], dy = d.v[0].y - w.v[1];
+      const r = Math.hypot(dx, dy);
+      if (r < best) best = r;
+    }
+    const bi = BUCKETS.findIndex((b) => best < b);
+    residual[bi]++; frameRes[bi]++;
+    const t = bySrc.get(d.src) ?? [0, 0];
+    t[bi === 0 ? 0 : 1]++; bySrc.set(d.src, t);
+    // A fan that came out of the clipper with more vertices than the face had
+    // was CUT. If the exact ones are the uncut ones, the clipper is the fault
+    // and the transform is not.
+    const cut = d.v.length > 3 ? 1 : 0;
+    byCut[cut][bi === 0 ? 0 : 1]++;
+  }
 };
 
 let totalGot = 0, totalWant = 0, scenes = 0, exact = 0, totalHit = 0;
@@ -277,6 +341,10 @@ for (const scene of A.scenes) {
       const h = matchFrame(alt.draws, df.draws);
       if (h > hit) { hit = h; cam = k; r = alt; }
     }
+    frameRes = BUCKETS.map(() => 0); bySrc = new Map();
+    for (const d of r.draws) bump(sizeGot, d.v.length);
+    for (const d of df.draws) bump(sizeWant, d.v.length / 10);
+    nearest(r.draws, df.draws);
     scenes++;
     const total = r.draws.length + over;
     if (total === df.draws.length) exact++;
@@ -290,6 +358,13 @@ for (const scene of A.scenes) {
       + `${String(df.draws.length).padStart(5)}`
       + `  ${hit} placed${cam ? ` (camera ${cam})` : ''}`
       + (total === df.draws.length && hit === df.draws.length ? '  EXACT' : ''));
+    if (frameRes[0] !== r.draws.length) {
+      console.log('        residual: ' + frameRes
+        .map((n, i) => (n ? `${BUCKET_NAME[i]} ${n}` : null))
+        .filter(Boolean).join(', ')
+        + '  by node: ' + [...bySrc].sort((a, b) => a[0] - b[0])
+          .map(([k, [a, b]]) => `${k}:${a}/${a + b}`).join(' '));
+    }
     // Where a frame disagrees, say WHICH primitives — an aggregate count hides
     // whether the port draws the wrong things or the right things twice.
     if (total !== df.draws.length) {
@@ -316,3 +391,14 @@ for (const scene of A.scenes) {
 console.log(`\n${scenes} frames, ${exact} exact: `
   + `${totalGot} draws computed, ${totalWant} recorded, `
   + `${totalHit} matched by primitive, texture, size and screen position`);
+{
+  const c = new Map();
+  for (const [k, v] of sizeGot) { const e = c.get(k) ?? [0, 0]; e[0] = v; c.set(k, e); }
+  for (const [k, v] of sizeWant) { const e = c.get(k) ?? [0, 0]; e[1] = v; c.set(k, e); }
+  console.log('  vertices per primitive, computed vs recorded: '
+    + [...c].sort((a, b) => a[0] - b[0]).map(([k, [a, b]]) => `${k}: ${a}v${b}`).join('  '));
+}
+console.log(`  three-vertex primitives: ${byCut[0][0]} exact, ${byCut[0][1]} off; `
+  + `more than three (cut by the clipper): ${byCut[1][0]} exact, ${byCut[1][1]} off`);
+console.log('  nearest same-kind recorded primitive: '
+  + residual.map((n, i) => `${BUCKET_NAME[i]} ${n}`).join(', '));

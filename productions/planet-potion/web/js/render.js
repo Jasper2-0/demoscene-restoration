@@ -98,17 +98,34 @@ const H = 480.0;
 function clipPlane(poly, axis, s, k) {
   if (!poly.length) return poly;
   const out = [];
-  const dist = (v) => fma(v.p[axis], s, v.p[2] * k);
-  let prev = poly[poly.length - 1];
+  // `fmul f11, f14, f4` then `fmadd f11, f12, f26, f11`: the SIGN product is
+  // rounded and the DEPTH product is the fused one. Writing it the other way
+  // round — fusing the sign and rounding the depth — is a different number, and
+  // since the sign is only ever +1 or -1 its product is exact either way, so the
+  // whole difference lands on the depth term, which is the one that decides
+  // where the cut goes.
+  const dist = (v) => fma(v.p[2], k, v.p[axis] * s);
+  // THE WALK STARTS ON THE EDGE (v0, v1), NOT (vlast, v0). `0x10006750` points
+  // the `cur` cursor at the array's second entry and `0x1000686c` wraps it back
+  // to the first only on the LAST edge, so the output begins at v0. Starting
+  // from the closing edge instead gives the same polygon ROTATED by one vertex
+  // — identical geometry, a different vertex list — and it fails on primitives
+  // that were never cut at all, because a pass-through triangle comes out as
+  // v2, v0, v1.
+  let prev = poly[0];
   let dPrev = dist(prev);
-  for (const cur of poly) {
+  for (let i = 1; i <= poly.length; i++) {
+    const cur = poly[i === poly.length ? 0 : i];
     const dCur = dist(cur);
     // `ble` on the PREVIOUS distance: strictly greater than zero is inside, so
     // a vertex exactly on the plane counts as outside and is dropped.
     if (dPrev > 0) out.push(prev);
     if ((dPrev > 0) !== (dCur > 0)) {
       const t = dCur / (dCur - dPrev);
-      const mix = (a, b) => fma(t, a - b, b);
+      // Every one of the eight goes out through `stfs`, so it TRUNCATES. The
+      // pass-through vertices are already single and lose nothing; the cut ones
+      // are computed in double and rounded on the way to the buffer.
+      const mix = (a, b) => f32(fma(t, a - b, b));
       out.push({
         p: [mix(prev.p[0], cur.p[0]), mix(prev.p[1], cur.p[1]),
           mix(prev.p[2], cur.p[2])],
@@ -279,7 +296,12 @@ function meshDraws(node) {
 export function showScene(nodes, activeCamera = 0) {
   const draws = [];
   let state = 2;
+  // Each draw remembers which node emitted it. Nothing in the original does
+  // this; it is here so a residual can be attributed rather than averaged.
+  let src = -1;
+  const push = (list) => { for (const d of list) { d.src = src; draws.push(d); } };
   for (const node of nodes) {
+    src++;
     if (!node.drawGate) continue;
     if (node.at0d !== state) state = node.at0d;      // render-state change
     if (node.type === 7) continue;                    // the root draws nothing
@@ -294,15 +316,15 @@ export function showScene(nodes, activeCamera = 0) {
       // camera and returns if they differ. Three scenes carry four cameras
       // each and render one of them at a time.
       if ((node.ordinal ?? 0) !== activeCamera) continue;
-      for (const ref of node.refs ?? []) draws.push(...meshDraws(ref));
+      for (const ref of node.refs ?? []) push(meshDraws(ref));
       continue;
     }
-    if (node.type === 5) { draws.push(...meshDraws(node)); continue; }
+    if (node.type === 5) { push(meshDraws(node)); continue; }
     if (node.type === 4) {
       for (const g of node.glyphs ?? []) {
         if (!g || g.space || !g.quad) continue;
         const d = drawPrimitive(g.quad.map(toVertex), node, 'trifan');
-        if (d) draws.push(d);
+        if (d) push([d]);
       }
       continue;
     }
@@ -310,7 +332,7 @@ export function showScene(nodes, activeCamera = 0) {
     // to use — no record to unpack, because the animation wrote them.
     const source = node.plain ?? (node.vertices ?? []).map(toVertex);
     const d = drawPrimitive(source, node, primitiveOf(node));
-    if (d) draws.push(d);
+    if (d) push([d]);
   }
   return draws;
 }
