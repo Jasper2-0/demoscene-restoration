@@ -45,14 +45,18 @@
 import fs from 'node:fs';
 const R = '/Users/scjas/Developer/01 - Jasper2-0/02 - Github Public/demoscene-restoration/productions/planet-potion';
 const { decodeScene, buildMesh } = await import(`${R}/web/js/scene.js`);
-const { evaluateNode, composeHierarchy, publishNode, concat } =
+const { evaluateNode, composeHierarchy, composeNode, publishNode, concat } =
   await import(`${R}/web/js/anim.js`);
 const { showScene } = await import(`${R}/web/js/render.js`);
 const { sinus } = await import(`${R}/web/js/tables.js`);
+const { glyphTable, layoutText } = await import(`${R}/web/js/font.js`);
 
 const A = JSON.parse(fs.readFileSync(`${R}/web/data/anim_all.json`, 'utf8'));
 const G = JSON.parse(fs.readFileSync(`${R}/web/data/geo.json`, 'utf8'));
 const D = JSON.parse(fs.readFileSync(`${R}/web/data/draws.json`, 'utf8'));
+const seg0 = new Uint8Array(
+  fs.readFileSync(`${R}/work/re/flat/seg0_CODE_10000000.bin`));
+const GLYPHS = glyphTable(seg0);
 const segs = [
   { base: 0x10030000, d: new Uint8Array(fs.readFileSync(`${R}/work/re/flat/seg3_DATA_10030000.bin`)) },
   { base: 0x10040000, d: new Uint8Array(fs.readFileSync(`${R}/work/re/flat/seg4_DATA_10040000.bin`)) },
@@ -109,6 +113,28 @@ function runScene(scene, frame, activeCamera = 0) {
   });
   composeHierarchy(composed);
 
+  // THE SUB-OBJECTS EVALUATE TOO, and they are what a type 0 to 4 node draws
+  // with: ops 0 to 2 keep their vertices there, op 4 its glyph scale. Each one
+  // runs pass 1 like any other animation object and then composes against its
+  // node under a FIXED gate set of 0xd0 — multiply, add-pair, translate, and
+  // not project, so it keeps its own cx/cy/scale. chancheck pins all 809.
+  const subChans = entries.map(({ n }, i) => n.subs.map((sub) => {
+    const keys = sub.keys.map((k, j) => ({
+      tick: k.time, t0: k.t0, flags: k.hold, blocks: k.coeff,
+      invSpan: k.invSpan, addr: j + 1,
+      next: j + 1 < sub.keys.length ? j + 2 : 0, prev: j > 0 ? j : 0,
+    }));
+    if (!keys.length) return null;
+    const ch = evaluateNode({
+      flags2: sub.flags2, flags3: sub.flags3, mode: 0, parent: NIL,
+      trigger: sub.trigger ?? 0, loopMode: sub.loopMode,
+      origin: entries[i].w?.anim ? entries[i].w.anim.origin : 0,
+    }, keys, frame.t, -1, table);
+    // op 4's sub carries the glyph scale and is NOT composed.
+    if (n.op !== 4 && composed[i].ch) composeNode(ch, composed[i].ch, 0xd0);
+    return ch;
+  }));
+
   // Pass 3 and the render walk.
   const nodes = [];
   const meshObjects = [];      // per node, the object list a camera may borrow
@@ -142,6 +168,13 @@ function runScene(scene, frame, activeCamera = 0) {
         nx: v.n[0], ny: v.n[1], nz: v.n[2],
       }));
     }
+    // Type 4 lays its string out through the glyph table the 68K bootstrap
+    // unpacked, and publishText turns each record into a quad.
+    if (n.op === 4 && n.text) {
+      const L = layoutText(GLYPHS, n.text);
+      out.glyphs = L.glyphs; out.at2c = L.at2c; out.at30 = L.at30;
+      out.subChannels = subChans[i][0];
+    }
     out.built = w?.built ?? 0;
     publishNode(out, e.ch ?? new Float64Array(24), e.resolved);
     nodes.push({
@@ -153,7 +186,7 @@ function runScene(scene, frame, activeCamera = 0) {
       // a camera. The arena holds a texture-object POINTER there, which is why
       // the dump could not supply it.
       at68: n.at68 ?? 0,
-      texture: n.op < 4 ? (n.resource ?? null) : (w?.texture ?? null),
+      texture: n.op < 5 ? (n.resource ?? null) : (w?.texture ?? null),
       plain: out.plainVertices ?? null,
       // The point sprites carry their own published vertex rather than a face's.
       sprites: mesh ? mesh.sprites.map((q) => {
@@ -171,7 +204,7 @@ function runScene(scene, frame, activeCamera = 0) {
           }),
         }],
       })) : [],
-      vertices: [], glyphs: null,
+      vertices: [], glyphs: out.glyphs ?? null,
     });
   });
   // THE CAMERA'S REFERENCE LIST, `0x1000644c`. The stream gives one byte per

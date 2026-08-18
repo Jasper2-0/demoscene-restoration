@@ -89,6 +89,51 @@ export function glyphTable(seg0) {
   }
 }
 
+/** The pen advance for a character the table has no record for. `r2+0x2d92`. */
+export const SPACE_WIDTH = 16.0;
+
+/**
+ * One text node's glyph list, `0x10002e38`-`0x10002f08` in the scene builder.
+ *
+ * UPPERCASE IS NOT A DIFFERENT GLYPH, IT IS A DIFFERENT SLANT. `0x10002e4c`
+ * tests for 'A' to 'Z', adds 0x20 to reach the lowercase record, and sets a
+ * flag the publish pass reads as italic. The font has 26 letters and the
+ * capitals are the same letters sheared.
+ *
+ * A CHARACTER THE TABLE LACKS BECOMES A SPACE — in the harness. The shipped
+ * search at `0x10002e78` compares the CHARACTER against 0xFF instead of the
+ * table entry, so it walks off the end of the table forever, and space is not
+ * in the table while "maqey nelson" has one. That is why `fix_glyph_scan`
+ * exists and why both text scenes hang without it. The patched behaviour is
+ * what the recording was made with and what this reproduces: stop at the
+ * terminator, store -1, advance the pen by SPACE_WIDTH and draw nothing.
+ *
+ * Returns the two fields the publish pass reads off the node as well as the
+ * glyphs: `at2c` is the character count less one (`0x10002e30` subtracts 1.0
+ * from the count it just read) and `at30` is the sum of every glyph's WIDTH,
+ * spaces included (`0x10002efc` accumulates, `0x10002f08` stores). Those two
+ * are what make the pen advance a ratio rather than a fixed pitch.
+ */
+export function layoutText(table, text) {
+  const glyphs = [];
+  let total = 0;
+  for (let i = 0; i < text.length; i++) {
+    let c = text.charCodeAt(i) & 0xff;
+    let mode = 0;
+    if (c >= 0x41 && c <= 0x5a) { mode = 1; c += 0x20; }
+    const rec = table.find((g) => g.code === c);
+    if (!rec) {
+      glyphs.push({ space: true, mode, rect: [0, 0, SPACE_WIDTH, 0], quad: [] });
+      total += SPACE_WIDTH;
+      continue;
+    }
+    glyphs.push({ space: false, mode, rect: [rec.x, rec.y, rec.w, rec.h],
+      quad: [] });
+    total += rec.w;
+  }
+  return { glyphs, at2c: text.length - 1, at30: total };
+}
+
 /**
  * `_init_scene_show` (`0x100069f8`) — the clipper's scratch, as measurements.
  *

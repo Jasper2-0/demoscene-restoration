@@ -27,7 +27,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeScene } from '../../web/js/scene.js';
-import { evaluateNode, composeHierarchy, concat } from '../../web/js/anim.js';
+import { evaluateNode, composeHierarchy, composeNode, concat }
+  from '../../web/js/anim.js';
 import { sinus } from '../../web/js/tables.js';
 
 const ABSENT = 77;
@@ -52,8 +53,21 @@ const segs = SEGMENTS.map((s) => ({
 const A = JSON.parse(fs.readFileSync(file, 'utf8'));
 const table = sinus();
 const NIL = 0xffffffff;
+// WHICH PASS-2 GATES A SUB-OBJECT COMPOSES UNDER, and it is a constant: 0xd0,
+// which is MULTIPLY | ADD_PAIR | TRANSLATE and pointedly not PROJECT. Its own
+// flags3 is zero in every one of the 809, so the gates are not coming from the
+// record — a sub-object always composes this way.
+//
+// Each of the four other combinations that could plausibly have been it was
+// measured: 0xf0 gives 444/809, 0x90 gives 263, 0xc0 gives 243, 0x50 gives 213
+// and 0xb0 gives 263. Only 0xd0 gives all of them, and the one that separates
+// it from 0xf0 is cx/cy/scale — PROJECT copies channels 21 to 23 down from the
+// parent and a sub-object keeps its own.
+const SUB_GATES = 0xd0;
 
 let chOK = 0, chBad = 0, refOK = 0, refBad = 0, refCount = 0;
+let subOK = 0, subBad = 0;
+const subByMode = new Map();
 let ticks = 0, camNodes = 0;
 const byType = new Map();
 const byMode = new Map();
@@ -109,6 +123,54 @@ for (const scene of A.scenes) {
         }
       }
 
+      // THE SUB-OBJECTS EVALUATE TOO. They hang off the animation object's
+      // +0x74 and pass 1 walks them like any other, so a type 0-2 node's
+      // vertices and a text node's glyph scale are all just channel blocks that
+      // went through the same polynomial. Nothing checked them before.
+      const wSubs = frame.nodes[i]?.anim?.subs ?? [];
+      n.subs.forEach((sub, j) => {
+        const w2 = wSubs[j]?.channels;
+        if (!w2) return;
+        const keys2 = sub.keys.map((k, m) => ({
+          tick: k.time, t0: k.t0, flags: k.hold, blocks: k.coeff,
+          invSpan: k.invSpan, addr: m + 1,
+          next: m + 1 < sub.keys.length ? m + 2 : 0, prev: m > 0 ? m : 0,
+        }));
+        if (!keys2.length) return;
+        {
+          const mode = 0;
+          const a2 = { flags2: sub.flags2, flags3: sub.flags3, mode,
+            parent: NIL, trigger: sub.trigger ?? 0, loopMode: sub.loopMode,
+            origin: frame.nodes[i]?.anim ? frame.nodes[i].anim.origin : 0 };
+          const own = evaluateNode(a2, keys2, frame.t, -1, table);
+          // THE SAME MECHANISM THE CAMERA USES: take a copy of the parent's
+          // whole 24-float block and concatenate the sub-object's own into it.
+          // So the rotation and translation compose, and channels 15 to 23 —
+          // the colour scales, the texture offsets and cx/cy/scale — stay the
+          // PARENT's, because `concat` writes only 0..8 and 12..14.
+          // op 4's single sub-object carries the GLYPH SCALE, not a vertex,
+          // and is read straight off the animation object without composing.
+          // op 4's single sub-object carries the GLYPH SCALE, not a vertex,
+          // and is read straight off the animation object without composing.
+          const ch2 = own;
+          if (n.op !== 4 && composed[i].ch) {
+            composeNode(ch2, composed[i].ch, SUB_GATES);
+          }
+          const same = ch2.every((v, k) => v === w2[k]);
+          const t2 = subByMode.get(n.op) ?? [0, 0];
+          t2[same ? 0 : 1]++; subByMode.set(n.op, t2);
+          if (same) subOK++;
+          else {
+            subBad++;
+            if (failures.length < 8) {
+              const worst = Math.max(...[...ch2].map((v, k) => Math.abs(v - w2[k])));
+              failures.push(`${scene.part}/${scene.order} t=${frame.t} node ${i} `
+                + `op${n.op} sub ${j}: worst |diff| ${worst.toExponential(2)}`);
+            }
+          }
+        }
+      });
+
       // The camera's reference chain: one byte per link in the stream, resolved
       // ONE-BASED down the `+0x10` chain from the head, exactly as parents are.
       if (n.op !== 6 || !n.cameras?.length) return;
@@ -155,6 +217,13 @@ for (const [k, [a, b]] of [...byType].sort()) {
 // the intro is the only thing mode 2 covers, and it is 4% of the nodes.
 ok('all three builder modes are exercised', byMode.size >= 3,
   [...byMode].sort().map(([m, [a, b]]) => `mode ${m}: ${a + b}`).join(', '));
+ok('every sub-object channel block is bit-exact', subBad === 0,
+  `${subOK}/${subOK + subBad}`);
+ok('sub-objects are checked on the types that have them', subByMode.size >= 4,
+  `ops ${[...subByMode.keys()].sort().join(', ')}`);
+for (const [k, [a, b]] of [...subByMode].sort()) {
+  console.log(`     op${k} sub-objects  ${a} exact${b ? `, ${b} DIFFER` : ''}`);
+}
 ok('every camera reference matrix is bit-exact', refBad === 0,
   `${refOK}/${refOK + refBad} links across ${camNodes} camera nodes`);
 ok('the camera references resolve to real nodes', refCount > 0,
