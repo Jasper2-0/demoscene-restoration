@@ -378,6 +378,12 @@ def dump_program(part, index, prog):
             if flag:
                 truncated.append(f'{hex(a)}:{name}')
         n = {'addr': hex(a), 'op': op,
+             # +0x12 IS THE SCENE'S VISIBILITY FLAG, not the builder's. Every
+             # build handler sets it to 1 on its way out, and op3's EVAL then
+             # CLEARS it on whatever node it cloned — so a source that has been
+             # copied is hidden and only the copy is drawn. `0x100027b8` skips
+             # any geometry node whose +0x12 is zero.
+             'visible': A.u8(a, 0x12), 'at13': A.u8(a, 0x13),
              'records': [read_record(A, r) for r in recs],
              'vertices': [read_vertex(A, v) for v in verts],
              'triangles': [read_triangle(A, t) for t in tris]}

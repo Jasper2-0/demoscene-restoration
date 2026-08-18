@@ -3,8 +3,8 @@
 #
 #   ./checkall.sh <flat-dir> <dataset-dir> [modules-dir] [anim.json] [opsuite-dir] [warp3d-dir]
 #
-# Thirty-two checks accumulated over the work and there is no point in
-# remembering thirty-two invocations. Each passes or names what drifted; none of them
+# Thirty-three checks accumulated over the work and there is no point in
+# remembering thirty-three invocations. Each passes or names what drifted; none of them
 # reports a percentage, because a percentage cannot fail.
 #
 # scenegram.py used to be the one check expected to FAIL, at 0/29. It passes
@@ -211,6 +211,12 @@ run "geocheck — the geometry stream decodes without running the program" \
 # count in the output rather than skipped quietly.
 run "geovertcheck — op0's generator, vertex positions bit for bit" \
   node "$HERE/geovertcheck.mjs" "$FLAT" "$HERE/out/geo.json"
+
+# The seam between the two largest data structures: a scene's mesh node against
+# the geometry program it names. Nothing else asserts that geo.json and
+# arena.json describe the same thing.
+run "joincheck — the geometry programs wired to the scenes that use them" \
+  node "$HERE/joincheck.mjs" "$FLAT" "$HERE/out/geo.json" "$HERE/out/arena.json"
 
 # Every Warp3D name in PORT_SPEC rests on this ordering, and it was measured
 # once and written up as prose. Re-derives it from the shipped libraries.
