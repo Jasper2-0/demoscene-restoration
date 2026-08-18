@@ -253,6 +253,9 @@ run "pipeline — the renderer reproduces the recording, from bytecode" \
 run "showcheck — the whole schedule runs end to end through the engine" \
   node "$HERE/showcheck.mjs"
 
+run "beatcheck — the beat sync, driven by the music's own cues" \
+  node "$HERE/beatcheck.mjs" "$MODS"
+
 # THE 64k PACK, if one has been built. A different DELIVERY of the same runtime,
 # so what can break is the delivery — the payload index, the seg0 reassembly,
 # the fetch shim — and all three fail as a blank page that no suite driving the

@@ -71,8 +71,14 @@ await withPage({
   // The same frame the readable dist draws, from the same tick — so a payload
   // that decoded to the wrong bytes shows up as a different picture rather
   // than as a picture.
-  ok('and the same frame the readable build draws', Boolean(m) && m[4] === '338',
-    m ? `${m[4]} draws (readable build: 338)` : 'no frame');
+  //
+  // 338 until the overlay's clock was fixed. This frame is a one-shot `?tick=`
+  // render of part one's scene 1, which starts at part-tick 921, and the
+  // overlay used to be stepped at the SCENE's tick here rather than the part's
+  // — see renderComputed in main.js. At the right position it contributes one
+  // primitive fewer.
+  ok('and the same frame the readable build draws', Boolean(m) && m[4] === '337',
+    m ? `${m[4]} draws (readable build: 337)` : 'no frame');
 });
 
 if (failed) process.exit(1);

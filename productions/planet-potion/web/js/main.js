@@ -251,7 +251,19 @@ async function main() {
   const clearOf = (rgb) => (rgb ? [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255]
     : [0, 0, 0]);
 
-  const renderComputed = (span, tick, signal, showTick = null, paint = true) => {
+  // `showTick` IS THE PART'S CLOCK AND IS NOT OPTIONAL. It used to default to
+  // null, and the two calls in the live playback loop below did not pass it —
+  // so during actual playback the overlay was stepped on each SCENE's local
+  // tick and restarted at every scene boundary. All ten of its drawing nodes
+  // are beat-triggered (mode 0, triggers 2-11), and restarting them replays
+  // their opening full-screen quads, so part one ran the whole way through
+  // under a repeating halftone layer. Nothing measured it, because every
+  // harness reached the engine through `sweep`, which did pass the argument.
+  // Required rather than defaulted, so the next caller cannot omit it quietly.
+  const renderComputed = (span, tick, signal, showTick, paint = true) => {
+    if (typeof showTick !== 'number') {
+      throw new TypeError('renderComputed: showTick must be the part clock');
+    }
     const order = engine.orderOfSlot(span.part, span.slot);
     if (order == null) return null;
     // WHICH CAMERA, from the schedule. `_play_scene_new_camera` sets a global
@@ -455,12 +467,13 @@ async function main() {
                 // Catch up any tick a dropped frame skipped, so the animation
                 // state is stepped once per tick whatever the display does.
                 try { renderComputed(hit.span, t - hit.span.start,
-                  cueAt.get(t) ?? -1); } catch { /* reported below */ }
+                  cueAt.get(t) ?? -1, t); } catch { /* reported below */ }
               }
               lastTick = tick;
               let info = null;
               try {
-                info = renderComputed(hit.span, hit.local, cueAt.get(tick) ?? -1);
+                info = renderComputed(hit.span, hit.local,
+                  cueAt.get(tick) ?? -1, tick);
               } catch (e) {
                 say(`${spec.label} ${hit.slot} — engine: ${e.message}`);
               }
@@ -659,7 +672,10 @@ async function main() {
     if (engine && params.has('tick')) {
       const tick = Number(params.get('tick'));
       const span = spansFor(params.get('part') ?? 'p1')[s];
-      const info = span ? renderComputed(span, tick, -1) : null;
+      // A one-shot render names a tick INSIDE the scene, so the part clock the
+      // overlay needs is that plus where the scene starts.
+      const info = span
+        ? renderComputed(span, tick, -1, (span.start ?? 0) + tick) : null;
       say(info
         ? `computed ${info.part} ${info.slot} tick=${tick}: `
           + `${info.objects} draws, ${info.triangles} triangles, `
