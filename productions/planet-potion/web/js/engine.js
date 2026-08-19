@@ -368,6 +368,38 @@ export function createEngine({ seg0, seg3, seg4, table, layoutText,
       return stepScene(sceneOf(part, order), table, tick, musicSignal,
         activeCamera);
     },
+
+    /**
+     * Step one tick of ANIMATION and build no geometry.
+     *
+     * For catching up ticks a dropped frame skipped. The animation has to be
+     * stepped once per tick whatever the display manages — the loop origins and
+     * keyframe cursors accumulate forward, and a tick that is never stepped is
+     * a tick of movement that never happens — but the vertices, meshes and
+     * cameras a skipped tick produces are thrown away by the caller the instant
+     * it returns them.
+     *
+     * EXACTLY THE SAME STATE as `frame`. The only thing in a scene that
+     * survives a tick is `anim.origin` and `anim.track`, and `evaluateNode` is
+     * the only thing that touches them: `composeHierarchy` and `composeSub`
+     * mutate the per-tick channel block `evaluateNode` freshly allocates, and
+     * the whole geometry pass reads `S` without writing to it. So running the
+     * evaluation alone leaves the scene where a full step would have.
+     * `work/re/catchupcheck.mjs` holds that claim to the draws themselves.
+     */
+    advance(part, order, tick, musicSignal = -1) {
+      const S = sceneOf(part, order);
+      const { nodes, anims, keys, subAnims, subKeys } = S;
+      for (let i = 0; i < nodes.length; i++) {
+        if (keys[i].length) {
+          evaluateNode(anims[i], keys[i], tick, musicSignal, table);
+        }
+        const sa = subAnims[i], sk = subKeys[i];
+        for (let j = 0; j < sa.length; j++) {
+          if (sk[j].length) evaluateNode(sa[j], sk[j], tick, musicSignal, table);
+        }
+      }
+    },
     /** Reset every scene's animation state — a rewind. */
     rewind() { sceneCache.clear(); },
 

@@ -38,16 +38,16 @@
 
 import { Warp3D, SCREEN_W, SCREEN_H } from './warp3d.js';
 import { buildTextures, loadTextures, installFont } from './textures.js';
-import { parseDBM } from './dbm.js';
-import { render } from './dbmplayer.js';
-import { generateModule } from './synth.js';
 import { resolveStages, provenance } from './stages.js';
 import { createEngine } from './engine.js';
 import { flattenDraws } from './render.js';
 import { sinus } from './tables.js';
 import { glyphTable, layoutText } from './font.js';
 import { cached, hashBytes, clearCache } from './cache.js';
-import { Sequencer } from './dbmplayer.js';
+// THE SOFTSYNTH AND THE MIXER LIVE IN A WORKER. Nothing on this thread imports
+// synth.js, dbm.js or dbmplayer.js any more — see audioworker.js for why, and
+// audio.js for how the size build starts one without a server to load it from.
+import { createAudio } from './audio.js';
 
 const canvas = document.getElementById('screen');
 const statusEl = document.getElementById('status');
@@ -87,6 +87,63 @@ const hideChrome = () => {
   if (startEl) startEl.hidden = true;
   if (barEl) barEl.hidden = true;
 };
+
+/**
+ * The per-frame readout, on '§'.
+ *
+ * The status line used to carry scene, time and draw count on every frame of
+ * the intro, and it was taken off because the intro is not being debugged while
+ * somebody watches it. That is right for the default and wrong for the half
+ * hour after a change, when the question is which scene is on screen and how
+ * many primitives it just cost. So the numbers are back, behind a key, off
+ * until asked for and gone again on the next press.
+ *
+ * READABLE BUILD ONLY, and by construction rather than by a flag: #debug lives
+ * in web/index.html and the size build writes its own page without it, so
+ * `debugEl` is null there and the listener is never bound. `hideChrome` does
+ * not touch it either — the whole point is a readout that survives the intro
+ * taking the screen.
+ */
+const debugEl = document.getElementById('debug');
+let debugOn = false;
+let debugPaintedAt = 0, debugFps = 0, debugFrameMs = 0;
+// How many ticks the last painted frame had to step through to catch up. 0 or 1
+// is healthy; a number that climbs is the display losing a race with the audio
+// clock, which is the shape of every "it gets progressively worse" report.
+let debugCaught = 0, debugCaughtMax = 0;
+
+/** The lines themselves. `info` is null when the tick rendered nothing. */
+const debugText = (label, hit, info, tick, elapsed, signal) => {
+  const sp = hit.span;
+  return [
+    `\u00a7 ${label}${info ? '' : '  (no frame this tick)'}`,
+    `slot ${sp.slot}${sp.over ? ` + ${sp.over.slot}` : ''}`
+      + `  entry ${hit.scene}  cam ${sp.camera ?? 0}  ${sp.driver ?? '\u2014'}`,
+    `show ${elapsed.toFixed(2)}s  tick ${tick}  scene t ${hit.local}`,
+    info ? `draws ${info.objects}  tris ${info.triangles}`
+      + `  glError ${info.glError}` : 'draws \u2014',
+    // The beat sync, which is invisible until it is wrong: -1 is "no effect-7
+    // landed on this tick", and every other value is the byte the nodes match
+    // their trigger against.
+    `fog ${sp.fog ?? '\u2014'}  beat ${signal < 0 ? '\u2014' : signal}`
+      + `  ${debugFps.toFixed(0)} fps`,
+    `caught up ${debugCaught} tick(s), worst ${debugCaughtMax}`,
+  ].join('\n');
+};
+
+if (debugEl) {
+  addEventListener('keydown', (e) => {
+    // '\u00a7' and '\u00b1' are the same physical key, shifted and not, so the
+    // toggle does not silently die under caps lock or a held shift.
+    if (e.key !== '\u00a7' && e.key !== '\u00b1') return;
+    debugOn = !debugOn;
+    debugEl.hidden = !debugOn;
+    // Something to look at straight away. Outside playback nothing else ever
+    // writes here, and a box that stayed empty would read as a broken key
+    // rather than as a show that is not running.
+    if (debugOn) debugEl.textContent = '\u00a7 debug \u2014 waiting for a frame';
+  });
+}
 
 async function loadJSON(path) {
   const r = await fetch(path);
@@ -311,6 +368,46 @@ async function main() {
   // under a repeating halftone layer. Nothing measured it, because every
   // harness reached the engine through `sweep`, which did pass the argument.
   // Required rather than defaulted, so the next caller cannot omit it quietly.
+  /**
+   * Step one skipped tick's ANIMATION, and build nothing.
+   *
+   * The same three layers `renderComputed` draws — the scene, a transition
+   * scene over it, and part one's overlay — stepped through `engine.advance`,
+   * which runs the keyframe evaluation and skips the vertices, meshes, cameras,
+   * clipping and projection whose only consumer is a frame nobody will see.
+   *
+   * WHY THERE IS A CHEAP PATH AT ALL. A dropped frame has to be made up tick by
+   * tick or the animation loses the movement in between — `work/re/catchupcheck.mjs`
+   * measures that 4 of 36 spans genuinely depend on it — but the old catch-up
+   * did it by running the WHOLE pipeline per skipped tick and throwing the
+   * picture away. On a machine that cannot hold 50 Hz that is a spiral: each
+   * dropped frame makes the next frame more expensive, which drops more frames.
+   * Measured under an 8x CPU throttle it reached 675 ticks in one frame and was
+   * still climbing.
+   *
+   * `catchupcheck.mjs` holds this to being bit-identical to the expensive path.
+   */
+  const advanceComputed = (span, tick, signal, showTick) => {
+    const order = engine.orderOfSlot(span.part, span.slot);
+    if (order == null) return;
+    if (span.driver === 'new_camera'
+      && tick === span.start - (span.sceneStart ?? span.start)) {
+      engine.restartScene(span.part, order, tick);
+    }
+    engine.advance(span.part, order, tick, signal);
+    if (span.over) {
+      const o = engine.orderOfSlot(span.part, span.over.slot);
+      if (o != null) {
+        engine.advance(span.part, o,
+          tick - (span.over.since - (span.sceneStart ?? span.start)), signal);
+      }
+    }
+    const ov = engine.overlay;
+    if (span.part === ov.part && order !== ov.order) {
+      engine.advance(ov.part, ov.order, showTick ?? tick, signal);
+    }
+  };
+
   const renderComputed = (span, tick, signal, showTick, paint = true) => {
     if (typeof showTick !== 'number') {
       throw new TypeError('renderComputed: showTick must be the part clock');
@@ -341,6 +438,32 @@ async function main() {
     // that survives to W3D_ClearDrawRegion. (It also has to be read here
     // because `concat` returns a fresh array and would drop the property.)
     const clear = draws.clear;
+    // THE TRANSITION SCENE, and the reason a transition outlives its own entry.
+    // `_play_scene_p_start` and `_play_scene_p_end` are the only drivers that
+    // keep TWO graphs alive: the original holds the main scene at `r2+0x289a`
+    // and a second at `r2+0x289e`, `p_start` generates into the second and
+    // `p_end` into the first, and BOTH loops then run `_show_scene` on 0x289a
+    // and again on 0x289e over the top of it, every frame.
+    //
+    // So part three's 0x2796 is not an 0.8-second scene of its own. It is drawn
+    // over the OUTGOING 0x2786 for its own `p_start` entry and over the INCOMING
+    // 0x277e for the `p_end` that follows — two seconds, with the picture
+    // underneath it swapped halfway through. That IS the transition. Modelling
+    // one pointer drew it alone against nothing for a fifth of the time, which
+    // is the flicker this fixes. Checked frame by frame against the reference
+    // capture at 349.3\u2013351.2 s, where the wordmark sits first over the green
+    // scene and then over the orange one before leaving with the `dalej`.
+    //
+    // ITS OWN CLOCK, expressed as an offset from the main scene's rather than
+    // read off `showTick`, so a sweep that rewinds still gets the same answer.
+    if (span.over) {
+      const o = engine.orderOfSlot(span.part, span.over.slot);
+      if (o != null) {
+        draws = draws.concat(engine.frame(span.part, o,
+          tick - (span.over.since - (span.sceneStart ?? span.start)),
+          signal, cam));
+      }
+    }
     // THE OVERLAY RUNS ON THE PART'S CLOCK, not the scene's — it fades once at
     // the start of part one and is invisible for the rest of it. Given the
     // scene's tick instead it restarts at every scene, and its quads are
@@ -403,20 +526,77 @@ async function main() {
   // modules at load time — 8.3 MB of samples out of 99 KB of segments, and
   // byte-identical to what the original produces: work/re/synthdiff.mjs checks
   // all 94 samples individually and both module digests against audio.json.
+  const audio = createAudio(loadSegments);
+
   /**
-   * One part's module, generated or remembered.
+   * Get one part's module into the worker, built or remembered.
    *
-   * 8.3 MB of samples out of 99 KB of segments, and about 1.6 seconds of
+   * 8.3 MB of samples out of 99 KB of segments, and about two seconds of
    * straight-line arithmetic for part one. Byte-identical every time, which is
    * exactly what makes it worth keeping.
+   *
+   * THE CACHE STAYS ON THIS THREAD. IndexedDB is reachable from a worker, but
+   * `cache.report` and the readout are the page's, and splitting one store
+   * across two threads to save a copy of something already being copied is not
+   * a trade worth making. So: a miss builds in the worker and the bytes come
+   * back to be stored; a hit sends them the other way. Either way the worker
+   * ends up holding the parsed module and the bytes cross exactly once.
+   *
+   * -> { channels, instruments }, which is all the readout wants.
    */
-  const moduleBytes = async (part) => {
-    const seg = await loadSegments();
+  const moduleReady = async (part) => {
+    let built = null;
     const got = await cached(`mod:${part}:${cache.key}`, 'v1',
-      async () => generateModule(seg.seg0, seg.seg4, part), { skip: cache.skip });
+      async () => {
+        built = await audio.generate(part);
+        return built.bytes;
+      }, { skip: cache.skip });
     cache.report.push(`${part} module ${got.hit ? 'cached' : 'built'} `
       + `${(got.ms / 1000).toFixed(1)}s`);
-    return got.value;
+    // A HIT MEANS THE WORKER NEVER MADE IT, so it has to be given one before
+    // anything can be mixed against it.
+    return built ?? audio.have(part, got.value);
+  };
+
+  /**
+   * Everything a part needs before it can be heard, off-thread and memoised.
+   *
+   * MEMOISED BECAUSE OF THE PREFETCH. `playPart` starts the NEXT part's job the
+   * moment the current one begins playing, so by the time the show asks for it
+   * the work is usually finished and this returns a settled promise. That is
+   * the whole point of the worker: the part boundary used to be three seconds
+   * of blocked main thread with the last frame of part one frozen on it.
+   */
+  const prepared = new Map();
+  const prepareAudio = (spec, ctx, loud = false) => {
+    if (!prepared.has(spec.part)) {
+      prepared.set(spec.part, (async () => {
+        // THE READOUT AND THE BREADCRUMB BELONG TO THE FOREGROUND PART. A
+        // background job runs while another part is on screen, so letting it
+        // write `where` would make an error from the part being watched name
+        // the stage of the part being built.
+        const step = (at, text, detail) => {
+          if (!loud) return;
+          where = at;
+          stage(text, detail);
+        };
+        step(`${spec.label}: generating the soundtrack`,
+          `generating ${spec.label}'s soundtrack`);
+        const info = await moduleReady(spec.part);
+        step(`${spec.label}: mixing`, `mixing ${spec.label}`,
+          `${info.channels ?? '?'} channels, `
+          + `${info.instruments ?? '?'} instruments`);
+        // ?octave=N transposes playback, for settling by ear the one thing the
+        // two reference implementations disagree about. dbplayer.library puts
+        // the instrument's own rate on note 0x60; libdigibooster3 puts it two
+        // octaves lower, so it plays this module two octaves higher than we do.
+        // The disassembly favours dbplayer and the correlation favours the
+        // oracle, which is a disagreement an ear can settle and a metric cannot.
+        return audio.mix(spec.part, ctx.sampleRate,
+          Number(params.get('octave') ?? 0) || 0);
+      })());
+    }
+    return prepared.get(spec.part);
   };
 
   // Which stage the show is in, for the error path. See the catch below.
@@ -436,15 +616,27 @@ async function main() {
     // frozen — and the scene's own clock has to keep running from the entry
     // that INTRODUCED the slot, not restart at each continuation.
     ? (() => {
+      // TWO SCENE POINTERS, because the original keeps two. `r2+0x289a` holds
+      // the scene on screen and `r2+0x289e` holds a second one; every driver
+      // generates into the first EXCEPT `_play_scene_p_start`, which generates
+      // into the second. See the `over` note in renderComputed for what that
+      // costs a port that models only one.
       let slot = null, sceneStart = 0;
+      let over = null, overStart = 0;
       return (schedule[part]?.schedule ?? []).map((e, i) => {
-        if (e.slot) { slot = e.slot; sceneStart = e.startTick ?? 0; }
+        const at = e.startTick ?? 0;
+        if (e.driver === 'p_start') { over = e.slot; overStart = at; }
+        else if (e.slot) { slot = e.slot; sceneStart = at; }
         return {
           scene: i, frames: [], slot, fog: e.fog, camera: e.camera, sceneStart,
           // `new_camera` does not merely select a camera: it restarts the
           // scene's animation clock. See engine.restartScene.
           driver: e.driver,
-          start: e.startTick ?? 0, end: (e.startTick ?? 0) + (e.durTicks ?? 0),
+          // BOTH POINTERS GET DRAWN, and only by these two drivers — every
+          // other one shows `0x289a` alone and leaves `0x289e` set but unseen.
+          over: (e.driver === 'p_start' || e.driver === 'p_end') && over
+            ? { slot: over, since: overStart } : null,
+          start: at, end: at + (e.durTicks ?? 0),
           part,
         };
       });
@@ -479,32 +671,19 @@ async function main() {
     return null;
   };
 
-  /** Generate, sequence and mix one part, then show it against its own clock. */
+  /** Sequence and mix one part, then show it against its own clock. */
   async function playPart(ctx, spec) {
-    where = `${spec.label}: generating the soundtrack`;
-    stage(`generating ${spec.label}'s soundtrack`,
-      'the intro\u2019s own softsynth, from its bytecode');
-    // Yield so the line above paints: generating part one is about 1.6 seconds
-    // of straight-line arithmetic and it blocks the thread.
-    await new Promise((r) => setTimeout(r, 0));
-    where = `${spec.label}: reading the module`;
-    const mod = parseDBM(await moduleBytes(spec.part));
-    where = `${spec.label}: mixing`;
-    stage(`mixing ${spec.label}`,
-      `${mod.info?.channels ?? '?'} channels, `
-      + `${mod.instruments?.length ?? mod.info?.instruments ?? '?'} instruments`);
-    // render() is synchronous and takes about a second for part one, so yield
-    // once and let the line above actually paint before the thread blocks.
-    await new Promise((r) => setTimeout(r, 0));
-    // ?octave=N transposes playback, for settling by ear the one thing the two
-    // reference implementations disagree about. dbplayer.library puts the
-    // instrument's own rate on note 0x60; libdigibooster3 puts it two octaves
-    // lower, so it plays this module two octaves higher than we do. The
-    // disassembly favours dbplayer and the correlation favours the oracle,
-    // which is a disagreement an ear can settle and a metric cannot.
-    const octaveShift = Number(params.get('octave') ?? 0) || 0;
-    const { pcm, sampleRate, seconds, cues } = render(mod,
-      { sampleRate: ctx.sampleRate, octaveShift });
+    // THE PRECALC READOUT BELONGS TO THE FIRST PART ONLY. Part three is built
+    // too, but by the time it is wanted the screen is the intro's and part
+    // one's last frame is still on the canvas — pushing “generating part
+    // three’s soundtrack” and the progress bar back over it would turn a
+    // transition into a load screen. `where` still names the stage for the
+    // error path; only the telling is dropped.
+    //
+    // AND IT IS USUALLY FINISHED BEFORE IT IS ASKED FOR: the part before this
+    // one started the job in the worker as soon as it began playing.
+    const { L, R, sampleRate, seconds, cues } =
+      await prepareAudio(spec, ctx, spec === SHOW[0]);
     where = `${spec.label}: queueing the audio`;
     // THE BEAT SYNC, as a lookup. Every effect-7 in the module, by the tick it
     // lands on; _calc_matrix compares it against each node's trigger byte and a
@@ -513,10 +692,12 @@ async function main() {
     const cueAt = new Map();
     for (const c of cues ?? []) cueAt.set(c.ticks50, c.value);
 
-    const frames = pcm.length / 2;
-    const buf = ctx.createBuffer(2, frames, sampleRate);
-    const [L, R] = [buf.getChannelData(0), buf.getChannelData(1)];
-    for (let i = 0; i < frames; i++) { L[i] = pcm[i * 2]; R[i] = pcm[i * 2 + 1]; }
+    // TWO MEMCPYS. The worker deinterleaves, so what used to be 12.7 million
+    // iterations of main-thread JS on the tail of the mix is now a pair of
+    // buffer copies.
+    const buf = ctx.createBuffer(2, L.length, sampleRate);
+    buf.copyToChannel(L, 0);
+    buf.copyToChannel(R, 1);
 
     const src = ctx.createBufferSource();
     src.buffer = buf;
@@ -524,6 +705,16 @@ async function main() {
     const spans = spansFor(spec.part);
     const t0 = ctx.currentTime + 0.06;   // a beat of slack so frame 0 is not late
     src.start(t0);
+    // THE NEXT PART, BUILT WHILE THIS ONE PLAYS. This is the reason the synth
+    // moved off-thread: three seconds of arithmetic at the part boundary used
+    // to stop the show dead with part one's last frame frozen on screen. In the
+    // worker it overlaps ninety seconds of playback and nothing can see it.
+    //
+    // NOT AWAITED — the `catch` is only there so a failure here is not an
+    // unhandled rejection. `prepareAudio` memoises the promise, so the real
+    // error still surfaces from the `await` in the next `playPart`.
+    const next = SHOW[SHOW.indexOf(spec) + 1];
+    if (next) prepareAudio(next, ctx).catch(() => {});
     where = `${spec.label}: playing`;
     // From here the screen is the intro and nothing else.
     hideChrome();
@@ -539,6 +730,26 @@ async function main() {
       let shown = '';
       let lastTick = -1;
       const step = () => {
+        // THE DISPLAY RATE, sampled per animation frame and not per tick. The
+        // tick loop runs at a flat 50 Hz off the audio clock whatever the
+        // screen manages, so counting ticks would cheerfully report 50 on a
+        // machine dropping half its frames — the exact case the number is there
+        // to catch. Smoothed, because a raw frame delta is unreadable.
+        if (debugOn) {
+          const now = performance.now();
+          if (debugPaintedAt) {
+            // SMOOTH THE INTERVAL, NOT THE RATE. Averaging rates buries the
+            // case worth seeing: one seven-second frame contributes a rate of
+            // 0.14 to a running mean sitting at 120 and moves it almost not at
+            // all, so the readout said "100 fps" while the show was visibly
+            // frozen. Averaging the interval instead lets a long frame dominate
+            // immediately, which is what it should do.
+            const dt = Math.max(1, now - debugPaintedAt);
+            debugFrameMs = debugFrameMs ? debugFrameMs * 0.8 + dt * 0.2 : dt;
+            debugFps = 1000 / debugFrameMs;
+          }
+          debugPaintedAt = now;
+        } else { debugPaintedAt = 0; debugFrameMs = 0; }
         const elapsed = ctx.currentTime - t0;
         if (isLast && fadeEl) {
           const into = elapsed - (seconds - FADE);
@@ -557,7 +768,23 @@ async function main() {
             // has a new answer each tick, and stepping is also how the loop
             // modes and the beat sync accumulate their state.
             if (tick !== lastTick) {
-              for (let t = lastTick + 1; t < tick; t++) {
+              // A HARD CEILING ON MAKING UP TIME, which is not about slow
+              // machines: a BACKGROUNDED TAB stops requestAnimationFrame while
+              // the audio clock keeps running, so coming back after two minutes
+              // asks for six thousand ticks in one frame. Nothing that steps
+              // per tick can survive that, however cheap each step is.
+              //
+              // Past the ceiling the loop stops making up time and jumps, which
+              // costs the accumulated part of the animation for the ticks it
+              // skipped. That is a real loss and it is the right trade: the
+              // alternative is a frame that never finishes, and the beat cues
+              // re-trigger those nodes within a bar anyway.
+              const CATCHUP_MAX = 100;      // two seconds of show
+              const behind = tick - lastTick - 1;
+              debugCaught = Math.max(0, behind);
+              if (debugCaught > debugCaughtMax) debugCaughtMax = debugCaught;
+              const from = behind > CATCHUP_MAX ? tick - CATCHUP_MAX : lastTick + 1;
+              for (let t = from; t < tick; t++) {
                 // Catch up any tick a dropped frame skipped, so the animation
                 // state is stepped once per tick whatever the display does.
                 //
@@ -573,9 +800,10 @@ async function main() {
                 // forward, so what came out was a camera that would not move.
                 const h = frameAt(spans, t);
                 if (!h) continue;
-                // `paint` false: an intermediate tick is overdrawn immediately,
-                // so it needs the ANIMATION stepped and none of the GL.
-                try { renderComputed(h.span, h.local, cueAt.get(t) ?? -1, t, false); }
+                // ANIMATION ONLY — an intermediate tick is overdrawn before
+                // anyone sees it, so it needs the state stepped and none of the
+                // geometry, let alone the GL.
+                try { advanceComputed(h.span, h.local, cueAt.get(t) ?? -1, t); }
                 catch { /* reported below */ }
               }
               lastTick = tick;
@@ -586,12 +814,18 @@ async function main() {
               } catch (e) {
                 say(`${spec.label} ${hit.slot} — engine: ${e.message}`);
               }
-              // NOTHING SAID PER FRAME. The status line was a running readout
-              // of scene, time and draw count in the corner of every frame of
-              // the intro; it is a debugging aid and the intro is not being
-              // debugged while somebody watches it. `?inspect=1` and the check
-              // suites read the same numbers off `__demo` and the tick loop.
-              void info;
+              // NOTHING SAID PER FRAME, unless '\u00a7' asked for it. The status
+              // line was a running readout of scene, time and draw count in the
+              // corner of every frame of the intro; it is a debugging aid and
+              // the intro is not being debugged while somebody watches it.
+              // `?inspect=1` and the check suites read the same numbers off
+              // `__demo` and the tick loop. #debug is the same numbers again,
+              // for the case where the thing being debugged is the picture and
+              // the only way to see it is to watch it go past.
+              if (debugOn && debugEl) {
+                debugEl.textContent = debugText(spec.label, hit, info, tick,
+                  elapsed, cueAt.get(tick) ?? -1);
+              }
             }
           } else if (hit) {
             const key = `${hit.scene}:${hit.frame}`;
@@ -685,8 +919,8 @@ async function main() {
     // hear. The module itself comes out of the cache.
     let cues = [];
     try {
-      const seq = new Sequencer(parseDBM(await moduleBytes(part)));
-      cues = seq.run().cues ?? [];
+      await moduleReady(part);
+      cues = (await audio.cues(part)).cues ?? [];
     } catch (e) {
       say(`could not read the music's cues: ${e.message}`);
     }

@@ -5,18 +5,26 @@ pre-rendered audio. It reads the intro's own bytecode out of three segments and
 runs it: the scene graph, the geometry, the three animation passes, the node
 walk, the clipper, the projection, both soundtrack modules and all 69 textures.
 
-`work/re/pipeline.mjs` compares 140 frames of that against the original's
-recorded stream — 135 reproduce every primitive exactly, and the five that do
-not are one geometry node whose displacement map is specified in
-[`PORT_SPEC.md`](../work/re/PORT_SPEC.md) §0-bis and not yet reproduced.
+`engine.js` decodes the scene graph and the geometry out of seg3 and seg4, runs
+the three animation passes once per tick with the music's own effect-7 cues
+driving the beat sync, walks the nodes, clips and projects, and hands the result
+to the same Warp3D shim the recording used to feed. The schedule comes from
+`showorder.json` — 11 KB against `draws.json`'s 17 MB, and the richer of the two.
 
-`?oracle=1` and `?scene=N` still play the recording, which is now an oracle
-rather than an input. `?scene=N&tick=M` renders one computed frame.
+`pipeline.mjs` compares 140 frames and 45,327 primitives of that against the
+original's recorded stream — 135 reproduce every primitive exactly, and the five
+that do not are one geometry node whose displacement map is specified in
+[`PORT_SPEC.md`][spec] §0-bis and not yet reproduced.
 
-There is a second target: `./scripts/build-planet-potion-mashi.sh` packs the
-same runtime into one self-extracting 55,196-byte .html, against the original's
-65,288. It does not fork the code — see
-[`PORT_SPEC.md`](../work/re/PORT_SPEC.md) §0-bis.
+**The recording is now the oracle, not an input.** `?oracle=1` and `?scene=N`
+still play it; the default path never downloads it.
+
+### The 64k build
+
+[`mashi/`](mashi/) is the same runtime packed into one self-extracting
+**60,569-byte** .html, against the original's 65,288. It does not fork the
+code — every module under `js/` is compiled exactly as tested — see
+[`PORT_SPEC.md`][spec] §0-bis.
 
 ## What is here
 
@@ -25,7 +33,7 @@ specific configuration the program sets up, not a general emulation. Every
 constant in it is measured: blend factors, the reversed depth convention,
 bilinear-without-mipmaps, `REPEAT` wrapping, texel-space texture coordinates, and
 per-vertex linear fog. Provenance for each is in
-[`../work/re/PORT_SPEC.md`](../work/re/PORT_SPEC.md) §5.
+[`PORT_SPEC.md`][spec] §5.
 
 It consumes the same record shape `work/re/drawlog.py` records from the
 original, so the recorded draw stream plays through it directly. That was the
@@ -56,10 +64,9 @@ against `font_atlas.png` and all 40 records against `font.json`, and asserts the
 two shipped quirks are preserved rather than tidied away: `'0'` appears twice,
 and `'v'` carries `'w'`'s rectangle so the intro renders "v" as "w".
 
-Nothing on the page draws text yet — the type-4 handler is Stage 3b — so this is
-groundwork with an oracle rather than a change to what renders. That is the
-reason to do it now: both outputs are checkable byte-for-byte today and would be
-much harder to isolate once a text handler is consuming them.
+The type-4 node handler consumes both: `engine.js` lays out every text node in a
+scene through the glyph table when it builds the graph, so the type on screen
+comes from the same 200 bytes of seg0 the original reads.
 
 **Fog is applied.** `setFog` had existed in the shim since it was written and
 nothing had ever called it, so four of part one's scenes rendered clear that
@@ -78,21 +85,27 @@ default and the reasoning is in `js/warp3d.js` and `PORT_SPEC.md` §6.
 
 ## Run
 
-Serve the repository with any static HTTP server and open `productions/planet-potion/web/`.
-No build step, no runtime dependencies.
+Press **Start Intro**. No build step and no runtime dependencies — sixteen ES
+modules and the intro's own bytecode. To run it locally, serve this directory
+with any static HTTP server; opening `index.html` from the filesystem will not
+work, because ES modules and the audio worker both need an origin.
 
-Press **Start with sound** for the show: the real soundtrack, with the recorded
-frames stepping in time with it. Everything else is a single still.
-
-- `?oracle=1` — replay a recorded frame
+- `?oracle=1` — replay the recorded stream instead of computing
 - `?scene=N&t=M` — one recorded frame, deterministically
+- `?scene=N&tick=M` — one **computed** frame, deterministically
+- `?show=p1|p3&at=SECONDS` — sweep to an absolute show time, for comparing against a capture
 - `?inspect=1` — install the shared `window.__demo` adapter and draw nothing on its own
 - `?texenv=0|1|2` — texture environment: replace (default), modulate, decal
+- `?octave=N` — transpose the soundtrack
+- `?nocache=1` — skip the IndexedDB cache of generated textures and modules
 
-The button is hidden in those four modes, because it cannot mean anything in
-them — each renders one still or nothing at all.
+Press **§** during the show for a per-frame readout: scene, slot, tick, draw and
+triangle counts, and the display rate.
 
-## What "Start with sound" is, and is not
+The button is hidden in the single-frame and inspect modes, because it cannot
+mean anything in them — each renders one still or nothing at all.
+
+## The soundtrack
 
 The **audio is a port all the way down**, and as of the softsynth it is
 generated rather than loaded. `js/synth.js` runs all 32 of the original's
@@ -108,16 +121,17 @@ reference and both whole-module SHA-256 digests against `audio.json`, which
     part 1   5,324,378 B   dfd0826755b81fba…
     part 3   3,015,404 B   460939ceb5d2bbbd…
 
-It costs about 1.6 seconds for part one and 1.1 for part three, taken when each
-part starts rather than up front. `work/re/soundcheck.mjs` presses the button in
-a real browser and measures the samples that reach the output — part one's full
-289.286 seconds, stereo, and not silence.
+**It runs in a worker.** Generating a module is about two seconds of
+straight-line arithmetic and mixing it is another second, so both live in
+`js/audioworker.js` and neither touches the thread that draws. That is not only
+so the precalc stops freezing: it means part three is built *while part one
+plays*, and the boundary between the two parts costs nothing. `soundcheck.mjs`
+presses the button in a real browser and measures the samples that reach the
+output — part one's full 289.286 seconds, stereo, and not silence.
 
-The **visuals are still recorded**, and sampled sparsely: five frames per scene,
-140 in all. So the show is stills changing in time with the music, not
-animation. Real playback would need 21,915 frames — `draws.json` is already
-19 MB for 140 — which is the clearest statement of why the engine, not a bigger
-export, is the remaining work.
+Generated textures and modules are cached in IndexedDB between reloads, keyed by
+a hash of the segments they were built from and a version that has to be bumped
+by hand. `?nocache=1` skips it.
 
 Frames follow the **audio clock** (`AudioContext.currentTime`), not
 `requestAnimationFrame`. METHOD.md §8 requires it for anything audio-locked, and
@@ -125,36 +139,28 @@ here it is also the only clock that means anything: the show's schedule is
 defined by effect-7 signals inside the music, which is how `showorder.py`
 recovered the timeline in the first place.
 
-The recorded stream and textures are **not committed**; they are regenerable:
+The recorded stream and the exported textures are **not committed**; they are
+regenerated by running the original under `qemu-user`. The full recipe, and
+where the segment dump comes from, is at the top of [`checkall.sh`][checkall] in
+the [monorepo][repo] — this is the published site, and the reverse-engineering
+harness stays there.
 
-```sh
-cd ../work/re && ./ppcbox.sh python3 export.py flat/ out/ && cp -r out/* ../../web/data/
-```
+## The pipeline, stage by stage
 
-`synthdump.py` is no longer part of the recipe: the page generates the modules
-rather than loading them, and `export.py` writes the two segments it needs. The
-harness still builds the .dbm files under `mods/` because `dbmcheck`, `dbmtime`,
-`dbmdiff` and `synthref` all want a reference module to compare against.
+Every stage is switchable between the original's recorded output and this port's
+own, and `js/stages.js` is where that lives — the list below is the one in that
+file. **All seven default to computed**; the recorded side is the oracle.
 
-`ppcbox.sh` is there because both tools generate their data by running the
-original under `qemu-user`, which does not exist on macOS. The full recipe,
-including where `flat/` comes from, is at the top of `../work/re/checkall.sh`.
-
-## What is not here yet
-
-The engine. The pipeline is switchable between recorded and computed per stage,
-and `js/stages.js` is where that lives — the list below is the one in that file:
-
-| stage | side | what runs |
+| stage | computed | recorded |
 |---|---|---|
-| `tables` | **computed** | rebuilt from the executable's own float constants |
-| `textures` | **computed** | the texture VM over the intro's bytecode |
-| `geometry` | recorded | baked into `data/draws.json` |
-| `scene` | recorded | baked into `data/draws.json` |
-| `anim` | recorded | baked into `data/draws.json` |
-| `emit` | recorded | `data/draws.json`, five frames per scene |
-| `raster` | **computed** | translated to WebGL2 |
-| `audio` | **computed** | both modules generated byte-exactly |
+| `tables` | rebuilt from the executable's own float constants | — |
+| `textures` | the texture VM over the intro's bytecode | the exported PNGs |
+| `geometry` | built from seg3 and seg4 — 181/181 nodes vs `geodump` | `data/draws.json` |
+| `scene` | decoded from the stream — 29/29, 395/395 nodes | `data/draws.json` |
+| `anim` | all three passes, stepped per tick — 2,783 blocks exact | `data/draws.json` |
+| `emit` | the node walk, clipper and projection | `data/draws.json` |
+| `raster` | translated to WebGL2 | — |
+| `audio` | both modules generated byte-exactly | — |
 
 Any of them can be selected with `?<stage>=computed|recorded`. **Asking for a
 side that does not exist is refused and said out loud** — it does not quietly
@@ -244,7 +250,7 @@ actually plays it the figures are 0.97 and 0.91. Both are checked.
 The note base was also settled by ear rather than by measurement: the two
 references disagreed by two octaves, correlation preferred one and the
 disassembly the other, and only listening could say which was the intro. See
-`../work/re/NOTES.md`.
+[`NOTES.md`][notes].
 
 Still missing:
 
@@ -257,3 +263,13 @@ Still missing:
   point; the reference does the same in 16.16 fixed point with an eight-sample
   lead-in, which is one sample of latency and a hair of shape. Worth the last
   0.014 on a held note.
+
+---
+
+The reverse engineering, the check suites and the build live in the monorepo:
+**[Jasper2-0/demoscene-restoration][repo]**.
+
+[repo]: https://github.com/Jasper2-0/demoscene-restoration
+[spec]: https://github.com/Jasper2-0/demoscene-restoration/blob/main/productions/planet-potion/work/re/PORT_SPEC.md
+[notes]: https://github.com/Jasper2-0/demoscene-restoration/blob/main/productions/planet-potion/work/re/NOTES.md
+[checkall]: https://github.com/Jasper2-0/demoscene-restoration/blob/main/productions/planet-potion/work/re/checkall.sh

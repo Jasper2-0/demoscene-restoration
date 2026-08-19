@@ -215,20 +215,46 @@ export class Warp3D {
     if (this.depth16) {
       const fbo = gl.createFramebuffer();
       const colour = gl.createRenderbuffer();
-      const depth = gl.createRenderbuffer();
       gl.bindRenderbuffer(gl.RENDERBUFFER, colour);
       gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, SCREEN_W, SCREEN_H);
-      gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
-      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16,
-        SCREEN_W, SCREEN_H);
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
       gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
         gl.RENDERBUFFER, colour);
-      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT,
-        gl.RENDERBUFFER, depth);
+
+      // A DEPTH TEXTURE, NOT A DEPTH RENDERBUFFER, and the difference is not
+      // cosmetic. Firefox PROMOTES every depth renderbuffer to 32 bits —
+      // `RENDERBUFFER_DEPTH_SIZE` reports 32 for DEPTH_COMPONENT16,
+      // DEPTH_COMPONENT24 and DEPTH_COMPONENT32F alike — so asking for 16 there
+      // got the opposite of what this whole framebuffer exists for: MORE
+      // precision than the canvas would have given, and 0x25ee's interpenetrating
+      // surfaces resolving individually instead of merging. A depth TEXTURE at
+      // DEPTH_COMPONENT16 is honoured at 16 bits by Firefox and Chrome both.
+      //
+      // ⚠ `getParameter(DEPTH_BITS)` DOES NOT REPORT THIS. It returned 16 on
+      // Firefox for the 32-bit renderbuffer, which is why the original fix
+      // looked like it had taken and had not. Nothing here may use it to decide
+      // anything; `?depth=` and the inspector report the format ASKED FOR, and
+      // `work/re/depthcheck.mjs` measures what actually happens to the picture.
+      const depth = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, depth);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT16, SCREEN_W, SCREEN_H,
+        0, gl.DEPTH_COMPONENT, gl.UNSIGNED_SHORT, null);
+      // A depth texture with the default mipmap filter is INCOMPLETE, and an
+      // incomplete attachment is how this silently falls back to the canvas.
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT,
+        gl.TEXTURE_2D, depth, 0);
+      gl.bindTexture(gl.TEXTURE_2D, null);
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
         this.fbo = fbo;
-        this.depthBits = gl.getParameter(gl.DEPTH_BITS);
+        this.depthTex = depth;
+        // WHAT WAS ASKED FOR. See the warning above: there is no query that
+        // answers "what did the driver allocate" for a texture attachment, and
+        // the one that claims to answer it for a renderbuffer lies.
+        this.depthBits = 16;
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }

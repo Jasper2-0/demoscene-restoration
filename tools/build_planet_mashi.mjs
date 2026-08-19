@@ -130,6 +130,37 @@ fs.writeFileSync(WASM_PATH, Buffer.concat([header, payload]));
 // 2. THE BUNDLE
 // ===========================================================================
 const esbuild = await import('esbuild');
+
+// THE WORKER IS ITS OWN BUNDLE, INLINED AS A STRING.
+//
+// The synth and the mixer run in a worker so the part boundary is not three
+// seconds of stopped show — see web/js/audioworker.js. A worker needs a URL,
+// and `new Worker(url)` is loaded by the BROWSER rather than through the
+// runtime's `fetch`, so entry.js's in-memory file table cannot serve it: on
+// this build the only way to start one is a Blob URL over its own source.
+//
+// So it is bundled first, on its own, and handed to the main pass as
+// `__WORKER_SRC__`. IIFE rather than ESM because a Blob worker started without
+// `{type:'module'}` is a classic worker — the readable build loads the very
+// same file as a module worker instead, which is the only place these two
+// builds differ in how web/js/ is loaded rather than what it contains.
+//
+// IT IS NOT A SECOND COPY. main.js imports none of dbm.js, synth.js or
+// dbmplayer.js any more, so this bundle is where that code lives on this build
+// rather than an extra of it.
+const workerBundle = await esbuild.build({
+  entryPoints: [path.join(PROD, 'web/js/audioworker.js')],
+  bundle: true,
+  format: 'iife',
+  minify: true,
+  target: 'es2022',
+  drop: ['console', 'debugger'],
+  write: false,
+  logLevel: 'warning',
+});
+const workerJs = Buffer.from(workerBundle.outputFiles[0].contents).toString('utf8');
+console.log(`\n  audioworker.js (minified, inlined)  ${String(workerJs.length).padStart(7)} B`);
+
 const result = await esbuild.build({
   entryPoints: [path.join(PROD, 'web-mashi/mashi/entry.js')],
   bundle: true,
@@ -144,7 +175,10 @@ const result = await esbuild.build({
     __SEG0_SCRIPT_OFF__: String(SCRIPT_OFF),
     // Folds out the recorded paths: the oracle player, the PNG texture loader
     // and the stage switch are all dead on a build that ships no recording.
+    // ALSO the worker seam — audio.js reads it to decide between a Blob URL
+    // and a path, and it is the first thing in web/js/ to read it at all.
     __SIZE__: 'true',
+    __WORKER_SRC__: JSON.stringify(workerJs),
   },
   banner: {
     js: 'var __MASHI_PAYLOAD__=typeof arguments!="undefined"&&arguments[0]?'
