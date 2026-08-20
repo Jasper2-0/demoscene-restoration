@@ -689,3 +689,39 @@ Two caveats that must be resolved before anyone builds on this:
 **Phase 4 remains blocked.** The plan's own rule applies: the criterion is to be read,
 not fitted, and a threshold on a float that happens to separate three samples is
 exactly the kind of convincing wrong answer METHOD.md warns about.
+
+### The runtime material struct, read from inside the process
+
+The FSOUND stub is loaded into the engine's address space and these PEs have no
+ASLR, so `SUNF_PEEK_PTR=43f474:c0` dereferences `DAT_0043f474` — the current
+material pointer — and dumps the struct it points at. Measured at show 102.26 s:
+
+```
+  [0x43f474] -> 0x4785720
+  +000  ff ff ff ff ff ff ff ff  02 03 00 00  03 03 00 00
+  +010  "Material #2"
+  +090  03 00 00 00 | 00 80 41 00 | 00 00 00 00 | 00 00 00 3f
+```
+
+`+008 = 0x302` and `+00c = 0x303` are `GL_SRC_ALPHA` / `GL_ONE_MINUS_SRC_ALPHA`,
+exactly what `forced_00408550` writes to `[EBX+8]` / `[EBX+0xc]` — so this is
+confirmed to be the material struct the draw path consumes, not a lookalike.
+
+**The byte the gate tests, runtime `material+0x94`, is `0x00`** for `"Material #2"`
+— woah3's material 2, the one the `B2.LWO0n` meshes use, and the one whose triangles
+are measurably rejected (3468 -> ~2400).
+
+That **resolves the blocking caveat**: the file blob's byte 0x94 and the runtime
+struct's `+0x94` agree, so the asset table recorded above can be read at face value.
+The gate is confirmed ACTIVE for the LWO meshes.
+
+**Still unexplained**: material 0 (`Original`) has a non-zero 0x94 yet its mesh is
+also reduced, 10278 -> 6525. Either the runtime material order differs from the file
+order, or `Original`'s reduction comes from somewhere other than this gate. The peek
+can settle that too — it needs the pointer captured while material 0 is bound rather
+than material 2, which is a matter of when the peek fires, not of whether the method
+works.
+
+Practical note for anyone using the peek: trigger it from `FMUSIC_GetOrder`, not from
+the QPC hook. The engine calls GetOrder about **three times over an entire run**, not
+once per frame as the clock code suggests, so any threshold above that never fires.

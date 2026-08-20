@@ -37,15 +37,11 @@
  *   SUNF_PEEK        "addr:len" (hex) — dump engine memory once per frame
  *   SUNF_PEEK_PTR    "addr:len" (hex) — DEREFERENCE addr, then dump len from there
  *
- *   ** THE PEEK DOES NOT FIRE YET. ** It is configured correctly (the attach line
- *   reports the parsed address, length and deref flag) and the run renders normally
- *   — 47 frames, 466,832 GL calls, no crash — but do_peek's own entry trace never
- *   appears, so the counter in the QPC hook is not reaching its threshold. The QPC
- *   hook itself IS working: SUNF_QPC_HOLD demonstrably changes what the engine
- *   renders. Unresolved, and left in place rather than removed because the approach
- *   is sound: the stub is inside the process, the PE has no ASLR, and reading the
- *   engine's own memory is the one route that answers layout questions static
- *   analysis cannot.
+ * WORKING. It is triggered from FMUSIC_GetOrder rather than from the QPC hook,
+ * because the engine calls GetOrder only about THREE times over a whole run — not
+ * once per frame as the clock code reads — so any threshold above that never fired.
+ * That took a while to find and is worth stating: the obvious per-frame call site
+ * was not one.
  *
  * ADDRESSING A SHOW TIME, not just an order. wONDEr.exe's clock is (read out of the
  * frame handler around 0x40e8xx, constants at 0x4337b0 = 1000 and 0x4337a8 = 0.001,
@@ -92,6 +88,8 @@ static long   g_qpc_latch = 8;        /* calls reported as 0 before the jump */
 static long   g_qpc_calls = 0;
 
 static void parse_peek(const char *v, int deref);   /* defined below, used by init_once */
+static void do_peek(void);                          /* and by FMUSIC_GetOrder */
+static long g_peek_frames = 0;
 
 static const char *envs(const char *n) {
     static char buf[64];
@@ -156,6 +154,13 @@ int __stdcall FMUSIC_SetOrder(DWORD song, int order) {
 
 int __stdcall FMUSIC_GetOrder(DWORD song) {
     init_once();
+    /* Trigger the memory peek from HERE rather than from the QPC hook. This is our
+     * own export, so it is guaranteed to be called — the engine reads the order
+     * once per frame to drive its clock — whereas the QPC hook's counter never
+     * reached its threshold for reasons that were costing a container run each to
+     * chase. Delayed a few frames so the scene is built before it is read. */
+    if (++g_peek_frames <= 3 || g_peek_frames % 50 == 0) TR("GetOrder call #%ld -> %d", g_peek_frames, (int)g_order);
+    if (g_peek_frames >= 2) do_peek();
     int r = (int)g_order;
     if (g_order_step != 0.0) g_order += g_order_step;
     return r;
@@ -168,14 +173,11 @@ static DWORD WINAPI hooked_GetTickCount(void) {
     return r;
 }
 
-static long g_peek_frames = 0;
-static void do_peek(void);
 
 static BOOL WINAPI hooked_QueryPerformanceCounter(LARGE_INTEGER *out) {
     if (!out) return FALSE;
     /* Let the scene load and draw a few frames before looking — the pointers this
      * reads are null until the engine has built them. */
-    if (++g_peek_frames >= 30) do_peek();   /* self-guards via g_peek_done */
     if (g_qpc_hold >= 0.0) {
         /* Two-phase: zero while the engine latches its order start, then a
          * constant offset forever. elapsed == HOLD exactly, on every frame. */
