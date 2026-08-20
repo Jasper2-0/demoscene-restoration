@@ -61,6 +61,15 @@ productions/tesla/work/source/
 # committed, their binary inputs/outputs are not. sonnet_img.bin is the one
 # deliberate exception: the readable site ships it as runtime data already.
 productions/*/work/unpacked/*.exe
+# ...and at any depth, because an archive that unpacks into its own directory
+# (every Haujobb release does: unpacked/hjb_geno/Genoaux.exe) slips straight
+# past the single-level pattern above. Helper DLLs the releases ship —
+# BASS.DLL, fmod.dll, ijl11.dll — are redistributable-in-1999 terms at best and
+# are somebody else's binary either way, so they are covered too.
+productions/*/work/unpacked/**/*.exe
+productions/*/work/unpacked/**/*.dll
+productions/*/work/unpacked/**/*.EXE
+productions/*/work/unpacked/**/*.DLL
 productions/ptct/work/unpacked/party-extracted/frame_upx0_image.bin
 productions/ptct/work/atg/atg2/atg.exe
 productions/ptct/work/atg/atglib/example.exe
@@ -103,3 +112,7 @@ productions/lapsus/work/verify/frames/
 # inspector sweep output: run.json/issues.md are regenerable, frames are bulky
 productions/*/work/verify/inspect/frames/
 productions/*/work/verify/inspect/notes/
+# The BASS stub is BUILT from tools/winebox/bassstub/bassstub.c — the source and
+# Makefile are committed, the PE is not. It is a Windows binary (the pre-commit
+# hook rejects MZ headers) and it is regenerable in one `make`.
+tools/winebox/bassstub/BASS.DLL
