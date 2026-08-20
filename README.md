@@ -8,9 +8,9 @@ no runtime dependencies.
 
 The project began as **Dutch demoscene immaterial heritage work** — Aardbei and
 threestate — and the method turned out not to care about nationality. It now
-also covers Sunflower, a pan-European group whose members are mostly Polish, and
-Maturefurk from Finland. Each production's group and origin are in its own
-`prod.json` and in the table below.
+also covers Sunflower, a pan-European group whose members are mostly Polish,
+Maturefurk from Finland, and Potion from Poland. Each production's group and
+origin are in its own `prod.json` and in the table below.
 
 The pipeline, the tooling lessons, and the reverse-engineering findings are in
 **[METHOD.md](METHOD.md)** — start there.
@@ -26,6 +26,7 @@ The pipeline, the tooling lessons, and the reverse-engineering findings are in
 | [energia](productions/energia/) | Sunflower | 2001 | OpenGL FF | engineering |
 | [lapsus](productions/lapsus/) | Maturefurk | 2000 | OpenGL 1.x FF | engineering |
 | [tesla](productions/tesla/) | Sunflower | 2000 | — | evidence (source-lineage study) |
+| [planet potion](productions/planet-potion/) | Potion | 2002 | Warp3D (Amiga PPC/RTG) | engineering (textures + audio computed; engine recorded) |
 
 Each production directory holds `prod.json` (provenance: demozoo/pouet ids,
 original archive URLs + SHA-256, reference-capture manifest), `work/`

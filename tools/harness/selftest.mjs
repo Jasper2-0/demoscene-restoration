@@ -41,9 +41,28 @@ await check('rejects wrong-case paths that macOS would happily serve', async () 
   await s.close();
 });
 
-await check('case-exact can be turned off deliberately', async () => {
+// WHAT `caseExact: false` ACTUALLY PROMISES is that the harness stops adding its
+// own check — not that a wrong-case path resolves. The filesystem still decides,
+// so on a case-SENSITIVE one (Linux, and any CI runner) `/INDEX.html` is a
+// genuine 404 no matter what this flag says.
+//
+// This test used to assert `status === 200` outright, which made it pass on a
+// developer's Mac and fail everywhere else. It is the same shape as the bug the
+// case-exact feature exists to catch, one level up: a check that encodes the
+// author's filesystem instead of the contract.
+const caseInsensitiveFS = (() => {
+  const probe = fromRepo('productions/lost-vegas/web/index.html');
+  try { fs.accessSync(path.join(path.dirname(probe), 'INDEX.html')); return true; }
+  catch { return false; }
+})();
+
+await check('case-exact off means the harness stops checking, not that case stops mattering', async () => {
   const s = await serve(fromRepo('productions/lost-vegas/web'), { caseExact: false });
-  assert.equal((await fetch(s.url + '/INDEX.html')).status, 200);
+  const r = await fetch(s.url + '/INDEX.html');
+  assert.equal(s.caseErrors.length, 0, 'no case error may be recorded when the check is off');
+  // Then whatever the filesystem does is correct, and both are worth pinning.
+  assert.equal(r.status, caseInsensitiveFS ? 200 : 404,
+    `on a case-${caseInsensitiveFS ? 'insensitive' : 'sensitive'} filesystem`);
   await s.close();
 });
 

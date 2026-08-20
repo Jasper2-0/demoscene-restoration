@@ -1,0 +1,9 @@
+FROM --platform=linux/386 debian:bookworm-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+      wine xvfb xauth \
+      libgl1-mesa-dri libglx-mesa0 libosmesa6 \
+      procps xdotool ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+ENV WINEPREFIX=/wine WINEDLLOVERRIDES=mscoree=d WINEDEBUG=-all
+RUN wineboot --init 2>&1 | tail -5 || true

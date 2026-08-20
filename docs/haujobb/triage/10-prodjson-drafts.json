@@ -1,0 +1,730 @@
+{
+  "mikrostrange": {
+    "schema": 1,
+    "slug": "mikrostrange",
+    "title": "Mikrostrange",
+    "group": "Haujobb",
+    "kind": "restoration",
+    "platform": "Windows",
+    "releaseDate": "2000-04-23",
+    "party": {
+      "name": "Mekka & Symposium 2000",
+      "compo": "PC Demo",
+      "ranking": 2
+    },
+    "ids": {
+      "demozoo": 23701,
+      "pouet": 1092
+    },
+    "links": {
+      "demozoo": "https://demozoo.org/productions/23701/",
+      "pouet": "https://www.pouet.net/prod.php?which=1092",
+      "youtube": "https://www.youtube.com/watch?v=MK32d-pkIIw"
+    },
+    "credits": [
+      {
+        "name": "Hellfire",
+        "role": "Code",
+        "note": "special fx"
+      },
+      {
+        "name": "Cynic",
+        "role": "Code",
+        "note": "engine"
+      },
+      {
+        "name": "raytrayza",
+        "role": "Music"
+      },
+      {
+        "name": "Acryl",
+        "role": "Graphics"
+      },
+      {
+        "name": "Amoc",
+        "role": "Graphics",
+        "note": "3d"
+      },
+      {
+        "name": "Bolek",
+        "role": "Graphics",
+        "note": "3d, modelling and animation"
+      }
+    ],
+    "originals": [
+      {
+        "path": "originals/haujobb/hjb_mifi.zip",
+        "urls": [
+          "https://files.scene.org/get/demos/groups/haujobb/hjb_mifi.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "UNVERIFIED mapping: 'slightly fixed version' per local file_id.diz matches this group-dir final (HTTP Content-Length 7300663). Local dir originals/haujobb/hjb_mifi/ presumed extracted from it. NOTE hjbmikro.zip in the same dir is byte-similar (6.96M listed) and may be a duplicate upload."
+      },
+      {
+        "path": "originals/haujobb/hjb_mist.zip",
+        "urls": [
+          "https://files.scene.org/get/parties/2000/mekkasymposium00/demo/hjb_mist.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "party version, Mekka & Symposium 2000 (Content-Length 7304665) \u2014 NOT the version on disk"
+      }
+    ],
+    "captures": [
+      {
+        "youtube": "MK32d-pkIIw",
+        "path": "productions/mikrostrange/work/reference/mikrostrange_ref.mkv",
+        "format": "bestvideo+bestaudio",
+        "sha256": null,
+        "alignmentOffsetMs": null,
+        "note": "capture candidate from Demozoo's linked video; unverified, unfetched, unaligned"
+      }
+    ],
+    "status": {
+      "web": "none",
+      "pagesRepo": null
+    },
+    "_confidence": {
+      "verified": "title, releaseDate, party/compo/ranking, ids, links, credits \u2014 all from the Demozoo API (production detail JSON), cross-checked against the shipped file_id.diz/nfo on disk",
+      "unverified": "originals[].sha256 and bytes are null \u2014 the local copy is an UNPACKED tree at originals/haujobb/hjb_mifi/, not the release archive; the archive->dir mapping is inferred (see note) and must be confirmed by fetching the archive, hashing it, and diffing its extraction against the local tree. captures[] sha256/alignment are null until fetched/measured.",
+      "localUnpackedPath": "originals/haujobb/hjb_mifi/"
+    }
+  },
+  "moments": {
+    "schema": 1,
+    "slug": "moments",
+    "title": "Moments",
+    "group": "Haujobb",
+    "kind": "restoration",
+    "platform": "Windows",
+    "releaseDate": "2000-12-28",
+    "party": {
+      "name": "The Party 2000",
+      "compo": "PC Demo",
+      "ranking": 4
+    },
+    "ids": {
+      "demozoo": 259,
+      "pouet": 1237
+    },
+    "links": {
+      "demozoo": "https://demozoo.org/productions/259/",
+      "pouet": "https://www.pouet.net/prod.php?which=1237",
+      "youtube": "https://www.youtube.com/watch?v=4dvcvWPOnq4"
+    },
+    "credits": [
+      {
+        "name": "Cynic",
+        "role": "Code",
+        "note": "engine"
+      },
+      {
+        "name": "Hellfire",
+        "role": "Code",
+        "note": "support"
+      },
+      {
+        "name": "Visualice",
+        "role": "Graphics"
+      },
+      {
+        "name": "Janne",
+        "role": "Graphics",
+        "note": "3d"
+      },
+      {
+        "name": "Jazz",
+        "role": "Music"
+      },
+      {
+        "name": "Kimmo",
+        "role": "Text"
+      }
+    ],
+    "originals": [
+      {
+        "path": "originals/haujobb/moments.zip",
+        "urls": [
+          "https://files.scene.org/get/parties/2000/theparty00/demo/moments.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "UNVERIFIED mapping: party archive (Content-Length 9139970); local dir carries the scene.org insert file typical of party uploads. No group-dir final exists on scene.org."
+      }
+    ],
+    "captures": [
+      {
+        "youtube": "4dvcvWPOnq4",
+        "path": "productions/moments/work/reference/moments_ref.mkv",
+        "format": "bestvideo+bestaudio",
+        "sha256": null,
+        "alignmentOffsetMs": null,
+        "note": "capture candidate 'Haujobb - Moments (2000) [60fps]' found by search, NOT linked from Demozoo \u2014 verify it is this production before pinning"
+      }
+    ],
+    "status": {
+      "web": "none",
+      "pagesRepo": null
+    },
+    "_confidence": {
+      "verified": "title, releaseDate, party/compo/ranking, ids, links, credits \u2014 all from the Demozoo API (production detail JSON), cross-checked against the shipped file_id.diz/nfo on disk",
+      "unverified": "originals[].sha256 and bytes are null \u2014 the local copy is an UNPACKED tree at originals/haujobb/moments/, not the release archive; the archive->dir mapping is inferred (see note) and must be confirmed by fetching the archive, hashing it, and diffing its extraction against the local tree. captures[] sha256/alignment are null until fetched/measured.",
+      "localUnpackedPath": "originals/haujobb/moments/"
+    }
+  },
+  "mosaik": {
+    "schema": 1,
+    "slug": "mosaik",
+    "title": "Mosaik",
+    "group": "Haujobb",
+    "kind": "restoration",
+    "platform": "Windows",
+    "releaseDate": "2001-04-15",
+    "party": {
+      "name": "Mekka & Symposium 2001",
+      "compo": "PC Demo",
+      "ranking": 2
+    },
+    "ids": {
+      "demozoo": 24897,
+      "pouet": 1959
+    },
+    "links": {
+      "demozoo": "https://demozoo.org/productions/24897/",
+      "pouet": "https://www.pouet.net/prod.php?which=1959",
+      "youtube": "https://www.youtube.com/watch?v=YHrF6E8fujw"
+    },
+    "credits": [
+      {
+        "name": "Cynic",
+        "role": "Code",
+        "note": "3d engine"
+      },
+      {
+        "name": "Hellfire",
+        "role": "Code"
+      },
+      {
+        "name": "Visualice",
+        "role": "Graphics",
+        "note": "modelling"
+      },
+      {
+        "name": "Visualice",
+        "role": "Direction"
+      },
+      {
+        "name": "Janne",
+        "role": "Graphics",
+        "note": "additional modelling"
+      },
+      {
+        "name": "Radix",
+        "role": "Music"
+      }
+    ],
+    "originals": [
+      {
+        "path": "originals/haujobb/mosaik.zip",
+        "urls": [
+          "https://files.scene.org/get/parties/2001/mekkasymposium01/demo/mosaik.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "UNVERIFIED mapping: party archive (Content-Length 7085327); local dir contains ms2001.nfo, the party-organizer insert, plus the scene.org insert \u2014 both typical of the party upload. No group-dir final exists."
+      }
+    ],
+    "captures": [
+      {
+        "youtube": "YHrF6E8fujw",
+        "path": "productions/mosaik/work/reference/mosaik_ref.mkv",
+        "format": "bestvideo+bestaudio",
+        "sha256": null,
+        "alignmentOffsetMs": null,
+        "note": "capture candidate from Demozoo's linked video; unverified, unfetched, unaligned"
+      }
+    ],
+    "status": {
+      "web": "none",
+      "pagesRepo": null
+    },
+    "_confidence": {
+      "verified": "title, releaseDate, party/compo/ranking, ids, links, credits \u2014 all from the Demozoo API (production detail JSON), cross-checked against the shipped file_id.diz/nfo on disk",
+      "unverified": "originals[].sha256 and bytes are null \u2014 the local copy is an UNPACKED tree at originals/haujobb/mosaik/, not the release archive; the archive->dir mapping is inferred (see note) and must be confirmed by fetching the archive, hashing it, and diffing its extraction against the local tree. captures[] sha256/alignment are null until fetched/measured.",
+      "localUnpackedPath": "originals/haujobb/mosaik/"
+    }
+  },
+  "art": {
+    "schema": 1,
+    "slug": "art",
+    "title": "Art",
+    "group": "Haujobb",
+    "kind": "restoration",
+    "platform": "Windows",
+    "releaseDate": "2000-08-05",
+    "party": {
+      "name": "Assembly 2000",
+      "compo": "Combined Demo",
+      "ranking": 2
+    },
+    "ids": {
+      "demozoo": 230,
+      "pouet": 125
+    },
+    "links": {
+      "demozoo": "https://demozoo.org/productions/230/",
+      "pouet": "https://www.pouet.net/prod.php?which=125",
+      "youtube": "https://www.youtube.com/watch?v=Kj2BNGvh8aQ"
+    },
+    "credits": [
+      {
+        "name": "Cynic",
+        "role": "Code",
+        "note": "3d engine"
+      },
+      {
+        "name": "Droid",
+        "role": "Code",
+        "note": "additional"
+      },
+      {
+        "name": "Visualice",
+        "role": "Graphics"
+      },
+      {
+        "name": "Janne",
+        "role": "Graphics",
+        "note": "3d"
+      },
+      {
+        "name": "Melwyn",
+        "role": "Music"
+      },
+      {
+        "name": "SolarC",
+        "role": "Music",
+        "note": "sound effects"
+      },
+      {
+        "name": "Hellfire",
+        "role": "Support"
+      }
+    ],
+    "originals": [
+      {
+        "path": "originals/haujobb/hjb_artf.zip",
+        "urls": [
+          "https://files.scene.org/get/demos/groups/haujobb/hjb_artf.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "UNVERIFIED mapping: dir name hjb_artf + Art-final.exe + diz 'final version' match this group-dir final (Content-Length 6524789). Party versions art_by_h.zip / art_do_n.zip under parties/2000/assembly00/demo/ are NOT the version on disk."
+      }
+    ],
+    "captures": [
+      {
+        "youtube": "Kj2BNGvh8aQ",
+        "path": "productions/art/work/reference/art_ref.mkv",
+        "format": "bestvideo+bestaudio",
+        "sha256": null,
+        "alignmentOffsetMs": null,
+        "note": "capture candidate from Demozoo's linked video; unverified, unfetched, unaligned"
+      }
+    ],
+    "status": {
+      "web": "none",
+      "pagesRepo": null
+    },
+    "_confidence": {
+      "verified": "title, releaseDate, party/compo/ranking, ids, links, credits \u2014 all from the Demozoo API (production detail JSON), cross-checked against the shipped file_id.diz/nfo on disk",
+      "unverified": "originals[].sha256 and bytes are null \u2014 the local copy is an UNPACKED tree at originals/haujobb/hjb_artf/, not the release archive; the archive->dir mapping is inferred (see note) and must be confirmed by fetching the archive, hashing it, and diffing its extraction against the local tree. captures[] sha256/alignment are null until fetched/measured.",
+      "localUnpackedPath": "originals/haujobb/hjb_artf/"
+    }
+  },
+  "elements": {
+    "schema": 1,
+    "slug": "elements",
+    "title": "Elements",
+    "group": "Haujobb",
+    "kind": "restoration",
+    "platform": "Windows",
+    "releaseDate": "2001-12-28",
+    "party": {
+      "name": "The Party 2001",
+      "compo": "Demo",
+      "ranking": 1
+    },
+    "ids": {
+      "demozoo": 8975,
+      "pouet": 4776
+    },
+    "links": {
+      "demozoo": "https://demozoo.org/productions/8975/",
+      "pouet": "https://www.pouet.net/prod.php?which=4776",
+      "youtube": "https://www.youtube.com/watch?v=Kbhe_mUdCbQ"
+    },
+    "credits": [
+      {
+        "name": "Cynic",
+        "role": "Code"
+      },
+      {
+        "name": "Hellfire",
+        "role": "Code"
+      },
+      {
+        "name": "Droid",
+        "role": "Code"
+      },
+      {
+        "name": "Visualice",
+        "role": "Graphics"
+      },
+      {
+        "name": "Virgill",
+        "role": "Music"
+      },
+      {
+        "name": "Tasium",
+        "role": "Music",
+        "note": "feat."
+      }
+    ],
+    "originals": [
+      {
+        "path": "originals/haujobb/hjb_elef.zip",
+        "urls": [
+          "https://files.scene.org/get/demos/groups/haujobb/hjb_elef.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "UNVERIFIED mapping: dir name hjb_elef + diz 'final version' match this group-dir final (Content-Length 7370388); local is a single self-contained elements.exe (7,626,752 bytes). Party version hjb_elem.zip under parties/2001/theparty01/demo/ is NOT the version on disk. releaseDate above is the party release; the final shipped ~2002-03 per file dates."
+      }
+    ],
+    "captures": [
+      {
+        "youtube": "Kbhe_mUdCbQ",
+        "path": "productions/elements/work/reference/elements_ref.mkv",
+        "format": "bestvideo+bestaudio",
+        "sha256": null,
+        "alignmentOffsetMs": null,
+        "note": "capture candidate from Demozoo's linked video; unverified, unfetched, unaligned"
+      }
+    ],
+    "status": {
+      "web": "none",
+      "pagesRepo": null
+    },
+    "_confidence": {
+      "verified": "title, releaseDate, party/compo/ranking, ids, links, credits \u2014 all from the Demozoo API (production detail JSON), cross-checked against the shipped file_id.diz/nfo on disk",
+      "unverified": "originals[].sha256 and bytes are null \u2014 the local copy is an UNPACKED tree at originals/haujobb/hjb_elef/, not the release archive; the archive->dir mapping is inferred (see note) and must be confirmed by fetching the archive, hashing it, and diffing its extraction against the local tree. captures[] sha256/alignment are null until fetched/measured.",
+      "localUnpackedPath": "originals/haujobb/hjb_elef/"
+    }
+  },
+  "channel-5-sequence": {
+    "schema": 1,
+    "slug": "channel-5-sequence",
+    "title": "Channel 5 Sequence",
+    "group": "Haujobb",
+    "kind": "restoration",
+    "platform": "Windows",
+    "releaseDate": "2002-03-31",
+    "party": {
+      "name": "Mekka & Symposium 2002",
+      "compo": "PC Demo",
+      "ranking": 4
+    },
+    "ids": {
+      "demozoo": 26203,
+      "pouet": 5591
+    },
+    "links": {
+      "demozoo": "https://demozoo.org/productions/26203/",
+      "pouet": "https://www.pouet.net/prod.php?which=5591",
+      "youtube": "https://www.youtube.com/watch?v=gvMMxRH-8JU"
+    },
+    "credits": [
+      {
+        "name": "Cynic",
+        "role": "Code"
+      },
+      {
+        "name": "Droid",
+        "role": "Code"
+      },
+      {
+        "name": "Visualice",
+        "role": "Graphics"
+      },
+      {
+        "name": "Radix",
+        "role": "Music"
+      }
+    ],
+    "originals": [
+      {
+        "path": "originals/haujobb/channel.zip",
+        "urls": [
+          "https://files.scene.org/get/parties/2002/mekkasymposium02/demo/shown/channel.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "UNVERIFIED mapping \u2014 WEAKEST of the nine: local dir is originals/haujobb/channel/Satellite/ with morning.exe (2002-03-17) and a scene.org insert dated 2002-04-01, which fits this party upload (Content-Length 5141362). ALTERNATIVE: hjb_ch5s.zip in demos/groups/haujobb/ (5136121) is a near-identical-size final. Local tree holds BOTH data.rar and an unpacked Data/ \u2014 one of them was extracted by hand. Fetch both archives and diff."
+      },
+      {
+        "path": "originals/haujobb/hjb_ch5s.zip",
+        "urls": [
+          "https://files.scene.org/get/demos/groups/haujobb/hjb_ch5s.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "group-dir copy, near-identical size (Content-Length 5136121) \u2014 fetch and compare against channel.zip and the local tree"
+      }
+    ],
+    "captures": [
+      {
+        "youtube": "gvMMxRH-8JU",
+        "path": "productions/channel-5-sequence/work/reference/channel-5-sequence_ref.mkv",
+        "format": "bestvideo+bestaudio",
+        "sha256": null,
+        "alignmentOffsetMs": null,
+        "note": "capture candidate from Demozoo's linked video; unverified, unfetched, unaligned"
+      }
+    ],
+    "status": {
+      "web": "none",
+      "pagesRepo": null
+    },
+    "_confidence": {
+      "verified": "title, releaseDate, party/compo/ranking, ids, links, credits \u2014 all from the Demozoo API (production detail JSON), cross-checked against the shipped file_id.diz/nfo on disk",
+      "unverified": "originals[].sha256 and bytes are null \u2014 the local copy is an UNPACKED tree at originals/haujobb/channel/Satellite/, not the release archive; the archive->dir mapping is inferred (see note) and must be confirmed by fetching the archive, hashing it, and diffing its extraction against the local tree. captures[] sha256/alignment are null until fetched/measured. The 'Satellite' folder name and morning.exe do NOT appear in any Haujobb title \u2014 the production is Channel 5 Sequence; 'Satellite'/'morning' look like the packager's working names.",
+      "localUnpackedPath": "originals/haujobb/channel/Satellite/"
+    }
+  },
+  "liquid-wen": {
+    "schema": 1,
+    "slug": "liquid-wen",
+    "title": "Liquid... Wen?",
+    "group": "Haujobb",
+    "kind": "restoration",
+    "platform": "Windows",
+    "releaseDate": "2002-08-03",
+    "party": {
+      "name": "Assembly 2002",
+      "compo": "Combined Demo",
+      "ranking": 1
+    },
+    "ids": {
+      "demozoo": 31629,
+      "pouet": 7130
+    },
+    "links": {
+      "demozoo": "https://demozoo.org/productions/31629/",
+      "pouet": "https://www.pouet.net/prod.php?which=7130",
+      "youtube": "https://www.youtube.com/watch?v=BIEdt7EqyCo"
+    },
+    "credits": [
+      {
+        "name": "Cynic",
+        "role": "Code",
+        "note": "3d engine"
+      },
+      {
+        "name": "Droid",
+        "role": "Code"
+      },
+      {
+        "name": "Visualice",
+        "role": "Graphics"
+      },
+      {
+        "name": "Vic",
+        "role": "Music"
+      },
+      {
+        "name": "Kimmo S.",
+        "role": "Music"
+      }
+    ],
+    "originals": [
+      {
+        "path": "originals/haujobb/hjb_liqu.zip",
+        "urls": [
+          "https://files.scene.org/get/demos/groups/haujobb/hjb_liqu.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "UNVERIFIED mapping: dir name hjb_liqu matches this group-dir upload (Content-Length 11764608); local infofile.txt says 'somekind of prebugfixed version released in hurry after the party', which is this post-party upload rather than the compo archive. Party version liquid____wen__by_haujobb.zip under parties/2002/assembly02/demo/ is the compo copy. Local liquid.wen is a RAR data container, not text."
+      }
+    ],
+    "captures": [
+      {
+        "youtube": "BIEdt7EqyCo",
+        "path": "productions/liquid-wen/work/reference/liquid-wen_ref.mkv",
+        "format": "bestvideo+bestaudio",
+        "sha256": null,
+        "alignmentOffsetMs": null,
+        "note": "capture candidate from Demozoo's linked video; unverified, unfetched, unaligned"
+      }
+    ],
+    "status": {
+      "web": "none",
+      "pagesRepo": null
+    },
+    "_confidence": {
+      "verified": "title, releaseDate, party/compo/ranking, ids, links, credits \u2014 all from the Demozoo API (production detail JSON), cross-checked against the shipped file_id.diz/nfo on disk",
+      "unverified": "originals[].sha256 and bytes are null \u2014 the local copy is an UNPACKED tree at originals/haujobb/hjb_liqu/, not the release archive; the archive->dir mapping is inferred (see note) and must be confirmed by fetching the archive, hashing it, and diffing its extraction against the local tree. captures[] sha256/alignment are null until fetched/measured.",
+      "localUnpackedPath": "originals/haujobb/hjb_liqu/"
+    }
+  },
+  "we-are": {
+    "schema": 1,
+    "slug": "we-are",
+    "title": "We Are",
+    "group": "Haujobb",
+    "kind": "restoration",
+    "platform": "Windows",
+    "releaseDate": "2002-12-14",
+    "party": {
+      "name": "State of the Art 2002",
+      "compo": "Demo",
+      "ranking": 7
+    },
+    "ids": {
+      "demozoo": 56947,
+      "pouet": 8281
+    },
+    "links": {
+      "demozoo": "https://demozoo.org/productions/56947/",
+      "pouet": "https://www.pouet.net/prod.php?which=8281",
+      "youtube": "https://www.youtube.com/watch?v=bu0S_b82jvg"
+    },
+    "credits": [
+      {
+        "name": "Cynic",
+        "role": "Code"
+      },
+      {
+        "name": "Droid",
+        "role": "Code"
+      },
+      {
+        "name": "Hellfire",
+        "role": "Code"
+      },
+      {
+        "name": "Visualice",
+        "role": "Graphics"
+      },
+      {
+        "name": "Xhale",
+        "role": "Music"
+      }
+    ],
+    "originals": [
+      {
+        "path": "originals/haujobb/hjb_we.zip",
+        "urls": [
+          "https://files.scene.org/get/parties/2002/sota02/demo/hjb_we.zip",
+          "https://files.scene.org/get/demos/groups/haujobb/hjb_we.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "UNVERIFIED mapping: dir name hjb_we matches; party and group-dir copies report identical Content-Length 8747689, so either URL should yield the same archive \u2014 confirm by hash. Local is a single self-contained WE_ARE.EXE (8,978,432 bytes)."
+      }
+    ],
+    "captures": [
+      {
+        "youtube": "bu0S_b82jvg",
+        "path": "productions/we-are/work/reference/we-are_ref.mkv",
+        "format": "bestvideo+bestaudio",
+        "sha256": null,
+        "alignmentOffsetMs": null,
+        "note": "capture candidate from Demozoo's linked video; unverified, unfetched, unaligned"
+      }
+    ],
+    "status": {
+      "web": "none",
+      "pagesRepo": null
+    },
+    "_confidence": {
+      "verified": "title, releaseDate, party/compo/ranking, ids, links, credits \u2014 all from the Demozoo API (production detail JSON), cross-checked against the shipped file_id.diz/nfo on disk",
+      "unverified": "originals[].sha256 and bytes are null \u2014 the local copy is an UNPACKED tree at originals/haujobb/hjb_we/, not the release archive; the archive->dir mapping is inferred (see note) and must be confirmed by fetching the archive, hashing it, and diffing its extraction against the local tree. captures[] sha256/alignment are null until fetched/measured.",
+      "localUnpackedPath": "originals/haujobb/hjb_we/"
+    }
+  },
+  "genoaux": {
+    "schema": 1,
+    "slug": "genoaux",
+    "title": "Genoaux",
+    "group": "Haujobb",
+    "kind": "restoration",
+    "platform": "Windows",
+    "releaseDate": "2003-01-11",
+    "party": {
+      "name": "Alternative Party 2003",
+      "compo": "Alternative Demo",
+      "ranking": 17
+    },
+    "ids": {
+      "demozoo": 63983,
+      "pouet": 8528
+    },
+    "links": {
+      "demozoo": "https://demozoo.org/productions/63983/",
+      "pouet": "https://www.pouet.net/prod.php?which=8528",
+      "youtube": "https://www.youtube.com/watch?v=6xZLjlROah0"
+    },
+    "credits": [
+      {
+        "name": "Cynic",
+        "role": "Code"
+      },
+      {
+        "name": "Droid",
+        "role": "Code",
+        "note": "credited on Demozoo as 'Droidi'"
+      },
+      {
+        "name": "Visualice",
+        "role": "Direction"
+      },
+      {
+        "name": "Xhale",
+        "role": "Music"
+      }
+    ],
+    "originals": [
+      {
+        "path": "originals/haujobb/hjb_geno.zip",
+        "urls": [
+          "https://files.scene.org/get/parties/2003/altparty03/demo/hjb_geno.zip",
+          "https://files.scene.org/get/demos/groups/haujobb/hjb_geno.zip"
+        ],
+        "sha256": null,
+        "bytes": null,
+        "note": "UNVERIFIED mapping: dir name hjb_geno matches; party and group-dir copies report identical Content-Length 5043798 \u2014 confirm by hash. Local scene.org insert stamp 2003-01 fits Alternative Party 2003 (2003-01-10..12)."
+      }
+    ],
+    "captures": [
+      {
+        "youtube": "6xZLjlROah0",
+        "path": "productions/genoaux/work/reference/genoaux_ref.mkv",
+        "format": "bestvideo+bestaudio",
+        "sha256": null,
+        "alignmentOffsetMs": null,
+        "note": "capture candidate from the pouet-linked video; unverified, unfetched, unaligned"
+      }
+    ],
+    "status": {
+      "web": "none",
+      "pagesRepo": null
+    },
+    "_confidence": {
+      "verified": "title, releaseDate, party/compo/ranking, ids, links, credits \u2014 all from the Demozoo API (production detail JSON), cross-checked against the shipped file_id.diz/nfo on disk",
+      "unverified": "originals[].sha256 and bytes are null \u2014 the local copy is an UNPACKED tree at originals/haujobb/hjb_geno/, not the release archive; the archive->dir mapping is inferred (see note) and must be confirmed by fetching the archive, hashing it, and diffing its extraction against the local tree. captures[] sha256/alignment are null until fetched/measured. Ranking is 17 (tied \u2014 Demozoo position 18, ranking '17'). The caller's '2002-11' date hint was wrong; both Demozoo and Pouet say January 2003, Alternative Party 2003.",
+      "localUnpackedPath": "originals/haujobb/hjb_geno/"
+    }
+  }
+}

@@ -285,6 +285,202 @@ quietly lying, so the harness rules are now explicit:
 
 ---
 
+## Run the original's own code instead of reimplementing it
+
+The Planet Potion work added a technique the earlier restorations did not need,
+and it generalises: **where a subsystem is pure computation, execute the
+original's code and read its output, rather than deriving what it would produce.**
+
+The test is cheap. Take a function's transitive call closure and ask whether it
+touches any library base or OS entry point. For that intro, three of five
+subsystems touched none — the procedural texture VM, the scene interpreter and
+the whole softsynth were pure functions over memory. Those need no operating
+system, no ROM, no accelerated hardware and no emulator of the original machine.
+They need a CPU.
+
+So: hand-build a static ELF that maps the executable's hunks at their linked
+addresses, set the small-data base register, call one function through a
+register-indirect branch, and write the result buffer out with a `write(2)`.
+That is an ELF header, a few program headers and a twenty-instruction stub —
+no cross-toolchain — under `qemu-user`.
+
+What it bought, repeatedly, was answers where modelling had failed:
+
+- **Texture data.** 69 textures byte-exactly, rather than reimplementing a
+  20-opcode image language.
+- **Geometry.** Three attempts to model the operand widths failed, because a
+  shared prologue's byte consumption depended on a table built at runtime.
+  Running the interpreter and reading back the linked list it builds decoded 38
+  of 39 programs and made the widths irrelevant.
+- **The scene graph.** Blocked statically because operand bytes index structures
+  that only exist once earlier passes have run. Running those passes first builds
+  them.
+
+Two practical notes. Stub the hardware library by pointing its base at a table of
+no-op vectors, and **blanket the vector region rather than placing entries on
+their nominal spacing** — Warp3D's globals hold *base + 2*, so real fetches land
+on displacements that are not multiples of six. Give the stub an address whose two
+halves are identical and fill every slot, so any aligned load returns it. And when
+a run faults, `qemu -d in_asm -dfilter <lo>..<hi>` narrows it to a function in one
+pass; that is how the missing font-table initialiser was found.
+
+The technique has one cost worth planning for: it makes the project's strongest
+checks depend on `qemu-user`, which is **Linux-only** — Homebrew builds system
+targets, not user-mode ones, so there is nothing to install on macOS. Half of
+Planet Potion's suites therefore could not run on the machine the work was
+actually done on, and the gap is easy not to notice, because the portable half
+still passes and prints a healthy-looking score. Keep the oracle runnable where
+the editing happens: a container with two apt packages and the tool directory
+bind-mounted costs a page of Dockerfile
+(`productions/planet-potion/work/re/ppcbox.sh`) and it emulates PowerPC on Apple
+Silicon perfectly well. If it genuinely cannot run, the tools should exit
+**77 — absent**, so a suite that could not run is reported as skipped rather
+than counted as a pass.
+
+### And where it is *not* pure, record the calls instead of stubbing them
+
+The obvious limit of the above is that it only covers subsystems touching no
+library. Planet Potion's renderer was filed under "needs the original hardware"
+for exactly that reason: it ends in Warp3D calls, so it cannot be run as a pure
+function.
+
+That was the wrong conclusion from a true premise. **The library calls are the
+output.** Point every vector at a stub that writes its arguments down and
+returns, and running the renderer produces the program's own draw stream — every
+primitive, the texture bound, and the screen-space vertices as the original
+computed them, for any frame. No hardware, no driver, no capture.
+
+This is the more transferable half, because a graphics subsystem almost never
+qualifies as pure, and every production here reaches its API the same way: a base
+pointer or an import table, indirected. Three details make a recorder work where
+a no-op stub would not:
+
+- **Give each call a distinct return value.** Have the recorder return the
+  address of its own log record. Resource-creating calls then hand back unique
+  handles, and every later call that binds one can be tied to which — texture
+  identity falls out of allocation order without decoding a single tag list.
+- **Redirect shared output buffers, do not just observe them.** The intro built
+  every primitive into one reusable vertex array, so a passive log would have
+  captured only the last one. The stub repoints the array and advances it past
+  each slice. Watch what else lives next to that buffer: the original's sat
+  0x500 bytes below a pointer array it would have corrupted within twenty
+  vertices.
+- **Make time an input.** The frame clock reduced to one counter in memory.
+  Writing it directly turns the whole renderer into a deterministic function of
+  (scene, frame) — reproducible, samplable out of order, and diffable.
+
+What this yields is not a hint about the renderer, it is a **test oracle**: a
+reimplementation that emits the same primitives is right for reasons you can
+point at, and one that does not can be diffed primitive by primitive, offline,
+before a single pixel is rasterised. It also settles by reading what would
+otherwise be fitted — here the projection, the reciprocal *estimate* the original
+divides by, texture coordinates in texels rather than normalised, and the clip
+planes.
+
+### Prefer a decidable check to a statistical one
+
+A recurring shape: you have N things the code should produce and N things it did.
+Counting how many of each *kind* match is the weak test and leaves ambiguity
+wherever two producers share a value. Ordering is usually stronger and usually
+available — output appended to a cursor comes out in call order, so the Nth call
+is the Nth result. That turned "9 of 11 sample lengths agree, two are unclaimed"
+into "56 of 56 positions agree", and it resolved a conditional branch and three
+computed lengths that counting could not touch.
+
+The limit is honest and worth stating: this recovers *what the original computed*,
+not why. It is extraction, not understanding. The naming still has to be done by
+reading the code — but it can be done against known-correct output instead of
+guesses.
+
+### A check that cannot exit non-zero is a report
+
+`texvmdiff.mjs` opens with the sentence "this is the test that can actually
+fail". It printed its differences and exited 0, every time, for months. The
+aggregate script ran it as `texvmdiff … || rc=1`, so the one suite whose whole
+purpose was to fail could not fail the run, and nobody noticed because it had
+nothing to report.
+
+Two habits fall out of that, and they cost nothing:
+
+* **Assert the exit code of your checkers, not just their output.** A checker
+  that prints `FAIL` and returns 0 is worse than no checker, because it buys
+  the confidence without the coverage.
+* **Break it on purpose once.** Swapping two indices in the ARGB→RGBA reorder
+  turned the new `texbuildcheck.mjs` red on 34 of 69 textures. Until a check
+  has been seen to fail against a defect you introduced, all you know is that
+  it passes — which is also what an empty check does.
+
+That second habit is what found the gap this section is about. The reorder had
+never been tested at all: `texvmdiff` compares the VM's ARGB output, and the
+browser calls a wrapper that reorders it afterwards, so a channel swap would
+have put the entire intro in wrong colours with every suite green.
+
+**And the failure mode recurs while you are writing the check.** Three commits
+later, `rendercheck.mjs` picked its colour-bearing test frame by sorting every
+recorded frame on texture colour spread, then deduplicated that against the
+busiest frame. Sabotaging the textures to greyscale to see the colour assertion
+fail instead made the two frames *collapse onto each other*, the colour target
+was deduped away, and the run reported "all checks passed" against textures with
+no colour in them. The assertion did not fail — it stopped existing.
+
+The fix generalises: **assert the precondition your check depends on, before the
+check.** "The dataset contains a frame whose textures carry colour" is now its
+own line that fails on its own, so the property cannot quietly vanish along with
+the thing it was measuring. A check selected from data is only as trustworthy as
+the selection, and the selection is code too.
+
+## Ask the instruction, not the arithmetic
+
+A reimplementation can have every structure right — the correct handler, the
+correct operands, the correct order — and still miss by one level at scattered
+pixels, because the arithmetic the code performs is not the arithmetic the code
+means. Three examples from one afternoon on one subsystem:
+
+* `stfs` is not a rounding conversion. PowerPC defines it as a repack of the
+  bits, so it **truncates**; a `Float32Array` assignment rounds to nearest.
+* `fmadd` and `fnmsub` round once. `a*b + c` rounds twice.
+* two reciprocal estimates in the same helper, `fres` and `frsqrte`, do not
+  round alike — one comes back single, the other double.
+
+None of these is decidable by reading, and all three are decidable by running:
+upload a handful of instructions with known inputs and read the result bits
+back. The probe is smaller than the argument about what the manual implies, and
+unlike the argument it cannot be wrong.
+
+The corollary is about oracles. A byte oracle cannot see a value that is wrong
+by less than a rounding boundary — it reports "correct" for as long as the error
+stays small, then reports one wrong pixel when it does not, pointing at the pixel
+that crossed rather than at the code that drifted. If the original keeps its
+state in memory, dump that state instead: the same harness that returns a
+program's output can be pointed at its intermediate surface, and then a wrong
+value is measurable in ulps rather than inferred from where it happened to tip
+over. Doing that turned "eight subpixels off by one" into "the step is one ulp
+high, here is the multiply".
+
+## Count the population before naming a field
+
+Reverse engineering a container tempts you to read structure off a hex dump, and
+four samples side by side are very persuasive. In this repository that has now
+produced two confident, wrong claims in consecutive commits: a byte pair that
+looked like a record delimiter across four scene streams turned out to appear 15
+times in a 2-node stream and 23 times in a 29-node one, and a byte called
+"constant across all 29" on the strength of the same four samples takes five
+distinct values when all 29 are counted.
+
+Both were killed by one command each — count the occurrences, tabulate the field
+across every instance — and both would have been believed indefinitely without
+it. So the rule is small and worth following literally: **before writing that a
+field is constant, count it across the whole population; before writing that a
+byte delimits records, count the records.** These are cheaper than the dump that
+suggested the pattern.
+
+The worse failure in that pair is the second one. The five values had already
+been measured and written down earlier in the same session, and a later
+impression from a smaller sample overwrote it. A measurement is only worth what
+it costs to take if it is recorded where it will be re-read — and if the document
+disagrees with a fresh impression, the document is more likely to be right,
+because it was written when someone was looking at the data.
+
 ## Reconstruction, not restoration
 
 None of this is the original source code. It is a reconstruction from the
@@ -303,6 +499,11 @@ night, and that is the artefact worth keeping.
 `yt-dlp` · `node-canvas` (offline text rasterising with the period-correct
 fonts) · `puppeteer-core` + headless Chrome (verification) · plain WebGL2 ·
 a hand-written Direct3D 7 immediate-mode shim over WebGL2.
+
+For the Amiga work: `lhasa` · `amitools` (`hunktool`) · `capstone` · `ghidra`
+with the PowerPC processor module · `qemu-user` (running the original's own
+subsystems, above) · a hand-written Hunk loader, because stock tooling rejects
+the `0xC0000000` memory-flags encoding these executables use.
 
 ## Credits
 

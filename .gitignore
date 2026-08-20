@@ -15,6 +15,39 @@ originals/*
 !originals/README.md
 
 # -- per-production exclusions ---------------------------------------------
+# Planet Potion's web/data/ is the export of the original's own output — the
+# draw stream, the texture bytecode, the reference PNGs. Regenerate it with
+# `./ppcbox.sh python3 export.py flat/ out/` in work/re, then copying out/
+# across — the browser's rendercheck serves this directory, so an empty one
+# shows up as 404s on draws.json rather than as a missing dataset. The full
+# recipe is in checkall.sh. Derived from the binary, so it does not live here.
+productions/planet-potion/web/data/
+# The same rule one step upstream: `hunkload.py` writes the relocated segments
+# as raw .bin, so flat/ IS the original's code, and export.py / rendertex.py
+# write their derived trees beside it. checkall.sh already told readers flat/
+# was ignored; until now it was not, and the pre-commit guard only knew the
+# "MZ" header, which an Amiga hunk executable does not have.
+productions/planet-potion/work/re/flat/
+productions/planet-potion/work/re/out/
+productions/planet-potion/work/re/tex/
+# synthdump.py's two modules: 8.3 MB the softsynth builds from the binary, and
+# each one is under the pre-commit hook's 10 MB limit on its own.
+productions/planet-potion/work/re/mods/
+# libdigibooster3, fetched and built by oracle.sh. Third-party BSD-2 source
+# plus binaries; the script that reproduces it is what belongs in git.
+productions/planet-potion/work/re/oracle/
+# hunkload.py output for the dbplayer.library embedded in seg1 — relocated
+# segments of somebody else's copyrighted 68K, with no header for the
+# pre-commit guard to recognise. Rebuild it with
+# `python3 hunkload.py flat/seg1_DATA_10010000.bin dbp/`.
+productions/planet-potion/work/re/dbp/
+# And the unpack target itself. Energia's unpacked/ holds extracted ASSETS and
+# is committed file by file; planet-potion's holds nothing but the pristine
+# release — two executables and the release .txt — so it goes out whole, as
+# lapsus's does. Rehydrate: `node tools/fetch/originals.mjs planet-potion`
+# then `bsdtar -xf originals/potion/potionplanet_potion.lha -C <here>`.
+productions/planet-potion/work/unpacked/
+
 # Ghidra project databases embed the analyzed original binary.
 productions/*/work/ghidra/
 productions/*/work/ghidra-project/
@@ -28,6 +61,15 @@ productions/tesla/work/source/
 # committed, their binary inputs/outputs are not. sonnet_img.bin is the one
 # deliberate exception: the readable site ships it as runtime data already.
 productions/*/work/unpacked/*.exe
+# ...and at any depth, because an archive that unpacks into its own directory
+# (every Haujobb release does: unpacked/hjb_geno/Genoaux.exe) slips straight
+# past the single-level pattern above. Helper DLLs the releases ship —
+# BASS.DLL, fmod.dll, ijl11.dll — are redistributable-in-1999 terms at best and
+# are somebody else's binary either way, so they are covered too.
+productions/*/work/unpacked/**/*.exe
+productions/*/work/unpacked/**/*.dll
+productions/*/work/unpacked/**/*.EXE
+productions/*/work/unpacked/**/*.DLL
 productions/ptct/work/unpacked/party-extracted/frame_upx0_image.bin
 productions/ptct/work/atg/atg2/atg.exe
 productions/ptct/work/atg/atglib/example.exe
@@ -70,3 +112,13 @@ productions/lapsus/work/verify/frames/
 # inspector sweep output: run.json/issues.md are regenerable, frames are bulky
 productions/*/work/verify/inspect/frames/
 productions/*/work/verify/inspect/notes/
+# The BASS stub is BUILT from tools/winebox/bassstub/bassstub.c — the source and
+# Makefile are committed, the PE is not. It is a Windows binary (the pre-commit
+# hook rejects MZ headers) and it is regenerable in one `make`.
+tools/winebox/bassstub/BASS.DLL
+# Genoaux's soundtrack, held back like Energia's: the extraction's other 19 files
+# are tracked so a fresh clone can run the corpus check and the runtime, but the
+# music is 3.7 MB of a scener's work and this repo does not publish it until the
+# site's publication story is decided. work/MANIFEST.sha256 still hashes it, so
+# the extraction remains fully described; rehydrate with work/unpack.mjs.
+productions/genoaux/work/unpacked/hjb_geno/Data/mouthwash.mp3

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>planet potion — Potion (2002) — web restoration</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; background: #000; overflow: hidden; }
+    body { display: grid; place-items: center; color: #fff; font: 14px system-ui, sans-serif; }
+    canvas { width: min(100vw, calc(100vh * 4 / 3)); height: min(100vh, calc(100vw * 3 / 4)); }
+    /* Both centred: the button is the only thing on screen before the intro
+       runs, and the status line sits under it as a precalc readout rather than
+       as a debug overlay in the corner. Both are hidden once the show starts. */
+    #status { position: fixed; inset: calc(50% + 3.2rem) 0 auto; text-align: center;
+      opacity: .75; line-height: 1.6; pointer-events: none;
+      white-space: pre-line; z-index: 1; }
+    #start { position: fixed; inset: 0; margin: auto; width: max-content;
+      height: max-content; padding: .7rem 1.4rem; color: #fff; font: inherit;
+      letter-spacing: .04em; border: 1px solid #777; background: #111c;
+      cursor: pointer; z-index: 1; }
+    #start:hover { background: #222d; }
+    #start[hidden], #status[hidden] { display: none; }
+    /* The precalc bar. TRANSFORM ONLY, and promoted: the generators block the
+       main thread for seconds at a time, and a compositor-driven transform
+       keeps moving through that where anything driven by script would freeze
+       exactly when it most needs to show the page is alive.
+
+       ABOVE THE TEXT, and that is the whole reason it sits between the button
+       and #status rather than under both. The readout is one to five lines
+       depending on how far the precalc has got — a header, up to three log
+       lines, and sometimes a detail — so it GROWS DOWNWARD and only the top of
+       the stack is a fixed point. Pinning the bar to an offset below it meant
+       guessing that height: at the one line it was tuned for they sat apart,
+       and by the third the text had grown straight through the bar. */
+    #bar { position: fixed; inset: calc(50% + 2.4rem) 0 auto; margin: 0 auto;
+      width: 13rem; height: 2px; background: #333; overflow: hidden; z-index: 1; }
+    #bar i { display: block; width: 38%; height: 100%; background: #ccc;
+      will-change: transform; animation: sweep 1.15s ease-in-out infinite; }
+    #bar[hidden] { display: none; }
+    @keyframes sweep {
+      from { transform: translateX(-110%); }
+      to   { transform: translateX(375%); }
+    }
+    /* The per-frame readout, on § and off again. THE READABLE BUILD ONLY:
+       the size build's page is written by hand in web-mashi/mashi/entry.js and
+       does not carry this element, so main.js finds nothing there and never
+       binds the key. A debugging aid is not worth 64k budget.
+
+       DELIBERATELY NOT #status. Three check suites match on #status's
+       textContent — rendercheck, stagecheck and soundcheck all read it — and a
+       line that rewrote itself fifty times a second would race every one of
+       them. Corner, monospace, and out of the way of the picture. */
+    #debug { position: fixed; inset: .6rem auto auto .6rem; white-space: pre;
+      font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.5;
+      color: #9f9; text-shadow: 0 0 3px #000, 0 0 3px #000; opacity: .85;
+      pointer-events: none; z-index: 2; }
+    #debug[hidden] { display: none; }
+    /* The fade at the end of part three. Over the whole viewport, not the
+       canvas, so the letterbox goes with it. */
+    #fade { position: fixed; inset: 0; background: #000; opacity: 0;
+      pointer-events: none; }
+  </style>
+</head>
+<body>
+  <canvas id="screen" width="640" height="480"></canvas>
+  <button id="start" type="button">Start Intro</button>
+  <div id="status">Planet Potion</div>
+  <div id="bar"><i></i></div>
+  <div id="debug" hidden></div>
+  <div id="fade"></div>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
