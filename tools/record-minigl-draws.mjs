@@ -76,21 +76,34 @@ await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors })
     };
 
     const wrap = (name, fn) => { const orig = P[name]; if (orig) P[name] = fn(orig); };
-    wrap('begin', (o) => function (mode) { if (rec.on) rec.prim = { mode, n: 0, tex: rec.tex, unit: rec.unit }; return o.apply(this, arguments); });
+    wrap('begin', (o) => function (mode) { if (rec.on) rec.prim = { mode, n: 0, tex: rec.tex, unit: rec.unit, col: rec.col }; return o.apply(this, arguments); });
     wrap('end', (o) => function () {
-      if (rec.on && rec.prim) { rec.ops.push(`prim ${MODE[rec.prim.mode] ?? rec.prim.mode}:${rec.prim.n}:t${rec.prim.tex}`); rec.prim = null; }
+      if (rec.on && rec.prim) {
+        const c = rec.prim.col ? ` c${rec.prim.col.join(',')}` : '';
+        rec.ops.push(`prim ${MODE[rec.prim.mode] ?? rec.prim.mode}:${rec.prim.n}:t${rec.prim.tex}${c}`);
+        rec.prim = null;
+      }
       return o.apply(this, arguments);
     });
     for (const v of ['vertex3', 'vertex3v']) wrap(v, (o) => function () { if (rec.on && rec.prim) rec.prim.n++; return o.apply(this, arguments); });
     wrap('bindTexture', (o) => function (t) { if (rec.on) { rec.tex = texId(t); rec.ops.push(`bind ${rec.tex}@${rec.unit}`); } return o.apply(this, arguments); });
     wrap('activeTexture', (o) => function (u) { if (rec.on) rec.unit = u; return o.apply(this, arguments); });
+    // Colour is the SHADING RESULT on the original's side: its per-triangle
+    // handler issues glColor4f(I,I,I,a) where I is the summed per-vertex lighting
+    // byte. So recording minigl's colour makes the two sides comparable on
+    // shading, which is what the geometry-exact parts need.
+    wrap('color4', (o) => function (r, g, b, a) {
+      if (rec.on) rec.col = [r, g, b, a].map((v) => Math.round(v * 1000) / 1000);
+      return o.apply(this, arguments);
+    });
     wrap('rotate', (o) => function (a, x, y, z) { if (rec.on) rec.ops.push(`rot ${+a.toFixed(3)} ${+x.toFixed(3)},${+y.toFixed(3)},${+z.toFixed(3)}`); return o.apply(this, arguments); });
     wrap('translate', (o) => function (x, y, z) { if (rec.on) rec.ops.push(`tr ${+x.toFixed(3)},${+y.toFixed(3)},${+z.toFixed(3)}`); return o.apply(this, arguments); });
     wrap('scale', (o) => function (x, y, z) { if (rec.on) rec.ops.push(`sc ${+x.toFixed(3)},${+y.toFixed(3)},${+z.toFixed(3)}`); return o.apply(this, arguments); });
     // drawMesh/drawElements are the batched paths; count them as one primitive
     // each so a port that batches is not reported as drawing nothing.
-    wrap('drawMesh', (o) => function (mesh, o2) { if (rec.on) rec.ops.push(`mesh ${o2?.count ?? mesh?.count ?? '?'}:t${rec.tex}`); return o.apply(this, arguments); });
-    wrap('drawElements', (o) => function (pos, uvs, idx) { if (rec.on) rec.ops.push(`elems ${idx?.length ?? '?'}:t${rec.tex}`); return o.apply(this, arguments); });
+    const colSuffix = () => (rec.col ? ` c${rec.col.join(',')}` : '');
+    wrap('drawMesh', (o) => function (mesh, o2) { if (rec.on) rec.ops.push(`mesh ${o2?.count ?? mesh?.count ?? '?'}:t${rec.tex}${colSuffix()}`); return o.apply(this, arguments); });
+    wrap('drawElements', (o) => function (pos, uvs, idx) { if (rec.on) rec.ops.push(`elems ${idx?.length ?? '?'}:t${rec.tex}${colSuffix()}`); return o.apply(this, arguments); });
     P.__recInstalled = true;
     return { ok: true };
   }, cfg.minigl);

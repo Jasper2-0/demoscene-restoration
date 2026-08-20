@@ -595,3 +595,61 @@ answer.
 
 **Status: Phase 4 of the plan is BLOCKED on this, and Phase 1 depends on Phase 4**
 because they are the same defect. Phases 2, 3 and 5 remain open and independent.
+
+---
+
+## Phase 2 complete — the six major parts, classified
+
+Every part measured at a mid-part order, original recorded through `tools/winebox/`
+and port through `tools/record-minigl-draws.mjs`. **Orders 2 and 11 each carry TWO
+overlapping clips**, so their figure is the combined frame; the layered timeline means
+a per-part figure does not exist there.
+
+| part | median r | order | geometry | verdict |
+|---|--:|--:|---|---|
+| effect_40c990 | 0.265 | 18 | **EXACT** (10 draws, 360 v) | **shading** |
+| effect_410300 | 0.328 | 11 | differs x1.40 (shared frame) | geometry |
+| effect_40dab0 | 0.359 | 11 | differs x1.40 (shared frame) | geometry |
+| effect_40b040 | 0.427 | 20 | **EXACT** (6488 = 6488) | **shading** |
+| effect_40de00 | 0.430 | 2 | differs x1.45 (shared frame) | geometry |
+| effect_4106a0 | 0.476 | 2 | differs x1.45 (shared frame) | geometry |
+
+Layer isolation at order 2 (`?only=`): all layers r 0.4285 with luma 20.4 vs 20.7 —
+**the level is right there and the structure is wrong**, so `effect_40de00` and
+`effect_4106a0` are not brightness faults despite sitting in the major band. Neither
+layer alone exceeds r 0.30; they only score together.
+
+## Phase 3 — the two geometry-exact parts have DIFFERENT shading faults
+
+Issue #32 proposed "one missing or under-valued additive contribution rather than four
+independent bugs". Measured on the only two parts where geometry is proven exact, so
+any residual must be shading, that is **not** what is there.
+
+### effect_40c990 (order 18) — a constant alpha factor of 3.82
+
+| group | port alpha | original alpha | ratio |
+|---|--:|--:|--:|
+| texture 1, 5 draws x36 v | 0.183 | 0.0479 | **3.820** |
+| texture 3, 5 draws x36 v | 0.379 | 0.0993 | **3.816** |
+
+RGB matches (white on both sides after GL's clamp); only alpha differs, by the same
+factor in both groups. A single shared constant, which is what makes it worth finding
+rather than tuning: `1 - (1 - 0.0479)^4 = 0.178`, close to 0.183, so **four
+accumulated passes** is a candidate reading — the port may be collapsing a repeated
+draw into one and pre-combining its alpha.
+
+### effect_40b040 (order 20) — a lost per-instance brightness ramp
+
+| | original | port |
+|---|---|---|
+| draws | ~15 x 432 verts | 3 x 2160 verts |
+| colour | rgb **0.062, 0.125, 0.188, 0.25, 0.312, 0.375, 0.438, 0.5 ...** at alpha 0.3 | `0.938` x2, `1.0`, `1.0` |
+| total | 6488 | 6488 |
+
+The ramp is exact multiples of **1/16** — a per-instance depth fade over ~15 copies.
+The port's 2160 is exactly `5 x 432`, so the geometry is right and five instances are
+being **batched into one draw, discarding the per-instance colour**. Vertex-exactness
+hid this completely; only the colour channel exposes it.
+
+**This is why the draw-stream oracle needed colour.** Geometry alone reported
+`effect_40b040` as perfect.
