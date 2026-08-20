@@ -48,7 +48,10 @@ the next Wonder milestone.
 
 ---
 
-## The port submits geometry the original rejects (2026-08-20)
+## The port draws the wrong geometry for four objects (2026-08-20)
+
+**Read the CORRECTION at the end of this section first — the culling reading
+below was wrong, and is kept because the sequence of measurements is the point.**
 
 Found by diffing the port's draw stream against the original's, recorded from
 `wONDEr.exe` under `tools/winebox/` with the module order pinned by the FSOUND
@@ -232,3 +235,56 @@ Two observations for whoever picks this up:
 **Why it matters visually**: `GL_BLEND` is enabled and depth is off for part of
 these frames, so the surplus triangles the port submits are drawn and do
 composite. This is not a performance difference.
+
+
+---
+
+## CORRECTION — there is no runtime culling. The counts are fixed.
+
+Everything above builds toward "the original rejects triangles view-dependently".
+That is **wrong**, and the measurement that killed it is simple.
+
+Re-recorded order 11 through apitrace with the order pinned but the performance
+counter ADVANCING, so animation runs inside the part:
+
+```
+  57 frames, 2 count-signatures — 56 of them [1944,1944,2298,2346,2421,2496,6627]
+  the 6627 draw, frame 39 vs frame 151:
+    first vertex   [0.0054,-0.6648,-0.28]  ==  [0.0054,-0.6648,-0.28]
+    positions      identical, 1392/1392 shared
+```
+
+The counts do not move across 112 frames. These objects are RIGID — vertices are
+submitted in object space and animated by the modelview matrix, which is why the
+positions are constant — but a view-dependent rejection would still change the
+COUNTS as the matrix turns, and nothing changes.
+
+So the four draws are **four fixed, slightly different meshes**: 98.6% shared
+positions, each carrying a handful of its own, at 2496 / 2421 / 2346 / 2298. The
+port draws 3468 for all four because it treats them as one mesh instanced four
+times.
+
+**The defect is therefore in what the port LOADS or GENERATES, not in what it
+culls.** The next question is why the port produces one 3468-vertex mesh where
+the original has four variants — a question for the EXP/KEXP scene data and the
+generator, not for the renderer.
+
+### What the earlier steps did establish, and which still stands
+
+* the draw-stream diff itself, and the per-order vertex totals
+* the gate at 0x004076cf and the material's two handlers (+0xcc, +0xd0)
+* the vertex layout: 116 bytes at `[obj+0x80]` — +0x10 lighting intensity,
+  +0x14/+0x18 sphere-map texcoords, +0x30 position, +0x3c/+0x40/+0x44 NORMAL,
+  +0x4c an alias pointer; triangles 88 bytes at `[obj+0x88]`
+* FUN_004070d0 is the per-vertex pass: transform, lighting (normalised
+  light vector dotted with the normal, result to +0x10), then sphere-map texgen
+  (+0x14/+0x18). It never writes +0x4c, which is consistent with +0x4c being
+  static rather than a per-frame visibility flag.
+
+### The methodological note worth keeping
+
+This finding was revised three times — "the original culls", then "culling or
+morphing?", then "rejection, morphing ruled out", then this. Every revision came
+from a measurement, and every earlier version would have produced a confident,
+wrong fix. The port implements nothing from any of them, which is the only reason
+none of it cost anything.
