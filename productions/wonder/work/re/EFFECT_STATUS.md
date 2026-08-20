@@ -646,13 +646,32 @@ draw into one and pre-combining its alpha.
 | colour | rgb **0.062, 0.125, 0.188, 0.25, 0.312, 0.375, 0.438, 0.5 ...** at alpha 0.3 | `0.938` x2, `1.0`, `1.0` |
 | total | 6488 | 6488 |
 
-The ramp is exact multiples of **1/16** — a per-instance depth fade over ~15 copies.
-The port's 2160 is exactly `5 x 432`, so the geometry is right and five instances are
-being **batched into one draw, discarding the per-instance colour**. Vertex-exactness
-hid this completely; only the colour channel exposes it.
+**RETRACTED — this was a recorder artifact, not a port defect.** The recorder latched
+colour at `begin()`, so it reported the FIRST colour of a 2160-vertex batch as though
+it were the whole batch. Tracking colour changes *inside* a primitive shows the port's
+draw as:
 
-**This is why the draw-stream oracle needed colour.** Geometry alone reported
-`effect_40b040` as perfect.
+```
+prim TRIANGLES:2160:t1 c1426x[0,0,0,0.67 .. 0.938,0.938,0.938,0.67]
+```
+
+**1,426 distinct colours**, ramping black to 0.938 within the one draw. The ramp is
+present; it is per-vertex where the original's is per-draw, which is a difference in
+batching and not in output. `design-tunnel.js` calls `mgl.color4()` per vertex at
+line 345, which is what prompted the re-check — the source disagreed with the
+measurement and the source was right.
+
+What IS different at order 20, and is narrower than claimed:
+
+| | original | port |
+|---|---|---|
+| alpha | 0.3 | **0.67** |
+| rgb range | 0.062 .. 0.5 | 0 .. 0.938 |
+
+**Lesson for the tool, recorded because it nearly cost a wrong fix**: an immediate-mode
+API lets colour change per vertex, so any recorder that samples state at `begin()`
+reports batched geometry as flat-shaded. Check the port's source before believing the
+recorder about a difference in shading.
 
 ### Phase 4 — narrowed, criterion still unread
 

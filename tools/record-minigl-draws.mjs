@@ -79,7 +79,10 @@ await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors })
     wrap('begin', (o) => function (mode) { if (rec.on) rec.prim = { mode, n: 0, tex: rec.tex, unit: rec.unit, col: rec.col }; return o.apply(this, arguments); });
     wrap('end', (o) => function () {
       if (rec.on && rec.prim) {
-        const c = rec.prim.col ? ` c${rec.prim.col.join(',')}` : '';
+        const cols = rec.prim.cols || (rec.prim.col ? [rec.prim.col.join(',')] : []);
+        const c = cols.length === 0 ? ''
+          : cols.length === 1 ? ` c${cols[0]}`
+          : ` c${cols.length}x[${cols[0]} .. ${cols[cols.length - 1]}]`;
         rec.ops.push(`prim ${MODE[rec.prim.mode] ?? rec.prim.mode}:${rec.prim.n}:t${rec.prim.tex}${c}`);
         rec.prim = null;
       }
@@ -93,7 +96,19 @@ await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors })
     // byte. So recording minigl's colour makes the two sides comparable on
     // shading, which is what the geometry-exact parts need.
     wrap('color4', (o) => function (r, g, b, a) {
-      if (rec.on) rec.col = [r, g, b, a].map((v) => Math.round(v * 1000) / 1000);
+      if (rec.on) {
+        rec.col = [r, g, b, a].map((v) => Math.round(v * 1000) / 1000);
+        // Colour may change PER VERTEX inside a primitive — minigl's immediate
+        // path allows it and Wonder's surface renderer uses it. Latching only at
+        // begin() reports the first colour of a batch as if it were the whole
+        // batch, which reads as "the port lost a per-instance ramp" when the ramp
+        // is there and simply spans one draw instead of many.
+        if (rec.prim) {
+          rec.prim.cols = rec.prim.cols || [];
+          const k = rec.col.join(',');
+          if (rec.prim.cols[rec.prim.cols.length - 1] !== k) rec.prim.cols.push(k);
+        }
+      }
       return o.apply(this, arguments);
     });
     wrap('rotate', (o) => function (a, x, y, z) { if (rec.on) rec.ops.push(`rot ${+a.toFixed(3)} ${+x.toFixed(3)},${+y.toFixed(3)},${+z.toFixed(3)}`); return o.apply(this, arguments); });
