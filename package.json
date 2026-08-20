@@ -9,6 +9,7 @@
   "scripts": {
     "test:shared": "node --test \"shared/sunflower/test/*.test.mjs\"",
     "test:haujobb": "node shared/haujobb/test/hjb-vs-oracle.mjs ${HAUJOBB_CORPUS:-originals/haujobb}",
-    "verify:energia": "node productions/energia/work/tools/verify-browser.mjs"
+    "verify:energia": "node productions/energia/work/tools/verify-browser.mjs",
+    "test:haujobb-geometry": "node shared/haujobb/test/geometry-vs-trace.mjs \"${HAUJOBB_LISTS:-work/lists.json}\" \"${HAUJOBB_DATA:-productions/genoaux/work/unpacked/hjb_geno/Data}\""
   }
 }
