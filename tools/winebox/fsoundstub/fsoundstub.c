@@ -104,6 +104,7 @@ static long g_peek_frames = 0;
 static unsigned long g_peek_back = 0;
 static unsigned char g_scan[32]; static int g_scan_len = 0;
 static unsigned long g_scan_lo = 0x1000000, g_scan_hi = 0x8000000;
+static unsigned long g_scan_count = 0;   /* vertices to walk at each live hit */
 
 static const char *envs(const char *n) {
     static char buf[64];
@@ -128,6 +129,7 @@ static void init_once(void) {
     if ((v = envs("SUNF_PEEK_BACK")))    g_peek_back = strtoul(v, NULL, 16);
     if ((v = envs("SUNF_SCAN_LO")))      g_scan_lo = strtoul(v, NULL, 16);
     if ((v = envs("SUNF_SCAN_HI")))      g_scan_hi = strtoul(v, NULL, 16);
+    if ((v = envs("SUNF_SCAN_COUNT")))   g_scan_count = strtoul(v, NULL, 10);
     if ((v = envs("SUNF_SCAN"))) {
         int i = 0;
         while (v[i * 2] && v[i * 2 + 1] && i < (int)sizeof g_scan) {
@@ -304,8 +306,51 @@ static void do_scan(void) {
             unsigned char *v = (unsigned char *)(hit - 0x30);
             if (IsBadReadPtr(v, 0x74)) continue;
             unsigned long f = *(unsigned long *)(v + 0x4c);
+            unsigned long lit = *(unsigned long *)(v + 0x10);
             TR("scan hit %#lx  vertex@%#lx  +0x4c = %#lx  +0x10 = %#lx",
-               hit, (unsigned long)v, f, *(unsigned long *)(v + 0x10));
+               hit, (unsigned long)v, f, lit);
+            /* +0x10 == 0xff marks a LIVE vertex (the lighting byte FUN_004070d0
+             * writes in its unlit branch) rather than the loaded EXP data, whose
+             * +0x10 holds the vertex COUNT. Walk that array at the 116-byte stride
+             * and count how many carry a non-zero +0x4c — the gate submits a
+             * triangle iff any of its three vertices does, so this fraction is
+             * directly comparable to the measured survival rate. */
+            if (lit == 0xff && g_scan_count) {
+                unsigned long nz = 0, n = g_scan_count, i;
+                char line[80]; int ln = 0;
+                for (i = 0; i < n; i++) {
+                    unsigned char *vi = v + i * 0x74;
+                    if (IsBadReadPtr(vi, 0x74)) break;
+                    unsigned long fi = *(unsigned long *)(vi + 0x4c);
+                    if (fi) nz++;
+
+                }
+                line[ln] = 0;
+                /* Emit the FULL bitmap in 64-vertex rows so the rule can be
+                 * correlated against vertex positions offline. */
+                { unsigned long r; for (r = 0; r < i; r += 64) {
+                    unsigned long c; int m = 0;
+                    for (c = r; c < r + 64 && c < i; c++)
+                        line[m++] = (*(unsigned long *)(v + c * 0x74 + 0x4c)) ? '1' : '0';
+                    line[m] = 0;
+                    TR("bits %04lu %s", r, line);
+                } }
+                TR("scan   array of %lu: %lu non-zero +0x4c (%lu%%), first24=%s",
+                   i, nz, i ? (nz * 100 / i) : 0, line);
+                /* Are the non-zero values BOOLEANS or POINTERS? At 0x0040a4a2 the
+                 * engine follows a +0x4c as a pointer, so this decides whether the
+                 * port needs a flag or an alias link. */
+                {
+                    unsigned long shown = 0, k2;
+                    for (k2 = 0; k2 < i && shown < 6; k2++) {
+                        unsigned long fv = *(unsigned long *)(v + k2 * 0x74 + 0x4c);
+                        if (!fv) continue;
+                        TR("scan     v[%lu] +0x4c = %#lx%s", k2, fv,
+                           (fv > 0x400000 && fv < 0x8000000) ? "  (pointer-like)" : "  (small)");
+                        shown++;
+                    }
+                }
+            }
             if (++hits >= 12) { TR("scan: stopping at 12 hits"); return; }
         }
     }

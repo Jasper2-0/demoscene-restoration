@@ -893,3 +893,61 @@ Dump `+0x4c` across a whole array at stride 116 and correlate the non-zero entri
 against which triangles survive. Both halves are now available: the array base comes
 from the scan, and the survivor set comes from the draw stream. That turns the
 criterion from a search into a comparison.
+
+---
+
+## The criterion, characterised: `vertex+0x4c` is a per-vertex FACING flag
+
+Reached by reading the engine's own memory rather than by finding the writing code.
+The scanner locates the live vertex arrays by content, walks them at the 116-byte
+stride, and reports `+0x4c` for every vertex.
+
+**It is a boolean.** The non-zero value is exactly `0x1` — never a pointer. The
+alias-pointer reading at 0x0040a4a2 belongs to some other structure and does not
+apply here.
+
+**Density falls with scale**, across six live arrays of 631 vertices:
+
+| array | flags set | measured triangle survival |
+|---|--:|--:|
+| `Original` | 317 (50%) | — |
+| `B2.LWO01` | 312 (49%) | 72% |
+| `B2.LWO02` | 309 (48%) | 70% |
+| `B2.LWO03` | 294 (46%) | 68% |
+| `B2.LWO04` | 286 (45%) | 66% |
+
+~48% of vertices yielding ~68% of triangles is consistent with the gate, which
+submits a triangle iff **any** of its three vertices is flagged.
+
+**The rule is a facing test.** Correlating the bitmap against vertex normals and
+searching for the direction that best separates set from clear:
+
+| bitmap | accuracy | direction | threshold |
+|---|--:|---|--:|
+| `B2.LWO01` | **95.7%** | (0.519, 0.773, -0.366) | +0.020 |
+| `B2.LWO02` | **95.6%** | (0.515, 0.792, -0.328) | +0.060 |
+
+Two instances that share geometry byte-for-byte converge on the same direction. So:
+
+```
+  vertex[i].flag = dot(normal[i], D) > threshold      // computed once, at load
+  triangle drawn = flag[v0] | flag[v1] | flag[v2]     // the gate at 0x004076cf
+```
+
+That reconciles every earlier observation: boolean, ~48% set, spatially clustered
+(facing is continuous over a surface), fixed per instance across frames, and varying
+slightly between instances whose only difference is scale.
+
+**This is a characterisation at 95.7%, NOT the formula.** The residual ~4% probably
+comes from the normals used here being the port's `buildWonderVertexNormals` rather
+than the original's `FUN_00406e20`, or from the test running on transformed rather
+than object-space normals. Implementing this as-is would be an empirical fit of
+exactly the kind METHOD.md warns about — it would look convincing and be wrong at the
+silhouette, which is precisely where it matters.
+
+**What it does buy** is a target for reading the code. The search is no longer "what
+writes `+0x4c`" with no constraints; it is "find the load-time pass that computes a
+dot product against a fixed direction and stores a boolean at `+0x4c`", and the
+direction is known to within a few percent. `FUN_00406e20` — the normal-accumulation
+pass, which already walks the vertex array at stride 116 — is the obvious place to
+look next.
