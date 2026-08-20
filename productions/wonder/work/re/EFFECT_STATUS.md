@@ -165,7 +165,32 @@ checked against null. If the vertex field is the same kind, then the draw test a
 0x004076cf is a null-pointer test on an alias pointer, reading only its low byte,
 and "draw the triangle if any vertex is aliased" is a strange rule for culling.
 
-**Two live hypotheses, and they are not distinguished yet:**
+**RESOLVED 2026-08-20 — it is rejection. Morphing is ruled out.**
+
+Recorded order 11 through apitrace with the order pinned by the FSOUND stub, and
+compared actual `glVertex3fv` VALUES between two instances of the object in the
+SAME frame:
+
+```
+  positions in the 2496 draw:                       561 unique
+  bit-identical to the 2421 draw's:                 553   (98.6%)
+  differing:                                          8
+  their distance to the other set: median 0.125 on an object of extent 4.7
+```
+
+A morph would move most vertices; this moves none — 98.6% are bit-identical, not
+merely close. The geometry is static.
+
+The 8 that differ are the confirmation rather than an exception. If the TRIANGLE
+set varies per instance then the VERTEX set follows, because a vertex is
+submitted only if some triangle using it survives. Different triangles surviving
+in different instances therefore gives vertex sets that overlap heavily and are
+NOT nested — which is what the subset test found, and what rejection predicts.
+Nesting was the naive expectation and its failure supports the conclusion. At
+2.6% of the object's extent the differing vertices sit at the silhouette, where
+the boundary moves as the object turns.
+
+The two hypotheses that were open, for the record:
 
 1. **Rejection.** The original submits a subset of the same triangles; the port
    submits all of them.
@@ -177,10 +202,15 @@ Both fit 2496 / 2421 / 2346 / 2298 against the port's 3468 four times. The
 "identical 3468" that seemed to prove one mesh proves only that THE PORT treats
 them as one mesh, which is the thing in question.
 
-**The decidable test**: apitrace records actual `glVertex3fv` VALUES, where
-`WINEDEBUG=+opengl` logs only the pointer. Record the four instances and compare
-positions — same positions with some absent means rejection; different positions
-means morphing. Do this before writing any code.
+That test has now been run (above) and settles it. `WINEDEBUG=+opengl` could not
+have answered it: it logs only the pointer for `glVertex3fv`, so both hypotheses
+look identical in that log. This is what apitrace was added for.
+
+**Still open**: the criterion itself. We know triangles are rejected
+view-dependently and that the gate at 0x004076cf reads a per-vertex field which
+is an alias POINTER elsewhere in the engine. We do not know what sets it, so we
+still cannot say backface vs near-plane. A port must not guess: the visible
+consequence differs, and `GL_BLEND` is on with depth off in these frames.
 
 ### Layout recovered
 
