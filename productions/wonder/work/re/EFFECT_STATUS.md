@@ -653,3 +653,39 @@ hid this completely; only the colour channel exposes it.
 
 **This is why the draw-stream oracle needed colour.** Geometry alone reported
 `effect_40b040` as perfect.
+
+### Phase 4 — narrowed, criterion still unread
+
+Wonder's materials are stored by the port as **opaque bytes** (0xae = 174 for SUNF),
+so the runtime field the gate reads, `material+0x94`, can be inspected directly from
+the asset — subject to the caveat below.
+
+| material | bytes 0x90..0x98 | float @0x91 | meshes | rejected? |
+|---|---|--:|---|---|
+| 0 | `61,206,204,76,62,142,141,13,63` | 0.200 | `Original` | **YES** (10278 -> 6525) |
+| 1 | `61,138,137,9,63,202,200,72,62` | 0.537 | `QuadPatch01/02` | no (1944 = 1944) |
+| 2 | `61,0,0,0,0,0,0,0,0` | 0.000 | `B2.LWO01-05` | **YES** (3468 -> ~2400) |
+
+`faceted.exp` and `faceted2.exp`, whose meshes are geometry-EXACT, both carry
+`0x94 = 63` with float @0x91 = 1.0.
+
+**Material 2 is all zeros and its meshes are rejected**, which fits the gate exactly.
+**Material 0 is non-zero and its mesh is rejected anyway**, which does not. So
+`material+0x94` alone is not the criterion, and the correlation is suggestive rather
+than decisive.
+
+Two caveats that must be resolved before anyone builds on this:
+
+* **The blob is not the runtime struct.** Floats in the file blob begin at 0x91, not
+  0x90, so the runtime layout is offset by some amount relative to the file, and the
+  runtime struct is larger (its handler pointers live at +0xcc/+0xd0, past the file
+  blob's 174 bytes). Reading file byte 0x94 as runtime `+0x94` assumes an identity
+  mapping that has not been established.
+* **The port never decodes these fields at all** — `readMaterial` for the `wonder`
+  variant copies `MATERIAL_BYTES.wonder` bytes verbatim and extracts only strings. So
+  no existing port behaviour depends on any interpretation of them, and none should
+  be invented here.
+
+**Phase 4 remains blocked.** The plan's own rule applies: the criterion is to be read,
+not fitted, and a threshold on a float that happens to separate three samples is
+exactly the kind of convincing wrong answer METHOD.md warns about.
