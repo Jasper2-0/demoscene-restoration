@@ -743,3 +743,28 @@ works.
 Practical note for anyone using the peek: trigger it from `FMUSIC_GetOrder`, not from
 the QPC hook. The engine calls GetOrder about **three times over an entire run**, not
 once per frame as the clock code suggests, so any threshold above that never fires.
+
+### Finding the object: not adjacent to the materials
+
+The draw function is `__fastcall`/thiscall — `MOV ESI,ECX` at 0x00407659 — so the
+object is the `this` pointer and is in no global. It can be found by signature
+instead: `+0xd4` vertex count, `+0xdc` triangle count, `+0xe0` material pointer,
+`+0x80` vertex array, `+0x88` triangle array.
+
+Dumping **24 KB around the materials** (0x4782720 onward) finds **none of it**. Not
+one of woah3's counts — 1156, 3426, 648, 631, 1766 — appears anywhere in that window.
+The objects are allocated well away from the materials, so reaching them means
+scanning memory rather than stepping to a neighbour, and that is not bounded.
+
+**Reading `vertex+0x4c` therefore remains the open item**, and with it Phase 4 of the
+plan, and with Phase 4 the fixes that Phases 1 and 5 depend on.
+
+The instrument is sound and now correct — it just needs to be pointed at an address
+nobody has yet. The bounded ways to get one:
+
+* hook a GL entry point the draw path calls per object (the engine resolves them via
+  `wglGetProcAddress`, which the stub could interpose) and read `ECX`/`ESI` at that
+  moment;
+* or find the container that owns the objects — `[obj+0xe0]` points AT a material, so
+  a scan for a dword equal to a known material address yields an object minus 0xe0,
+  given a wide enough window to scan.

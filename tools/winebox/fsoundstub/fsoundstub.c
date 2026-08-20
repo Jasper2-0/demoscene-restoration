@@ -254,7 +254,7 @@ static void parse_peek(const char *v, int deref) {
     g_peek_addr = strtoul(buf, NULL, 16);
     g_peek_len = strtoul(colon + 1, NULL, 16);
     g_peek_deref = deref;
-    if (g_peek_len > 0x400) g_peek_len = 0x400;
+    if (g_peek_len > 0x8000) g_peek_len = 0x8000;
 }
 
 static void do_peek(void) {
@@ -279,9 +279,13 @@ static void do_peek(void) {
     static const char HEX[] = "0123456789abcdef";
     for (unsigned long off = 0; off < g_peek_len; off += 16) {
         char line[80]; int n = 0;
+        /* FOUR nibbles, not three: a dump longer than 0xfff bytes otherwise
+         * prints colliding offsets and the reader silently reconstructs 4 KB of
+         * a 24 KB region, which looks like a short dump rather than a wrong one. */
         line[n++] = '+';
-        line[n++] = HEX[(off >> 8) & 0xf]; line[n++] = HEX[(off >> 4) & 0xf];
-        line[n++] = HEX[off & 0xf]; line[n++] = ' ';
+        line[n++] = HEX[(off >> 12) & 0xf]; line[n++] = HEX[(off >> 8) & 0xf];
+        line[n++] = HEX[(off >> 4) & 0xf];  line[n++] = HEX[off & 0xf];
+        line[n++] = ' ';
         for (int k = 0; k < 16 && off + k < g_peek_len; k++) {
             line[n++] = HEX[p[off + k] >> 4];
             line[n++] = HEX[p[off + k] & 0xf];
