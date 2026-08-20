@@ -288,3 +288,86 @@ morphing?", then "rejection, morphing ruled out", then this. Every revision came
 from a measurement, and every earlier version would have produced a confident,
 wrong fix. The port implements nothing from any of them, which is the only reason
 none of it cost anything.
+
+---
+
+## Issue #31's anti-correlation: one clip, and it runs past its animation end
+
+**#31 attributes the five negative samples to "the frame, not either clip", because
+two clips are live over capture 100.2-102.8 s. That is wrong — it is ONE clip.**
+Isolating layers with `?only=` at the worst sample (capture 102.305 s):
+
+| layers rendered | luma ours | ref | r |
+|---|--:|--:|--:|
+| all | 88.6 | 6.6 | -0.245 |
+| only `effect_40dab0` | **0.0** | 6.6 | — |
+| only `effect_410300` | **88.6** | 6.6 | **-0.245** |
+
+`effect_40dab0` (the dust tunnel) is **innocent**: it fades correctly to black.
+`dust-tunnel.js` has `EXIT_START = 29.991` on a clip starting at 69.753, i.e. show
+99.744 s over 1 s, which matches the reference's own falloff. It is filed in #31
+only because a whole-frame comparison indicts every clip that is live.
+
+Every bit of the error is `effect_410300` / `woah3.js`.
+
+### What the frames show
+
+Side-by-side at capture 102.305 s (`work/verify/frames/effect_40dab0_t32.552_sbs.png`):
+the reference is near-black with the LWO "bone" objects lit and correctly placed;
+ours has the same objects plus a **full-frame bright blue caustics backdrop** and
+visible translucent QuadPatch planes. The objects match; the backdrop does not.
+
+Correlation is comparing structure, and ours is dominated by a large bright field
+that is simply not in the reference frame — which is why r goes NEGATIVE rather than
+merely low.
+
+### The mechanism: the scene runs past its animation end, and we clamp
+
+`woah3.js` drives the scene with `OBJECT_RATE = 15`, so `objectFrame = localTime*15`.
+`woah3.exp` declares **`frameEnd 400`**.
+
+```
+  objectFrame reaches 400 at localTime 26.667  =  show 96.420s
+  localTime 32.552 (the worst sample)          =  objectFrame 488.3
+```
+
+The reference's luma falls off a cliff immediately after that boundary:
+
+| capture | 96.03 | 98.12 | 100.21 | 102.31 |
+|---|--:|--:|--:|--:|
+| ref | 194.6 | 148.9 | 51.0 | **6.6** |
+| ours | 144.8 | 165.6 | 113.4 | **88.6** |
+
+`sampleScene` (`shared/sunflower/js/scene.js:16`) **clamps**:
+`if (frame > keys[last].time) return { index: last - 1, t: 1 }` — it holds the final
+pose forever. So the port freezes the backdrop in place and keeps drawing it lit,
+while the original evidently does something else once the animation is over.
+
+**Hypothesis, NOT yet confirmed**: the original EXTRAPOLATES past the last key rather
+than clamping, so the animated scale/translation carries the textured layers out of
+frame. `Original` has a scale key of 53.07 and the `B2.LWO0n` records carry scale
+keys of 65-170, so an extrapolating scale track would move a great deal in the six
+seconds after the boundary. The camera is unaffected — `CAMERA_RATE = 10` puts
+`cameraFrame` at 325 of 400 at the same instant, still inside its range, which fits
+the reference keeping the objects framed while the backdrop leaves.
+
+**Do not change the interpolator on this hypothesis.** The evaluator's end behaviour
+is decidable from `FUN_00410770` (the runtime track evaluator, whose clamp/hold ends
+are already recorded above) and from the original's own draw stream — the recorder in
+`tools/winebox/` reports the matrices the executable submits, so extrapolate-vs-clamp
+is directly observable rather than inferable. METHOD.md's Lapsus lesson is exactly
+this shape: the key layout was right and the tangent formula was wrong, and it
+presented as a timing error that varied with time.
+
+### Ruled out
+
+* **Timing.** `phase.mjs wonder effect_410300 30.914` scans +/-0.8 s and finds r
+  NEGATIVE at every offset, best -0.044. The tool's own verdict: "NOT a timing
+  offset: the part draws a different picture at every time in the scan."
+* **The pulse envelope.** `napierdalanie.env` gates only the four LWO alphas
+  (`inversePulse * scale`), matching the original's `_DAT_004360c4` global-alpha
+  writes in `forced_00410410`, which are reset to 1.0 afterwards. The QuadPatches and
+  `Original` are drawn at full alpha in BOTH, so alpha is not the difference.
+* **Repeatability.** `repeatability.mjs wonder` passes all four assertions (ORDER,
+  STATE, REPEAT, ISOLATION), so the baseline scores are of frames a viewer would see.
+  Wonder does NOT have lapsus's defect (#36).
