@@ -122,3 +122,5 @@ tools/winebox/bassstub/BASS.DLL
 # site's publication story is decided. work/MANIFEST.sha256 still hashes it, so
 # the extraction remains fully described; rehydrate with work/unpack.mjs.
 productions/genoaux/work/unpacked/hjb_geno/Data/mouthwash.mp3
+# Built FSOUND stub — source and .def are committed, the PE is not.
+tools/winebox/fsoundstub/FSOUND.DLL

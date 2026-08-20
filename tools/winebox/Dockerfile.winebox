@@ -5,5 +5,19 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
       libgl1-mesa-dri libglx-mesa0 libosmesa6 \
       procps xdotool ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+# apitrace, in its own layer so the (slow, emulated) base layer stays cached.
+#
+# WHY BOTH RECORDERS. WINEDEBUG=+opengl is free and needs no setup, but Wine logs
+# the POINTER for the *v entry points — glVertex3fv, glNormal3fv, glTexCoord2fv —
+# so whatever they submit is invisible. That was tolerable for the Haujobb engines,
+# which draw through vertex arrays and hand back an index stream instead. It is not
+# tolerable for the Sunflower engines: Wonder submits 366,166 of its 435,718
+# vertices as glVertex3fv, i.e. 84% of its geometry, and the +opengl log cannot see
+# any of it. apitrace serialises the pointed-at data, which is the whole reason it
+# exists.
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+      apitrace \
+ && rm -rf /var/lib/apt/lists/*
+
 ENV WINEPREFIX=/wine WINEDLLOVERRIDES=mscoree=d WINEDEBUG=-all
 RUN wineboot --init 2>&1 | tail -5 || true

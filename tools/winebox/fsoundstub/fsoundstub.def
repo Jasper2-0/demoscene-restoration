@@ -1,0 +1,23 @@
+; The imports in wONDEr.exe are MSVC-decorated stdcall names — `_FSOUND_Init@8`,
+; leading underscore and all — so the exported names must match EXACTLY. mingw
+; would otherwise publish them as `FSOUND_Init@8` (no underscore), and the loader
+; would fail to bind with a message that says nothing about decoration.
+; Ordinals are the real DLL's, so an import by ordinal binds correctly too.
+LIBRARY FSOUND.DLL
+EXPORTS
+    _FMUSIC_FreeSong@4           = FMUSIC_FreeSong@4           @2
+    _FMUSIC_GetOrder@4           = FMUSIC_GetOrder@4           @12
+    _FMUSIC_LoadSongMemory@4     = FMUSIC_LoadSongMemory@4     @23
+    _FMUSIC_PlaySong@4           = FMUSIC_PlaySong@4           @25
+    _FMUSIC_SetOrder@8           = FMUSIC_SetOrder@8           @27
+    _FSOUND_Close@0              = FSOUND_Close@0              @48
+    _FSOUND_DSP_ClearMixBuffer@0 = FSOUND_DSP_ClearMixBuffer@0 @49
+    _FSOUND_GetDriver@0          = FSOUND_GetDriver@0          @69
+    _FSOUND_GetMixer@0           = FSOUND_GetMixer@0           @74
+    _FSOUND_GetOutput@0          = FSOUND_GetOutput@0          @77
+    _FSOUND_GetOutputRate@0      = FSOUND_GetOutputRate@0      @79
+    _FSOUND_Init@8               = FSOUND_Init@8               @88
+    _FSOUND_SetMixAhead@4        = FSOUND_SetMixAhead@4        @113
+    _FSOUND_SetMixer@4           = FSOUND_SetMixer@4           @114
+    _FSOUND_SetOutput@4          = FSOUND_SetOutput@4          @116
+    _FSOUND_SetUpdateRate@4      = FSOUND_SetUpdateRate@4      @123
