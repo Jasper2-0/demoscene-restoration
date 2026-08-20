@@ -144,11 +144,51 @@ the `0x4c` sites at 0x409660/0x409680 are a doubly-linked list's prev/next pair,
 0x004069f4 is a 4x4 identity-matrix init, and `param_1[0x4c] = 1` in FUN_00415d30
 is libjpeg (`param_1` is `int*`, so byte offset 0x130).
 
-No byte-sized store to +0x4c exists anywhere in the binary, so the flag is
-written as a dword and read as a byte by the cull test. That is a useful
-constraint on where to look next, and it argues for approaching from the
-transform side — find what fills the 116-byte vertex array at `[obj+0x80]` per
-instance — rather than by searching for the offset.
+No byte-sized store to +0x4c exists anywhere in the binary.
+
+### +0x4c is a POINTER, not a flag — and that undermines the culling reading
+
+At 0x0040a4a2, in a structurally analogous array (92-byte stride at `[obj+0x40]`,
+same +0x30 position field):
+
+```
+  MOV ECX,[EAX + EBP + 0x4c]   ; read +0x4c
+  ADD EAX,EBP                  ; this element's address
+  CMP ECX,EDX                  ; EDX = 0
+  JZ  use_self
+  MOV EAX,ECX                  ; non-null -> follow it
+  FLD [ESI] / FADD [EAX+0x30]  ; ...and take POSITION from there instead
+```
+
+So +0x4c means "this element's real data lives over there" — an alias/redirect
+checked against null. If the vertex field is the same kind, then the draw test at
+0x004076cf is a null-pointer test on an alias pointer, reading only its low byte,
+and "draw the triangle if any vertex is aliased" is a strange rule for culling.
+
+**Two live hypotheses, and they are not distinguished yet:**
+
+1. **Rejection.** The original submits a subset of the same triangles; the port
+   submits all of them.
+2. **Morphing.** The original submits DIFFERENT geometry per instance and the
+   port draws the base mesh unchanged — a missing-animation bug, not a missing-
+   culling one.
+
+Both fit 2496 / 2421 / 2346 / 2298 against the port's 3468 four times. The
+"identical 3468" that seemed to prove one mesh proves only that THE PORT treats
+them as one mesh, which is the thing in question.
+
+**The decidable test**: apitrace records actual `glVertex3fv` VALUES, where
+`WINEDEBUG=+opengl` logs only the pointer. Record the four instances and compare
+positions — same positions with some absent means rejection; different positions
+means morphing. Do this before writing any code.
+
+### Layout recovered
+
+* vertices: 116 bytes, array at `[obj+0x80]`; position +0x30, colour byte +0x10
+  (`0xff` from FUN_00406d20), alias/redirect +0x4c
+* triangles: 88 bytes, array at `[obj+0x88]` (FUN_00406c00); first three dwords
+  are vertex POINTERS
+* materials: two handlers, +0xcc per triangle and +0xd0 per batch
 
 Two observations for whoever picks this up:
 
