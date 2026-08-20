@@ -62,7 +62,12 @@ export class Timeline {
         }
         case OP_TRIG:
           if (cmpPos(order, row, ev.startOrder, ev.startRow) >= 0) {
-            if (eff && eff.trigger) eff.trigger((ev.b4 << 8) | ev.b5);
+            // PASS THE CLOCK. tick() already has nowTicks; without it an effect
+            // has to reconstruct "now" from the last render() it saw, which makes
+            // the trigger depend on what was rendered before rather than on when
+            // the trigger fired. Symmetric with render(t, pos).
+            if (eff && eff.trigger) eff.trigger((ev.b4 << 8) | ev.b5,
+              { ticks: nowTicks, order, row });
             ev.dead = true;
           }
           break;

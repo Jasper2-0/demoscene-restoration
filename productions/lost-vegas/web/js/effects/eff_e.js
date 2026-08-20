@@ -295,5 +295,21 @@ export function makeScene(ctx, variant = 0) {
     d3d.dispatchState(5, 0);
   }
 
-  return { init, render };
+  /**
+   * REGISTRY PROTOCOL (see eff_d's reset for the R2 reasoning). reset(ms) above
+   * is the ORIGINAL's per-entry reset; this wraps it with the first-entry state
+   * a cold render needs, which the original gets for free by never having run.
+   *
+   * This scene is the reason renderCold steps in MILLISECONDS. Its flash fires
+   * on `(pos & 0x1f) in {0x14, 0x16, 0x17}` (:206), and the old pre-roll stepped
+   * `q += 0x8` — multiples of 8 give {0, 8, 16, 24}, so those rows were NEVER
+   * visited and the flash provably never fired in any pre-rolled frame.
+   */
+  function resetCold(ms) {
+    entered = false; lastPos = -1;
+    t0 = 0; flashT0 = 0; flash2T0 = 0;
+    reset(ms);
+  }
+
+  return { init, render, reset: resetCold };
 }

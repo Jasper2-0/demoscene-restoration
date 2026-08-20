@@ -165,3 +165,82 @@ start order — Wonder's clip table begins at 0s, jumps to 9.862s, then back to
 0s — so the score trace zigzagged across the canvas and "next sample" jumped
 around the show. Sorting is correct for exclusive timelines too, where it is
 already the order.
+
+## The one-instant tools
+
+Four tools sit beside the sweep and go through the same adapter, so a spot check
+and a sweep sample are the same frame:
+
+```
+node tools/inspect/score1.mjs   <prod> <part> <local> [k=v ...]   how close
+node tools/inspect/frame.mjs    <prod> <part> <local> [k=v ...]   what differs
+node tools/inspect/channels.mjs <prod> <part> <local> [--box=…]   colour/cast
+node tools/inspect/phase.mjs    <prod> <part> <local> [span step] wrong time?
+```
+
+They were written per-production first, with the schedule compiled in, and that
+cost more than duplication: the lapsus copies extracted their reference frame at
+full resolution and scaled during comparison, while the sweep scaled at
+extraction. The two renditions differ by 0.24 mean luma and correlate at
+0.999957 — enough to move a score by ~1e-4, so a tool and the gate never quite
+agreed about what "the reference at time T" was. Sharing `demo.mjs` and
+`compare.mjs` makes them agree by construction.
+
+`--query=` on the sweep and bare `k=v` arguments on these tools are the same
+mechanism: they reach the renderer, so an authenticity path (`?quality=original`)
+or a one-variable experiment can be scored rather than only eyeballed.
+
+## `state()` must be pure
+
+`state()` must be a function of the last `render()` argument and nothing else —
+no accumulation across calls. `render()` is already required to be repeatable;
+this makes the requirement checkable, because a pixel assertion only says
+"different" while a `state()` assertion says *which field*.
+
+## `prod.json` capture fields
+
+The comparison tools read `captures[0]`. Four fields carry meaning beyond
+"where the file is":
+
+| field | why it exists |
+|---|---|
+| `path` | gitignored; `tools/fetch/capture.mjs <slug>` rehydrates it |
+| `sha256` | pins OUR capture. A mismatch on refetch means the ground truth changed, which is a warning and not routine noise |
+| `captureFps` | the capture's own frame rate. A 30fps capture of a 60fps demo carries an irreducible 0–33ms frame phase; a 60fps one does not. Record it so that ambiguity is visible rather than discovered |
+| `alignmentOffsetMs` / `trackOffsetsMs` | where the port's clock sits against the capture |
+
+**Audio alignment and VISUAL alignment are different measurements**, and both
+ports that looked found the same thing from opposite directions: lapsus's engine
+resets its QPC timer *after* `FSOUND_PlaySound` returns (40ms), wonder's calls
+`FSOUND_SetMixAhead(30)` and drives visuals from `FMUSIC_GetOrder` (~30ms lead).
+So a production may carry `visualTrackOffsetsMs` beside `trackOffsetsMs`, and
+anything comparing FRAMES takes `visualTrackOffsetsMs ?? trackOffsetsMs` while
+anything measuring or aligning AUDIO keeps reading `trackOffsetsMs` — otherwise
+the alignment tool re-measures its own output.
+
+**Never carry an offset across a change of capture.** When wonder's capture was
+replaced with a 60fps source, its `alignmentOffsetMs` was reset to null rather
+than inherited: the old 0ms pin and its 0.7634 correlation score belonged to the
+superseded video and said nothing about the new one. Re-measure, or record null.
+
+## Optional: `frameRect()` — when the canvas is not the frame
+
+Return `{x, y, w, h}` in canvas pixels: the sub-rect the demo actually draws
+into. Omit it when the canvas *is* the frame, which is the usual case.
+
+The tooling assumed canvas == frame until ptct, whose backing store is square
+(960×960 under the harness) with the demo occupying a 960×800 band at `y = H/12`
+— baked letterbox bars that its own CSS crops away for display. Comparing the
+whole store against a full-frame reference scored a published, well-verified port
+at median **r 0.1405**, while a single side-by-side showed the same scene at the
+same moment. Declaring the rect took it to **0.3438** on the same samples.
+
+The page must declare it rather than the tooling detect it. Bar detection would
+be actively dangerous: a legitimately dark frame has no content to bound, and
+lapsus's `empt` ends on black. The page already computes this rect to lay itself
+out, so it is free and exact there.
+
+Note the rect can depend on a query parameter. ptct's `?aspect=classic` shows the
+whole 4:3 frame *including* the bars, so `frameRect()` returns the whole canvas
+in that mode — and scoring it against a capture of the band collapses to 0.053,
+which is a useful confirmation that the rect is doing real work.

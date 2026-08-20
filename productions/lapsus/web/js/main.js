@@ -2332,32 +2332,10 @@ function accBlit() {
       ...p, captureStart: OFFSETS[p.phase] + p.start,
     })),
     // Sample plan: one entry per instant the sweep should compare.
-    plan(step = 2) {
-      const out = [];
-      for (const p of SCHEDULE) {
-        // AT LEAST FIVE SAMPLES PER PART however short it is. It was three, on
-        // the argument that morko is 3.54s and one sample is an anecdote. Three
-        // is still an anecdote when a part is UNEVEN: silli scored 0.846 here
-        // off three samples while the five-sample gate measured 0.798 with a
-        // spread of 0.433, because a 2s step over an 8s part can land entirely
-        // in its good half. That gap made the tracker sync propose closing a
-        // real, open defect — twice.
-        //
-        // Five matches work/verify/allparts.mjs, so the sweep and the gate stop
-        // disagreeing about which parts are worst, and a spread has enough
-        // points to be visible at all.
-        const n = Math.max(5, Math.floor((p.dur - 0.5) / step));
-        for (let i = 0; i < n; i++) {
-          // Inset from both ends by a quarter of a slot so a sample is never
-          // taken exactly on a part boundary, where a one-frame timing
-          // difference decides which part is on screen at all.
-          const local = +((i + 0.5) / n * (p.dur - 0.3) + 0.15).toFixed(3);
-          out.push({ part: p.name, phase: p.phase, local,
-                     captureTime: +(OFFSETS[p.phase] + p.start + local).toFixed(3) });
-        }
-      }
-      return out;
-    },
+    // plan() intentionally omitted: the sample grid lives in
+    // tools/inspect/plan.mjs so the five-sample floor cannot drift between
+    // productions. Supply plan() here only to OVERRIDE it, and keep
+    // tools/inspect/plan-identity.mjs passing so the override stays deliberate.
     /** Draw one sample. Uses the same deterministic path the frame harness
      *  uses, NOT the live accumulator, so a sweep is reproducible. */
     async render({ part, local }) {

@@ -11,14 +11,19 @@
 
 import { MiniD3D7, D3DTEX_MIPMAP } from './minid3d7.js';
 import { Kernel } from './kernel.js';
-import { sceneAt, normalizePos, POS_MAX } from './timeline.js';
+import { sceneAt, normalizePos, POS_MAX, posToSeconds, SCENES, secondsToPos,
+         sceneEntryPos, ROW_SECONDS } from './timeline.js';
 import { buildRegistry } from './effects/registry.js';
 import { XmPlayer } from './xm.js';
 
 const canvas = document.getElementById('screen');
 const overlay = document.getElementById('overlay');
 const params = new URLSearchParams(location.search);
-const DEBUG = params.has('debug') || params.has('pos') || params.has('t');
+// ?inspect=1 installs the production-agnostic tooling adapter (window.__demo,
+// tools/inspect/ADAPTER.md). It joins the existing debug path, which builds no
+// audio graph and no click gate — what a caller-driven mode needs.
+const INSPECT = params.has('inspect');
+const DEBUG = params.has('debug') || params.has('pos') || params.has('t') || INSPECT;
 
 const TEXTURES = ['dr_256_grid_panels', 'dr_64_grid_small', 'dr_64_envmap', 'dr_64_finale'];
 
@@ -153,19 +158,205 @@ if (DEBUG) {
   // ms defaults to a plausible wall clock for the given music position rather
   // than 0 — several scenes drive motion from timeGetTime (see FRAME_LOOP.md),
   // and pinning it to 0 freezes them. Callers may pass an explicit ms.
-  const MS_PER_POS = 176700 / 0x1a20; // reference runtime / final threshold
   window.__lvRender = (pos, ms, rowFrac = 0) => {
     const p = Math.min(POS_MAX, pos | 0);
-    const t = ms === undefined ? p * MS_PER_POS : ms;
+    // posToSeconds is the MEASURED mapping (timeline.js). The old
+    // `p * MS_PER_POS` averaged over POSITION units, but pos is sparse — 64 of
+    // every 256 values occur — so it was out by ~4.5x per row, and `ms` is
+    // exactly what scenes D/E/F integrate.
+    const t = ms === undefined ? (posToSeconds(p) ?? 0) * 1000 : ms;
     const s = renderAt(ctx, p, { ms: t, songMs: t, rowFrac });
     return { pos: p, scene: s ? s.id : null, ms: t, rowFrac };
+  };
+
+  /**
+   * COLD RENDER: reset this scene, then walk to `pos` in MILLISECONDS at a fixed
+   * simulated cadence, one render per simulated frame.
+   *
+   * Three scenes integrate frame deltas, so `__lvRender(pos)` alone gives a
+   * frame that depends on whatever ran before it — which makes a sweep score
+   * unattributable after its first sample. This makes the history a declared,
+   * reproducible one instead of an accidental one.
+   *
+   * WHY MILLISECONDS AND NOT POSITION STRIDE. The old pre-roll stepped
+   * `q += 0x8`. Scene E's flash triggers on `(pos & 0x1f) in {0x14,0x16,0x17}`
+   * and multiples of 8 give {0,8,16,24}, so the trigger rows were never visited
+   * and the flash provably never fired in a pre-rolled frame. Stepping time and
+   * DERIVING the position from it visits every row the music visits, which fixes
+   * that by construction rather than by widening a stride until it works.
+   *
+   * CADENCE IS A DECLARED MODELLING ASSUMPTION, NOT A DERIVED FACT. Scene F
+   * consumes a per-frame delta directly and scene D's blobS is nonlinear in dt
+   * with a per-frame step, so their trajectories genuinely depend on frame rate
+   * — the ORIGINAL was framerate-dependent here. There is no cadence-independent
+   * answer to recover, so the honest move is to fix one, state it, and MEASURE
+   * the sensitivity (work/verify/repeat_test.mjs reports it rather than
+   * asserting it away).
+   */
+  const COLD_FPS = 60;
+  window.__lvRenderCold = (pos, opts = {}) => {
+    const fps = opts.fps ?? COLD_FPS;
+    const p = Math.min(POS_MAX, pos | 0);
+    const scene = sceneAt(p);
+    if (!scene) return { pos: p, scene: null, ms: 0, frames: 0, fps };
+
+    // opts.from lets the equivalence test start the window EARLIER than the
+    // scene boundary. If reset() is complete, an earlier start must produce a
+    // byte-identical frame; where it does not, the test has found carried state.
+    const entry = opts.from !== undefined ? (opts.from | 0) : sceneEntryPos(p);
+    const t0 = (posToSeconds(entry) ?? 0) * 1000;
+    const t1 = (posToSeconds(p) ?? 0) * 1000;
+
+    // RESET EVERY SCENE, NOT JUST THIS ONE — because they are not independent.
+    // eff_d draws the scene-E overlay itself (`if (pos >= 0xb38) drawMoire(...)`)
+    // and its resetTimers comments eT0 as FUN_00409d8d's _DAT_00510200, i.e.
+    // eff_e's t0: in the original these scenes SHARE globals. Resetting only the
+    // scene at `pos` therefore leaves its partner holding whatever the previous
+    // sample left, which is exactly what ORDER kept reporting — and the tell was
+    // that D and E disagreed with DIFFERENT pairs of orderings, which a
+    // first-pass or warm-up effect cannot produce.
+    //
+    // Safe because reset() is defined as "the state at FIRST ENTRY", which is
+    // idempotent and is the state a cold render is entitled to assume.
+    for (const e of ctx.registry.values()) if (e.reset) e.reset(t0);
+    // REFUTED BY MEASUREMENT, 2026-08-15: also resetting the DEVICE to its boot
+    // state here (a minid3d7 resetState() restoring this.rs/this.tss from a
+    // construction-time snapshot) made ORDER go from 2/12 failing to 5/12, and
+    // broke `finale`, which had been clean. Scenes legitimately inherit device
+    // state that earlier scenes set, so restoring boot state models something
+    // the demo never does. This is plan risk R2 — a reset that clears too much
+    // is caught only by the numbers getting worse, never by the tests below.
+
+    // Step time, derive position. rowFrac comes from the measured row start, so
+    // scenes that need sub-row motion get a continuous clock here too rather
+    // than stepping at 8 Hz.
+    const stepMs = 1000 / fps;
+    let frames = 0;
+    for (let t = t0; t < t1 - 1e-6; t += stepMs) {
+      const q = secondsToPos(t / 1000);
+      const rowStart = (posToSeconds(q) ?? 0) * 1000;
+      const rf = Math.min(1, Math.max(0, (t - rowStart) / (ROW_SECONDS * 1000)));
+      renderAt(ctx, q, { ms: t, songMs: t, rowFrac: rf });
+      frames++;
+    }
+    // Land exactly on the requested instant, so the returned frame is the one
+    // asked for and not the last step before it.
+    const s = renderAt(ctx, p, { ms: t1, songMs: t1, rowFrac: 0 });
+    return { pos: p, scene: s ? s.id : null, ms: t1, frames, fps, entry };
   };
   const posParam = params.get('pos');
   const start = posParam
     ? (posParam.startsWith('0x') ? parseInt(posParam, 16) : parseInt(posParam, 10))
     : 0;
+  // ---- INSPECTOR ADAPTER (tools/inspect/ADAPTER.md).
+  //
+  // lost-vegas's parts are the scene ladder in timeline.js: EXCLUSIVE, unlike the
+  // layered Sunflower ports, so one scene owns the screen and state().active is a
+  // single name. The ladder stores only `until` (an exclusive upper bound on
+  // musicPos), so a scene's start is the previous entry's `until` and the first
+  // starts at 0.
+  //
+  // Its native coordinate is MUSIC POSITION, converted with the measured
+  // posToSeconds — the same shape as sonnet and ptct.
+  //
+  // STATE OF PLAY, after renderCold (db5dd75) and the equivalence test.
+  //
+  // render() goes through __lvRenderCold, so a sample is reached by a DECLARED
+  // history — reset, then step to it in milliseconds at 60 fps from the scene
+  // boundary — rather than by whatever the harness happened to render before.
+  // That moved REPEAT and ISOLATION from FAIL to ok, which is what makes a sweep
+  // attributable at all: ISOLATION passing means an in-run render equals a
+  // fresh-page one.
+  //
+  // WHAT IS STILL OPEN, and it is one scene, not the class:
+  //   * ORDER fails on sceneD and sceneE (2/12 samples).
+  //   * work/verify/repeat_test.mjs localises it: sceneD's frame changes when the
+  //     pre-roll window starts 0x200 earlier (RMSE 11.759), so reset() does not
+  //     restore everything sceneD carries. sceneE and sceneF pass that check.
+  // Run BOTH before trusting a sweep — tools/inspect/repeatability.mjs for the
+  // generic contract, work/verify/repeat_test.mjs for the pre-roll itself.
+  //
+  // Cadence is a DECLARED assumption (60 fps), not a derived fact: sceneD is
+  // 4/4 distinct across 15/30/60/120 fps. The original was framerate-dependent
+  // here, so there is no cadence-free answer to recover.
+  //
+  // THE AUDIT IS RIGHT, and confirming that cost an instrument fix (#36).
+  // repeatability.mjs first failed sceneC too, which reads exactly like a missed
+  // integrator. It is not one: the difference is RMSE 0.330 and CONSTANT across
+  // renders (r 0.999943), where sceneD's grows 3.53 -> 5.05 -> 6.05. Integrators
+  // ACCUMULATE; a constant sub-LSB difference is rasteriser nondeterminism. The
+  // fault was the test asserting on a SHA of the PNG, which cannot tell a few
+  // stray pixels from a demo that has lost its state. With a noise floor it now
+  // names D and E and clears C — matching the audit that read each scene for
+  // accumulation. ISOLATION passes; only ORDER and REPEAT fail, on D/E.
+  const BANDS = [];
+  {
+    let from = 0;
+    for (const sc of SCENES) {
+      const startS = posToSeconds(from) ?? 0;
+      const endS = posToSeconds(Math.min(POS_MAX, sc.until)) ?? startS;
+      BANDS.push({ name: sc.id, from, until: sc.until, start: startS,
+                   dur: Math.max(0.1, endS - startS) });
+      from = sc.until;
+    }
+  }
+  let CAP_OFFSET = 0;
+  try {
+    const pj = await (await fetch(new URL('../../prod.json', import.meta.url))).json();
+    CAP_OFFSET = (pj.captures?.[0]?.alignmentOffsetMs ?? 0) / 1000;
+  } catch { /* no manifest reachable: schedule works, scores will not align */ }
+
+  let lastState = null;
+  window.__demo = {
+    id: 'lost-vegas',
+    schedule: () => BANDS.map((b) => ({
+      name: b.name, phase: 1, start: b.start, dur: b.dur,
+      captureStart: b.start + CAP_OFFSET,
+    })),
+    // plan() intentionally omitted — tools/inspect/plan.mjs owns the grid.
+    async render({ part, local }) {
+      const b = BANDS.find((x) => x.name === part);
+      if (!b) return null;
+      // renderCold, not __lvRender: three scenes integrate frame deltas, so a
+      // plain seek returns a frame that depends on whatever the harness rendered
+      // before it. Cold makes the history declared and reproducible, which is
+      // what the contract's repeatability requirement actually asks for.
+      const info = window.__lvRenderCold(secondsToPos(b.start + local));
+      lastState = { ...info, part, local, active: [info.scene ?? part],
+                    posHex: '0x' + info.pos.toString(16).padStart(4, '0') };
+      return lastState;
+    },
+    state: () => lastState,
+    assets: () => null,
+    /** Musical coordinate — order/row, like sonnet and ptct. */
+    positionAt(showTime) {
+      const p = secondsToPos(Math.max(0, showTime - CAP_OFFSET));
+      const raw = p > 0x3ff ? p - 0x200 : p;
+      return `order ${raw >> 8} row ${raw & 0xff}`;
+    },
+  };
+  // PRIME EVERY SCENE ONCE BEFORE DECLARING READY.
+  //
+  // With renderCold in place, REPEAT and ISOLATION passed but ORDER still failed
+  // on D and E — and the tell was that DESCENDING and SHUFFLED agreed with each
+  // other while only ASCENDING differed. Order dependence cannot do that; a
+  // first-pass effect can. Whatever a scene builds lazily on its first ever
+  // render (GL resources, cached geometry) is built during the ascending run and
+  // reused by the two after it, so the first pass measures a different thing.
+  //
+  // This is the same shape as lapsus's GL_SHININESS seeding: the fix is not to
+  // hunt each lazy allocation but to REPLAY until the state converges, so every
+  // measured render starts from the same place by construction rather than by
+  // luck. One render per scene is enough because the effect is first-use, not
+  // accumulating.
+  for (const b of BANDS) {
+    try { window.__lvRenderCold(secondsToPos(b.start + b.dur / 2)); } catch { /* keep priming */ }
+  }
+  window.__demoReady = true;
+
   window.__lvReady = true;
-  window.__lvRender(start);
+  // In inspect mode the tooling drives every frame.
+  if (!INSPECT) window.__lvRender(start);
 } else {
   overlay.textContent = 'click to start';
   overlay.addEventListener('click', async () => {

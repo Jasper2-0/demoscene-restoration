@@ -3154,7 +3154,7 @@ surface "paleksi": LUMI 0  DIFF 0.43  SPEC 0.785  GLOS 0.23  TRAN 0
 | the light is red but should be white | force all light colours to white | median r **0.531 either way**; RMSE worse (58.6 → 65.1) |
 | the light is switched off in the LWS | read the whole `AddLight` block | no such flag. `ShowLight` is viewport display; intensity is 1 |
 | the light's SPECULAR colour is not its diffuse colour | force light specular black, then white | median r **0.5308 in all three cases**; only RMSE moves (58.4 / 58.6 / 60.0) |
-| the part renders at the wrong time | `work/verify/phase.mjs`, ±1.5s | FLAT: 0.18–0.32 throughout, best beats aligned by 0.017. Control krediili peaks at exactly +0.00s with r 0.974 |
+| the part renders at the wrong time | `tools/inspect/phase.mjs lapsus`, ±1.5s | FLAT: 0.18–0.32 throughout, best beats aligned by 0.017. Control krediili peaks at exactly +0.00s with r 0.974 |
 
 Lighting is not the fault, in colour, in presence, or in its specular term.
 Correlation is normalised, so a broad additive term barely moves it — which is

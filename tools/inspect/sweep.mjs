@@ -4,6 +4,7 @@
 //   node tools/inspect/sweep.mjs lapsus
 //   node tools/inspect/sweep.mjs lapsus --step=1 --tag=after-fix
 //   node tools/inspect/sweep.mjs lapsus --parts=flu2,pehko
+//   node tools/inspect/sweep.mjs ptct --query=quality=original --tag=original
 //
 // Generalises sonnet's web/test/sweep.mjs, which did this for one demo with
 // its timeline hardcoded. Everything production-specific now lives behind the
@@ -40,6 +41,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { withPage, fromRepo } from '../harness/index.mjs';
+import { defaultPlan, safePart } from './plan.mjs';
+import { W, H, N, grayOf, corr, rmse, meanOf, classify } from './compare.mjs';
 
 const argv = process.argv.slice(2);
 const prodName = argv.find((a) => !a.startsWith('--'));
@@ -48,12 +51,18 @@ const flag = (n, d) => {
   return hit ? hit.slice(n.length + 3) : d;
 };
 if (!prodName) {
-  console.error('usage: node tools/inspect/sweep.mjs <production> [--step=2] [--tag=x] [--parts=a,b]');
+  console.error('usage: node tools/inspect/sweep.mjs <production> [--step=2] [--tag=x] [--parts=a,b] [--query=k=v&k=v]');
   process.exit(2);
 }
 const STEP = Number(flag('step', 2));
 const TAG = flag('tag', '');
 const ONLY = flag('parts', '') ? flag('parts', '').split(',') : null;
+// EXTRA RENDERER PARAMETERS. Every port has authenticity switches the sweep
+// could not reach — ?quality=original, ?tess=, ?texscale=, ?lighting= — so
+// without this it can only ever score the REMASTER path, while the fidelity
+// claim is about the original. Given as `--query=quality=original&tess=1`.
+const QUERY = flag('query', '');
+const PAGE_QUERY = `?inspect=1${QUERY ? `&${QUERY.replace(/^[?&]/, '')}` : ''}`;
 const suffix = TAG ? `-${TAG}` : '';
 
 const PROD = fromRepo('productions', prodName);
@@ -70,36 +79,9 @@ const OUT = path.join(PROD, 'work/verify/inspect');
 const FRAMES = path.join(OUT, 'frames');
 fs.mkdirSync(FRAMES, { recursive: true });
 
-const W = 640, H = 480, N = W * H;
-const grayOf = (png) => execFileSync('ffmpeg',
-  ['-v', 'error', '-i', png, '-vf', `scale=${W}:${H},format=gray`, '-f', 'rawvideo', '-'],
-  { maxBuffer: 1 << 28 });
-
-/** Pearson correlation: "is this the same picture". */
-function corr(a, b) {
-  let ma = 0, mb = 0;
-  for (let i = 0; i < N; i++) { ma += a[i]; mb += b[i]; }
-  ma /= N; mb /= N;
-  let d = 0, sa = 0, sb = 0;
-  for (let i = 0; i < N; i++) { const u = a[i] - ma, v = b[i] - mb; d += u * v; sa += u * u; sb += v * v; }
-  // A FLAT FRAME HAS NO VARIANCE, so Pearson's r is 0/0 and reads 0 — which
-  // brands a PERFECT match as a total failure. empt ends on black: it matches
-  // the capture exactly (RMSE 0.0) and scored r 0.000, and that number became
-  // the gate's headline "worst instant". When BOTH frames are flat the only
-  // question correlation could answer is whether they are flat at the same
-  // level, so answer that instead. One flat and one not is a real mismatch and
-  // still scores 0.
-  const varA = sa / N, varB = sb / N;
-  if (varA < 0.25 && varB < 0.25) return Math.abs(ma - mb) <= 1.0 ? 1 : 0;
-  return d / Math.sqrt(sa * sb || 1);
-}
-/** RMSE: "is it the same brightness". */
-function rmse(a, b) {
-  let s = 0;
-  for (let i = 0; i < N; i++) { const d = a[i] - b[i]; s += d * d; }
-  return Math.sqrt(s / N);
-}
-const meanOf = (a) => { let s = 0; for (let i = 0; i < N; i++) s += a[i]; return s / N; };
+// Metrics, their flat-frame guard and the LEVEL/STRUCTURE classifier live in
+// ./compare.mjs so every tool shares them rather than reimplementing or
+// omitting them. See that file for why each guard exists.
 
 // Reference frames are cached: the capture never changes, and re-extracting
 // thousands of them dominates a re-run.
@@ -116,7 +98,7 @@ console.log(`sweep ${prodName}  step ${STEP}s${TAG ? `  tag ${TAG}` : ''}`);
 
 const samples = [];
 await withPage(
-  { root: `productions/${prodName}`, path: '/web/index.html', query: '?inspect=1',
+  { root: `productions/${prodName}`, path: '/web/index.html', query: PAGE_QUERY,
     width: W, height: H, viewport: { width: W, height: H } },
   async ({ page, errors }) => {
     // READINESS IS PART OF THE CONTRACT, and this line used to hardcode
@@ -138,7 +120,21 @@ await withPage(
     if (!has) throw new Error(
       `${prodName} does not expose window.__demo — see tools/inspect/ADAPTER.md`);
 
-    let plan = await page.evaluate((s) => window.__demo.plan(s), STEP);
+    // THE SAMPLE GRID IS THE SWEEP'S, NOT THE PRODUCTION'S. It used to be
+    // copy-pasted into every adapter, which made the five-sample floor — a
+    // correctness property — something that could drift silently between ports
+    // until two of them disagreed about which part was worst. `plan()` is now an
+    // optional override for a genuinely irregular timeline; tools/inspect/
+    // plan-identity.mjs asserts the default reproduces what the copies produced.
+    const hasOwnPlan = await page.evaluate(() => typeof window.__demo.plan === 'function');
+    // The sub-rect of the canvas the page actually draws, if it declares one.
+    const FRAME_RECT = await page.evaluate(() => window.__demo.frameRect?.() ?? null);
+    if (FRAME_RECT) console.log(`  frameRect ${FRAME_RECT.w}x${FRAME_RECT.h} at ` +
+      `${FRAME_RECT.x},${FRAME_RECT.y} — cropping our frames to the drawn band`);
+
+    let plan = hasOwnPlan
+      ? await page.evaluate((s) => window.__demo.plan(s), STEP)
+      : defaultPlan(await page.evaluate(() => window.__demo.schedule()), STEP);
     if (ONLY) plan = plan.filter((p) => ONLY.includes(p.part));
 
     // A SAMPLE PAST THE END OF THE CAPTURE HAS NO REFERENCE, AND THAT IS NOT AN
@@ -176,9 +172,9 @@ await withPage(
         const info = await window.__demo.render(sm);
         return { png: document.querySelector('canvas').toDataURL('image/png'), info };
       }, s);
-      const ours = path.join(FRAMES, `ours${suffix}_${s.part}_${s.local}.png`);
+      const ours = path.join(FRAMES, `ours${suffix}_${safePart(s.part)}_${s.local}.png`);
       fs.writeFileSync(ours, Buffer.from(dataUrl.png.split(',')[1], 'base64'));
-      const a = grayOf(ours), b = grayOf(refFrame(s.captureTime));
+      const a = grayOf(ours, FRAME_RECT), b = grayOf(refFrame(s.captureTime));
       samples.push({
         ...s, ours,
         r: +corr(a, b).toFixed(4),
@@ -214,10 +210,13 @@ for (const [part, ss] of byPart) {
     text: `median r ${mr.toFixed(3)} — the picture is wrong, not just the shading` });
   else if (mr < 0.75) issues.push({ part, sev: 'minor', kind: 'structure',
     text: `median r ${mr.toFixed(3)}` });
-  // brightness is only worth reporting when the structure is broadly right,
-  // otherwise it is a symptom of the structure issue already raised
-  if (mr >= 0.55 && (mo > mf * 1.35 || mo < mf * 0.74)) issues.push({ part, sev: 'minor', kind: 'brightness',
-    text: `mean luma ${mo.toFixed(1)} vs reference ${mf.toFixed(1)} (${(mo / mf).toFixed(2)}x) at median r ${mr.toFixed(3)}` });
+  // Brightness is only worth reporting when the structure is broadly right,
+  // otherwise it is a symptom of the structure issue already raised. The
+  // LEVEL/STRUCTURE call is the shared classifier's, not a second local copy —
+  // it is the same distinction every other tool now reports.
+  const cls = classify({ r: mr, meanOurs: mo, meanRef: mf });
+  if (mr >= 0.55 && cls.kind === 'level') issues.push({ part, sev: 'minor', kind: 'brightness',
+    text: cls.reason });
   // a part whose samples disagree wildly is usually a timing or a transition
   // problem rather than a uniform rendering one
   const spread = Math.max(...ss.map((s) => s.r)) - Math.min(...ss.map((s) => s.r));
@@ -232,6 +231,10 @@ const worst = [...samples].sort((a, b) => a.r - b.r).slice(0, 12);
 const run = {
   production: prodName, tag: TAG || null, when: new Date().toISOString(),
   step: STEP, capture: cap.path, captureSha256: cap.sha256 ?? null,
+  // WHAT WAS ACTUALLY RENDERED. run.json recorded step, capture and sha256 but
+  // not the URL, so two runs of the same production down different authenticity
+  // paths were indistinguishable after the fact.
+  query: PAGE_QUERY,
   medianR: +median(samples.map((s) => s.r)).toFixed(4),
   medianRmse: +median(samples.map((s) => s.rmse)).toFixed(2),
   parts: [...byPart].map(([name, ss]) => ({

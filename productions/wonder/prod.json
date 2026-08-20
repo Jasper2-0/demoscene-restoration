@@ -75,6 +75,7 @@
       "youtube": "G3XLu10_140",
       "path": "productions/wonder/work/reference/wonder_ref.mkv",
       "format": "bestvideo[height<=1080][fps>=50]+bestaudio",
+      "captureFps": 60,
       "sha256": "73866e9a8efc29b4fe3514c13d300376668297f60cb42d890d612cff5604760e",
       "alignmentOffsetMs": 0,
       "note": "SUPERSEDES 7MnD4Ugco1g (1440x1080 at 30fps), whose 30-fps resampling made frame boundaries ambiguous. This is 1440x1080 at 60fps, 186.75s, uploaded 2019-06-27. The format pin asks for 1080p60 rather than the available 2880x2160 because every comparison tool downscales to 640x480 - frame RATE was the deficiency, not resolution. alignmentOffsetMs RE-MEASURED against THIS file 2026-08-15 and set to 0: correlating six well-matching samples spread across the demo over -0.20..+0.20s gives a mean peak at +0.033s that beats 0 by 0.002, which is not a measurement, and the samples disagree (115.2s peaks sharply at +0, 135.3s at +0.1). That reproduces the superseded capture README's finding of a VARIABLE frame phase rather than a fixed offset. Bounded to roughly 0..+0.067s; 0 adopted. The first sweep against it scores median r 0.648 across 191 samples, and that is NOT explained by alignment - it is per-part variation from 0.265 to 0.946."

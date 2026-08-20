@@ -7,15 +7,12 @@ import puppeteer from 'puppeteer-core';
 const root=path.resolve(fileURLToPath(import.meta.url),'../../..');
 const REF=path.join(root,'work/reference/lostvegas_ref.webm');
 const LAG=0.22;
-// order start times (s) measured from our xm.js render
-const ORD=[0,5.6,9.3,17.1,24.9,32.3,40.1,47.9,55.4,63.2,71.0,74.7,78.4,86.2,94.0,
-           101.4,109.2,117.0,124.5,132.3,140.1,147.5,155.3,163.1,171.3];
-const posToVideo=(pos)=>{
-  const raw = pos>0x3ff ? pos-0x200 : pos;
-  const order=raw>>8, row=raw&0xff;
-  if(order>=ORD.length||row>=64) return null;
-  return ORD[order]+row*0.120+LAG;
-};
+// The order table and the pos->seconds mapping come from the PAGE
+// (web/js/timeline.js), so the harness and the demo cannot disagree about what
+// time it is. They used to hold separate copies — the page's was a flat average
+// that was out by ~4.5x per row.
+const { posToSeconds } = await import(path.join(root, 'web/js/timeline.js'));
+const posToVideo = (pos) => { const s = posToSeconds(pos); return s === null ? null : s + LAG; };
 const MIME={'.html':'text/html','.js':'text/javascript','.json':'application/json','.png':'image/png','.xm':'application/octet-stream'};
 const srv=http.createServer((q,r)=>{const p=path.join(root,decodeURIComponent(q.url.split('?')[0]).replace(/^\/+/,''));
  try{const d=fs.readFileSync(p);r.writeHead(200,{'Content-Type':MIME[path.extname(p)]||'application/octet-stream'});r.end(d);}catch{r.writeHead(404);r.end();}});

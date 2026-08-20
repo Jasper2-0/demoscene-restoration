@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "test:shared": "node --test \"shared/sunflower/test/*.test.mjs\"",
-    "test:haujobb": "node shared/haujobb/test/hjb-vs-oracle.mjs ${HAUJOBB_CORPUS:-originals/haujobb}"
+    "test:haujobb": "node shared/haujobb/test/hjb-vs-oracle.mjs ${HAUJOBB_CORPUS:-originals/haujobb}",
+    "verify:energia": "node productions/energia/work/tools/verify-browser.mjs"
   }
 }

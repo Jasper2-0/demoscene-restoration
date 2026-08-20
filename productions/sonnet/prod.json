@@ -54,8 +54,9 @@
       "path": "productions/sonnet/work/reference/sonnet_ref.mkv",
       "format": "bestvideo+bestaudio",
       "sha256": "1774250c9e29ff56fcb40a13b01dc3dac4cd8cb03619687fee4e24e26dce78aa",
-      "alignmentOffsetMs": null,
-      "note": "Annikras capture linked from pouet; AssemblyTV alternative Pb-r5PRQ32A rejected (lower res, slate)"
+      "alignmentOffsetMs": 2430,
+      "note": "Annikras capture linked from pouet; AssemblyTV alternative Pb-r5PRQ32A rejected (lower res, slate) | captureFps 30, MEASURED with ffprobe (r_frame_rate 30/1), not assumed \u2014 so like energia this capture carries an irreducible 0-33ms frame phase and cannot support sub-frame timing claims. | alignmentOffsetMs 2430 is web/test/sweep.mjs's REF_OFFSET = 2.43 ('measured and corroborated 16x: video time = music seconds + this'), promoted here because it was duplicated in BOTH web/test/sweep.mjs:79 and web/test/capture.mjs:45 \u2014 a measured constant with two copies free to drift. NOTE the comparison time is alignmentOffsetMs + main.js's SETTLE_MS (half a row, 1000*(6*2.5/92)/2 = 81.5ms), because __sonnetRender settles half a row past the position it is given; the inspector adapter adds both.",
+      "captureFps": 30
     }
   ],
   "status": {

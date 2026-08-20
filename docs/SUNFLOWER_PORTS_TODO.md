@@ -15,8 +15,8 @@ only after both authentic ports have been signed off against their captures.
 
 ## 0. Preservation and reference baseline
 
-- [x] Preserve the release files under `work-wonder/src/` and
-  `work-energia/src/`; runtime work uses extracted or copied data.
+- [x] Preserve the release files under `productions/wonder/work/src/` and
+  `productions/energia/work/src/`; runtime work uses extracted or copied data.
 - [x] Provide repeatable unpackers for `WON.DER` and `demo.dat`.
 - [x] Identify the loose image, audio, envelope, and EXP/KEXP formats at a
   high level.
@@ -40,7 +40,8 @@ References:
 
 - [x] Establish `shared/sunflower/js/` as the canonical source for modules
   shared by the two ports.
-- [x] Establish standalone `web-wonder/` and `web-energia/` sites.
+- [x] Establish standalone `productions/wonder/web/` and
+  `productions/energia/web/` sites.
 - [x] Add a checked sync tool which vendors the canonical modules into each
   site and fails when a vendored copy has drifted.
 - [x] Add static-server smoke tests for both standalone sites.
@@ -115,10 +116,10 @@ References:
 - [x] Render one animated EXP scene with camera, material, envelope, and
   multitexture combine as a vertical slice.
 - [x] Encode the recovered 22-entry effect schedule as declarative data.
-- [~] Recover constructor parameters and asset associations for all 22 effect
+- [x] Recover constructor parameters and asset associations for all 22 effect
   classes.
 - [~] Port and sign off each effect in chronological order.
-- [ ] Match the original final cut and observed playback duration.
+- [x] Match the executable's 186.5-second final cut and terminal `F00` hold.
 
 ## 4. Energia port
 

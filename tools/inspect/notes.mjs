@@ -26,6 +26,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fromRepo } from '../harness/index.mjs';
+import { safePart } from './plan.mjs';
 
 const KEY_RE = /<!--\s*sweep-key:\s*([^\s]+)\s*-->/;
 
@@ -46,7 +47,7 @@ export function addNote(note) {
   const notesDir = path.join(dir, 'notes');
   fs.mkdirSync(notesDir, { recursive: true });
 
-  const id = `${part}-${String(note.local ?? 0).replace('.', 'p')}-${Date.now().toString(36)}`;
+  const id = `${safePart(part)}-${String(note.local ?? 0).replace('.', 'p')}-${Date.now().toString(36)}`;
 
   // Save the frame that was being described, and the reference beside it. The
   // sweep already cached the reference; ours comes from the canvas as a data

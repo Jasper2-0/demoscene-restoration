@@ -74,9 +74,10 @@
       "youtube": "JJ3TVjBjat4",
       "path": "productions/energia/work/reference/energia_ref.mkv",
       "format": "bestvideo+bestaudio",
-      "sha256": null,
+      "sha256": "2a8d249222c3c415f1a0a4e5760165b5c9b1bb3af002eeb29fb489f2147df3da",
       "alignmentOffsetMs": null,
-      "note": "soundtrack must be waveform-aligned to the original 261.459 s MP3; capture not kept on disk by policy"
+      "note": "The 1080p/30fps capture, 255s. REVERTED here from J6SM8MZ0pho on 2026-08-15: that one advertises 60fps and I switched to it purely on frame rate, but Jasper watched it and it RENDERS THE DEMO WITH BUGS. Frame rate is a property of the recording; FIDELITY is a property of what was recorded, and an unfaithful 60fps capture is worthless as an oracle while a faithful 30fps one is not. No probe of the file would have caught this - only watching it. Consequence to keep in mind rather than fix: at 30fps against a 60fps-rendered port there is an irreducible 0-33ms frame phase, so sub-frame timing claims cannot be made from this capture; wonder's superseded capture had the same limit and its work/reference/README.md judged it 'unsuitable as a pixel-exact oracle' for that reason. Soundtrack still needs waveform alignment to the original 261.459s MP3; note the capture is 255s, so it does not cover the full show and its tail must be checked before any sample there is trusted. | ALIGNMENT ATTEMPTED AND NOT RESOLVED 2026-08-15. Five probes across the show, scanned -5..+4s: the per-probe argmaxes disagree by 2.6s (-3.3, -2.2, -4.8, -4.8, -2.2), the best MEAN correlation is only 0.4298, and one probe is NEGATIVELY correlated at every offset. Alignment is only resolvable where the picture already broadly matches, and it does not here \u2014 so alignmentOffsetMs stays null rather than taking an argmax off a flat, weak curve. Note the durations disagree too (MP3 261.459s, capture 255.068s, ~2.5%), so a fixed offset may not be the right model at all. The first sweep therefore runs UNALIGNED (tag 'unaligned', median r 0.1419) and its absolute numbers are NOT a fidelity claim.",
+      "captureFps": 30
     }
   ],
   "status": {

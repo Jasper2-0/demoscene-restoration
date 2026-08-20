@@ -8,7 +8,12 @@ export const ENERGIA_SCENE_CLIPS = Object.freeze([
     data: { scene: 'scene6.EXP', vtable: '0x437658' } },
   { id: 'freak_scene', start: 56, end: 82, layer: 11,
     data: { scene: 'freak.exp', vtable: '0x43765c' } },
-]);
+].map((clip) => Object.freeze({
+  ...clip,
+  // Manager 0x4031a0 accepts start <= t <= end.
+  inclusiveStart: true,
+  inclusiveEnd: true,
+})));
 
 /**
  * Independently overlapping frame-function gates. These are intentionally not
@@ -46,6 +51,11 @@ export const ENERGIA_PHASE_CLIPS = Object.freeze([
   { id: 'main_effect_mode_3_overlay', start: 182, end: 233, layer: 30,
     data: { effect: '0x410f90', mode: 3 } },
   { id: 'effect_40f570', start: 233, end: 290, layer: 30 },
-]);
+].map((clip) => Object.freeze({
+  ...clip,
+  // Every paired x87 comparison in master frame 0x40eb50 rejects equality.
+  inclusiveStart: false,
+  inclusiveEnd: false,
+})));
 
 export const ENERGIA_SHOW_END = 290;

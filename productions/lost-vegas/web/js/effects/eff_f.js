@@ -538,7 +538,20 @@ export function makeScene(ctx, variant = 0) {
     d3d.SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
   }
 
-  return { init, render };
+  /**
+   * REGISTRY PROTOCOL (see eff_d's reset for the R2 reasoning). reset(ms) at
+   * :384 is the original's per-entry reset; this adds the first-entry state.
+   *
+   * This scene consumes a per-frame delta directly (:429), so it is CADENCE
+   * DEPENDENT and no closed form exists. renderCold reproduces the declared
+   * cadence rather than pretending the result is independent of it.
+   */
+  function resetCold(ms) {
+    entered = false; lastPos = -1;
+    reset(ms);
+  }
+
+  return { init, render, reset: resetCold };
 }
 
 const IDENT = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);

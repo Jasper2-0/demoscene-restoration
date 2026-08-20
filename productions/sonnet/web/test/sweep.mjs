@@ -68,7 +68,7 @@ const require = createRequire(path.join(ROOT, 'productions/ptct/work/js/package.
 const puppeteer = require('puppeteer-core');
 const { createCanvas, loadImage } = require('canvas');
 
-const { positionToSeconds, END_POSITION } = await import(path.join(WEB, 'js/timeline.js'));
+const { positionToSeconds, END_POSITION, SCENE_BANDS } = await import(path.join(WEB, 'js/timeline.js'));
 
 const REF = path.join(WORK, 'work/reference/sonnet_ref.mkv');
 const OUT = path.join(WORK, 'work/verify');
@@ -110,21 +110,9 @@ if (askedPositions) {
 }
 const hexOf = (p) => '0x' + p.toString(16).padStart(4, '0');
 
-// --------------------------------------------------- which object owns a position
-// From re/scenes/SCENES_2_6.md and SCENES_7_10.md. Used only for attribution.
-const SCENES = [
-  { obj: 1, name: 'title / poem only', from: 0x0000, to: 0x0400 },
-  { obj: 3, name: 'scene 0 — spires', from: 0x0400, to: 0x0700 },
-  { obj: 4, name: 'scene 1 — lakes', from: 0x0700, to: 0x0a00 },
-  { obj: 5, name: 'scene 2 — trees/butterflies', from: 0x0a00, to: 0x0f00 },
-  { obj: 6, name: 'scene 3 — cloud sea', from: 0x0f00, to: 0x1200 },
-  { obj: 7, name: 'scene 4 — beach / sunset', from: 0x1200, to: 0x1700 },
-  { obj: 8, name: 'scene 5 — autumn forest', from: 0x1700, to: 0x1e00 },
-  { obj: 9, name: 'scene 7 — winter', from: 0x1e00, to: 0x2300 },
-  { obj: 10, name: 'scene 8 — finale', from: 0x2300, to: 0x2b00 },
-  { obj: 1, name: 'credits', from: 0x2b00, to: 0x2c10 },
-];
-const sceneAt = (p) => SCENES.find(s => p >= s.from && p < s.to) || SCENES[0];
+// Scene attribution comes from the PAGE now (js/timeline.js), so the sweep and
+// the inspector adapter cannot disagree about where a scene starts.
+const SCENES = SCENE_BANDS;
 
 // --------------------------------------------------------------- static server
 const MIME = {
