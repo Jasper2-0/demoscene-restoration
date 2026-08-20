@@ -31,7 +31,26 @@
  *   SUNF_QPC         value QueryPerformanceCounter should report; unset = leave alone
  *   SUNF_QPC_STEP    added to it per call; 0 = frozen
  *   SUNF_QPC_FREQ    what QueryPerformanceFrequency reports (default 1000000)
+ *   SUNF_QPC_HOLD    seconds INTO the pinned order to freeze at (see below)
+ *   SUNF_QPC_LATCH   calls to report 0 before jumping to HOLD (default 8)
  *   SUNF_TRACE       log every call to stderr as [fsoundstub] ...
+ *
+ * ADDRESSING A SHOW TIME, not just an order. wONDEr.exe's clock is (read out of the
+ * frame handler around 0x40e8xx, constants at 0x4337b0 = 1000 and 0x4337a8 = 0.001,
+ * which cancel):
+ *
+ *     if (order changed) { latch orderStartQpc; orderStartSeconds = table[order]; }
+ *     showTime = orderStartSeconds + (QPC_now - orderStartQpc) / frequency
+ *
+ * So a FROZEN counter latches and then compares against itself: elapsed is always
+ * zero and the show sits exactly on the order boundary, which is why every frozen
+ * recording reproduced the boundary frame and nothing else. A freely stepping
+ * counter advances but lands wherever the call count happens to put it.
+ *
+ * SUNF_QPC_HOLD makes it addressable. The counter reports 0 for the first
+ * SUNF_QPC_LATCH calls — long enough for the order-change branch to latch at zero —
+ * and HOLD*frequency for every call after, so elapsed is exactly HOLD and the show
+ * freezes at orderStartSeconds + HOLD. One instant, held, repeatable.
  *
  * THE SECOND CLOCK, again — and it is a DIFFERENT one here. Freezing the module
  * order pins which part is playing but not the animation inside it, exactly as
@@ -56,6 +75,9 @@ static DWORD  g_handle = 0x2000;   /* distinct handle per creating call */
 static double g_qpc = 0.0, g_qpc_step = 0.0;
 static long long g_qpc_freq = 1000000;
 static int    g_qpc_forced = 0;
+static double g_qpc_hold = -1.0;      /* seconds into the order; <0 = disabled */
+static long   g_qpc_latch = 8;        /* calls reported as 0 before the jump */
+static long   g_qpc_calls = 0;
 
 static const char *envs(const char *n) {
     static char buf[64];
@@ -75,6 +97,8 @@ static void init_once(void) {
     if ((v = envs("SUNF_QPC")))        { g_qpc = atof(v); g_qpc_forced = 1; }
     if ((v = envs("SUNF_QPC_STEP")))     g_qpc_step = atof(v);
     if ((v = envs("SUNF_QPC_FREQ")))     g_qpc_freq = atoll(v);
+    if ((v = envs("SUNF_QPC_LATCH")))    g_qpc_latch = atol(v);
+    if ((v = envs("SUNF_QPC_HOLD")))   { g_qpc_hold = atof(v); g_qpc_forced = 1; }
 }
 #define TR(...) do { init_once(); if (g_trace) { fprintf(stderr, "[fsoundstub] " __VA_ARGS__); fputc('\n', stderr); fflush(stderr); } } while (0)
 
@@ -130,6 +154,14 @@ static DWORD WINAPI hooked_GetTickCount(void) {
 
 static BOOL WINAPI hooked_QueryPerformanceCounter(LARGE_INTEGER *out) {
     if (!out) return FALSE;
+    if (g_qpc_hold >= 0.0) {
+        /* Two-phase: zero while the engine latches its order start, then a
+         * constant offset forever. elapsed == HOLD exactly, on every frame. */
+        out->QuadPart = (g_qpc_calls++ < g_qpc_latch)
+            ? (LONGLONG)0
+            : (LONGLONG)(g_qpc_hold * (double)g_qpc_freq);
+        return TRUE;
+    }
     out->QuadPart = (LONGLONG)g_qpc;
     g_qpc += g_qpc_step;
     return TRUE;
@@ -182,9 +214,9 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved) {
                               (void *)hooked_QueryPerformanceCounter);
             int b = patch_iat("KERNEL32.dll", "QueryPerformanceFrequency",
                               (void *)hooked_QueryPerformanceFrequency);
-            TR("QPC IAT patch: counter=%s frequency=%s (qpc=%.0f step=%.3f freq=%lld)",
+            TR("QPC IAT patch: counter=%s frequency=%s (qpc=%.0f step=%.3f freq=%lld hold=%.3f latch=%ld)",
                a ? "installed" : "NOT FOUND", b ? "installed" : "NOT FOUND",
-               g_qpc, g_qpc_step, (long long)g_qpc_freq);
+               g_qpc, g_qpc_step, (long long)g_qpc_freq, g_qpc_hold, g_qpc_latch);
         }
     }
     return TRUE;

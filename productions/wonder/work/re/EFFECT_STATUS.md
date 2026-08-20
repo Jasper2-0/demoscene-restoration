@@ -432,3 +432,77 @@ These productions run a layered timeline: a sample is filed under one clip while
 frame is everything active. Any diagnosis here must isolate EVERY live layer with
 `?only=`, not just the part the sweep names. That is what showed #31's `effect_40dab0`
 to be innocent, and it should be the first step on every part, not an afterthought.
+
+---
+
+## The engine's clock, and addressing a show time in the original
+
+Read out of the frame handler (the `FMUSIC_GetOrder` / `QueryPerformanceCounter`
+block around `decompiled.c:14803-14840`), constants at 0x4337b0 = **1000** and
+0x4337a8 = **0.001** as doubles, which cancel:
+
+```
+  if (order != lastOrder) {
+      QueryPerformanceCounter(&orderStartQpc);
+      orderStartSeconds = orderTable[min(order, maxOrder)];   // stride 0x1c
+  }
+  showTime = orderStartSeconds + (QPC_now - orderStartQpc) / frequency
+```
+
+`_DAT_004337a0 = 186.5` is the end-of-demo threshold, matching the 186.75 s capture.
+`_DAT_00433258 = 1.0` is the value the segment search returns past the last key,
+independently confirming the clamp read above.
+
+**Why every frozen recording gave the order boundary.** A constant counter is latched
+and then compared against itself, so elapsed is identically zero and the show sits
+exactly on `orderTable[order]`. A freely stepping counter advances, but lands wherever
+the call count happens to put it, which is not addressable either.
+
+`SUNF_QPC_HOLD` (added to the FSOUND stub) fixes that: the counter reports 0 for the
+first `SUNF_QPC_LATCH` calls — long enough for the order-change branch to latch at
+zero — then `HOLD * frequency` forever. Elapsed is exactly `HOLD`, so the original
+freezes at `orderTable[order] + HOLD`, repeatable and nameable in show time.
+
+```sh
+SUNF_QPC_HOLD=6.805 sh /work/sunf-probe.sh 12 /out/hold102 45   # order 12 -> show 102.305s
+```
+
+## What the original submits at show 102.305 s
+
+35 primitives, 20,137 vertices — objects 6525, 2502, 2439, 2391, 2328, 1944, 4.
+**It draws the same object set the port does.** The difference is in the colour.
+
+The per-triangle handler `forced_004084b0` issues
+`glColor4f(I, I, I, globalAlpha * materialAlpha)` where `I` is the **sum of the three
+vertices' lighting byte at +0x10**, so the submitted RGB *is* the shading result.
+
+| show time | reference | RGB values submitted |
+|---|---|---|
+| 86.9 s | bright | `255` only |
+| 102.3 s | near-black | `0` at alpha 0.280813 / 0.200581 / 0.140406 / 0.080232, plus `1` at alpha 0 |
+
+`rgb 1, alpha 0` is the dust tunnel at its `EXIT_START`, confirming that layer is
+correct in both.
+
+**The four black alphas are in the exact ratio 3.5 : 2.5 : 1.75 : 1**, which is
+`LWO_ALPHA_SCALES = [0.7, 0.5, 0.35, 0.2]` from `woah3.js`. So the LWO path matches
+structurally and the show-time addressing is landing where intended — the four
+objects are recognisably the four LWO copies with their pulse-scaled alphas.
+
+### Open
+
+The original's trace at this instant ALSO carries `rgb 255` at alpha 1 and 0.7 — a
+bright backdrop — while the reference frame is near-black (luma 6.6). Those two facts
+are not yet reconciled, and until they are, the cause of the darkness is not
+established. Candidates, none tested:
+
+* the addressed instant is not exactly capture 102.305 s (the `orderTable` value for
+  order 12 was taken from the PORT's `positionAt`, not read from the executable's own
+  table at `DAT_00485de8`);
+* the bright draws are geometry that is off-screen or occluded at this instant;
+* a layer the port does not render at all contributes, or a black veil is composited
+  after the draws recorded here.
+
+Read `orderTable[12]` out of the binary before trusting the addressing to the
+millisecond. The Sunflower timeline is layered, so the layer inventory at this instant
+must be established on BOTH sides before any of this is acted on.
