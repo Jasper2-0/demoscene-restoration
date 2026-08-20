@@ -1010,3 +1010,35 @@ exactly where the difference is visible, and it would be indistinguishable from
 correct in the sweep score — the worst combination available. METHOD.md's rule
 applies directly: an empirical fit is acceptable only as an explicitly marked
 placeholder, and is most dangerous when it looks convincing.
+
+### The fit as a marked placeholder — and what it proves it cannot do
+
+METHOD.md permits an empirical fit "only as an explicitly marked placeholder".
+`shared/sunflower/js/mesh-geometry.js` now carries one: `WONDER_FACING_FIT`,
+`wonderFacingFlags()` and `wonderSurvivingFaces()`, **off by default, wired into no
+render path, and documented as a fit rather than the recovered rule**.
+
+Its purpose is to test the hypothesis, and it does — against the original's own
+recorded draw stream rather than against a pixel score:
+
+| mesh | faces | model keeps | verts | original measured | error |
+|---|--:|--:|--:|--:|--:|
+| `Original` | 3426 | 2155 | 6465 | 6525 | **-0.9%** |
+| `B2.LWO01` | 1156 | 802 | 2406 | 2502 | -3.8% |
+| `B2.LWO02` | 1156 | 802 | 2406 | 2439 | -1.4% |
+| `B2.LWO03` | 1156 | 802 | 2406 | 2391 | +0.6% |
+| `B2.LWO04` | 1156 | 802 | 2406 | 2328 | +3.4% |
+
+Within 4% everywhere, which is a real result for a model derived only from memory
+reads. **But note the middle column: the model gives all four LWO copies the SAME
+count**, because it is an object-space test and those four share byte-identical
+geometry. The original's counts *decrease monotonically with scale* — 2502, 2439,
+2391, 2328.
+
+**So the missing 4% is not noise; it is the per-instance scale dependence**, which an
+object-space facing test cannot express by construction. The real rule involves the
+instance transform — most plausibly a threshold that scales, since a uniform scale
+cannot rotate a normal.
+
+That is a sharper statement of the remaining unknown than "96% accurate": the facing
+term is essentially right, and what is missing is specifically **how scale enters**.

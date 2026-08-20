@@ -130,3 +130,54 @@ export function buildMeshGeometry(mesh, { wonderNormals = false } = {}) {
     : null;
   return { positions, texcoords, normals, nativeNormals, indices };
 }
+
+/**
+ * EXPERIMENTAL PLACEHOLDER — an empirical model of Wonder's per-vertex facing
+ * flag. **Off by default and not part of any authentic build.**
+ *
+ * `wONDEr.exe` rejects triangles at 0x004076cf: a triangle is submitted iff any
+ * of its three vertices carries a non-zero byte at `vertex+0x4c`. That flag is a
+ * boolean written once at load, and reading it out of the running engine shows it
+ * is ~96% predicted by `dot(vertexNormal, D) > t`. The code that WRITES it has not
+ * been found, so this is a FIT, not the recovered rule — see
+ * `productions/wonder/work/re/EFFECT_STATUS.md` for the measurements, the three
+ * model forms tested, and why the remaining 4% matters.
+ *
+ * METHOD.md permits an empirical fit "only as an explicitly marked placeholder,
+ * and it is dangerous precisely when it looks convincing". This exists to TEST the
+ * hypothesis: if the model is right the sweep score should move markedly, and if it
+ * barely moves the model is wrong. The score is evidence here, not a goal, and this
+ * must not be enabled in a build that claims to be authentic.
+ */
+export const WONDER_FACING_FIT = Object.freeze({
+  direction: Object.freeze([-0.50391, -0.80190, +0.32099]),
+  threshold: 0.07377,
+  accuracy: 0.9604,
+});
+
+/** Per-vertex flags under the fitted model. Returns a Uint8Array, 1 = keep. */
+export function wonderFacingFlags(mesh, fit = WONDER_FACING_FIT) {
+  const normals = buildWonderVertexNormals(mesh);
+  const [dx, dy, dz] = fit.direction;
+  const flags = new Uint8Array(mesh.vertexCount);
+  for (let v = 0; v < mesh.vertexCount; v++) {
+    const d = normals[v * 3] * dx + normals[v * 3 + 1] * dy + normals[v * 3 + 2] * dz;
+    flags[v] = d > fit.threshold ? 1 : 0;
+  }
+  return flags;
+}
+
+/**
+ * The triangles the gate would submit: those with at least one flagged vertex.
+ * Returns the surviving face indices, so a caller can compare counts against the
+ * original's recorded draw stream without rebuilding any buffers.
+ */
+export function wonderSurvivingFaces(mesh, fit = WONDER_FACING_FIT) {
+  const flags = wonderFacingFlags(mesh, fit);
+  const kept = [];
+  for (let face = 0; face < mesh.faceCount; face++) {
+    const a = mesh.indices[face * 3], b = mesh.indices[face * 3 + 1], c = mesh.indices[face * 3 + 2];
+    if (flags[a] || flags[b] || flags[c]) kept.push(face);
+  }
+  return kept;
+}
