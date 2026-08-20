@@ -506,3 +506,55 @@ established. Candidates, none tested:
 Read `orderTable[12]` out of the binary before trusting the addressing to the
 millisecond. The Sunflower timeline is layered, so the layer inventory at this instant
 must be established on BOTH sides before any of this is acted on.
+
+---
+
+## #31 and the geometry gap are the SAME defect
+
+With both sides addressable in show time, the comparison at show 102.26 s
+(order 12 start 95.456 s from `mystified.env` key 12, + `SUNF_QPC_HOLD=6.805`):
+
+| object | original | port |
+|---|--:|--:|
+| QuadPatch | 1944 x2 | 1944 x2 |
+| dust tunnel cards | 4 x16 | 4 x16 |
+| big mesh (`Original`) | **6525** | **10278** |
+| LWO copies | **2502 / 2439 / 2391 / 2328** | **3468 x4** |
+| **total** | **20,137 in 23 draws** | **28,102 in 23 draws** |
+
+Same objects, same number of draws, same order, and **every layer that is not a
+rejected mesh matches exactly** — both QuadPatches and all sixteen dust cards are
+identical. The whole difference is the five meshes' vertex counts.
+
+**So there is no separate "missing fade".** The original submits 65-72% of each
+mesh's triangles; the gaps show the black background through, and the port draws the
+meshes solid. That is why ours is a bright field where the reference is near-black,
+and why correlation goes negative rather than merely low.
+
+Issue #31 and the geometry gap are one defect, and the triangle rejection is the
+critical path for both.
+
+### What the colour data adds
+
+Weighting each draw by its vertices and the `glColor4f` in force:
+
+| instant | reference | rgb 255 a1.0 | rgb 255 a0.7 | rgb 0 a0.0 | rgb 1 a0.19 |
+|---|---|--:|--:|--:|--:|
+| 86.9 s | bright | 47.5% | 42.6% | — | 10.0% |
+| 102.26 s | near-black | 12.5% | 41.2% | **36.5%** | 9.7% |
+
+36.5% of vertices are submitted at **alpha 0** at the dark instant, where the same
+group was `rgb 255, alpha 1.0` when the reference was bright. The `rgb 1, alpha 0.19`
+band is the dust tunnel and is stable across both, matching `drawAlpha = alpha * 0.19`
+in `dust-tunnel.js`.
+
+### Ruled out this round
+
+* **Clamp vs extrapolate** — `FUN_00404f70` returns `{last-1, u=1.0}` past the last
+  key, identical to `findSegment`. (Previous commit.)
+* **The order-table offset** — order 12 starts at 95.456 s, read from
+  `mystified.env` key 12, which is what the engine's `orderTable[order]` (stride 0x1c,
+  first float) resolves to. The earlier 95.5 s from `positionAt` was 44 ms out.
+* **apitrace replay** as a way to render the original's own frames — `glretrace`
+  segfaults under `qemu-i386`. The reference capture remains the only pixel ground
+  truth.
