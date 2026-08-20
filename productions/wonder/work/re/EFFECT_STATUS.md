@@ -94,17 +94,47 @@ byte at vertex+0x4c**, unless the material's byte at +0x94 overrides. A material
 holds two handlers, selected by a jump table at 0x4081d0: `+0xcc` per triangle,
 `+0xd0` per batch.
 
+### The vertex layout, recovered
+
+`FUN_00406d20` is the vertex setter, and the x87 audit flags it **DROPPED**
+(12 x87 instructions, zero float evidence in the C) — so it was read as assembly,
+per METHOD.md §3, not from the decompilation.
+
+```
+  LEA EAX,[EDX*8]  /  SUB EAX,EDX  /  LEA EAX,[EDX + EAX*4]  /  SHL EAX,2
+      => byte offset = 116 * index          vertex stride 0x74
+  FSTP [EDX+EAX+0x30] / +0x34 / +0x38       position (what glVertex3fv reads)
+  FSTP [EDX+EAX+0x1c] / +0x20               a second 2-vector
+  MOV  dword [ECX+EAX+0x10], 0xff           the byte the shaded handler sums
+```
+
+So the vertex is 116 bytes: position at +0x30, colour at +0x10, flag at +0x4c.
+
 ### Open — do not implement culling until this is answered
 
-**Where vertex+0x4c is SET is not yet located**, and that is the actual
-visibility criterion. Until it is read, we know triangles are filtered by a
-per-vertex flag but NOT what the flag means. 66-72% survival does not match the
-50% a closed convex mesh gives under backface culling alone, so it is plausibly
-frustum or near-plane rejection, or a combination — a guess here would be an
-empirical fit of exactly the kind METHOD.md warns produces convincing wrong
-answers. The flag is written somewhere in the transform pass; the grep for byte
-writes to `[reg + 0x4c]` did not find it, so it likely uses an indexed form or
-sits in an x87-heavy function.
+**Where vertex+0x4c is WRITTEN is still not located**, and that write is the
+actual visibility criterion. We know triangles are filtered by a per-vertex flag;
+we do not know what the flag means, and a guess would be an empirical fit of
+exactly the kind METHOD.md warns produces convincing wrong answers.
+
+Searched and NOT found in `disasm.asm`: any byte or dword store to `+0x4c` on a
+116-byte-strided base, plain or indexed. The candidates that do exist
+(`0x004063a7`, `0x004069f4`) belong to other structures — one is a 4x4 identity
+matrix init, recognisable by `0x3f800000` at +0x70.
+
+The likely reason is that **the export is incomplete**: the jump-table targets at
+0x408140-0x4081bf were also absent from `disasm.asm` and had to be disassembled
+directly with capstone before the handler selection could be read at all. A fresh
+Ghidra pass that force-disassembles the gaps is the next step, not more grepping.
+
+Two observations for whoever picks this up:
+
+* Survival across four instances of ONE mesh at order 11 is 72%, 70%, 68%, 66%
+  — smooth and monotone as the object turns. Consistent with a per-vertex
+  geometric test; not obviously consistent with all-or-nothing frustum rejection.
+* A global at 0x00485e08 counts surviving triangles, so the engine's own tally is
+  available to compare against, and `tools/winebox/` can already read the effect
+  of any hypothesis by re-recording.
 
 **Why it matters visually**: `GL_BLEND` is enabled and depth is off for part of
 these frames, so the surplus triangles the port submits are drawn and do
