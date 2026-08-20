@@ -36,6 +36,13 @@
  *   SUNF_TRACE       log every call to stderr as [fsoundstub] ...
  *   SUNF_PEEK        "addr:len" (hex) — dump engine memory once per frame
  *   SUNF_PEEK_PTR    "addr:len" (hex) — DEREFERENCE addr, then dump len from there
+ *   SUNF_SCAN        hex byte pattern to find in memory. On each hit it dumps the
+ *                    VERTEX STRUCT containing it: vertices are 116 bytes with the
+ *                    position at +0x30, so a hit on a known position locates the
+ *                    struct at hit-0x30 and the gate's flag at +0x4c. This is how
+ *                    the vertex array is reached without an object pointer, which
+ *                    lives only in ECX at the draw site.
+ *   SUNF_SCAN_LO/HI  hex bounds for the scan (default 0x1000000..0x8000000)
  *   SUNF_PEEK_BACK   hex bytes to step BACK from the dereferenced target before
  *                    dumping. The engine binds one material at a time, so reaching
  *                    its siblings means walking the allocation neighbourhood.
@@ -92,8 +99,11 @@ static long   g_qpc_calls = 0;
 
 static void parse_peek(const char *v, int deref);   /* defined below, used by init_once */
 static void do_peek(void);                          /* and by FMUSIC_GetOrder */
+static void do_scan(void);
 static long g_peek_frames = 0;
 static unsigned long g_peek_back = 0;
+static unsigned char g_scan[32]; static int g_scan_len = 0;
+static unsigned long g_scan_lo = 0x1000000, g_scan_hi = 0x8000000;
 
 static const char *envs(const char *n) {
     static char buf[64];
@@ -116,6 +126,19 @@ static void init_once(void) {
     if ((v = envs("SUNF_QPC_LATCH")))    g_qpc_latch = atol(v);
     if ((v = envs("SUNF_QPC_HOLD")))   { g_qpc_hold = atof(v); g_qpc_forced = 1; }
     if ((v = envs("SUNF_PEEK_BACK")))    g_peek_back = strtoul(v, NULL, 16);
+    if ((v = envs("SUNF_SCAN_LO")))      g_scan_lo = strtoul(v, NULL, 16);
+    if ((v = envs("SUNF_SCAN_HI")))      g_scan_hi = strtoul(v, NULL, 16);
+    if ((v = envs("SUNF_SCAN"))) {
+        int i = 0;
+        while (v[i * 2] && v[i * 2 + 1] && i < (int)sizeof g_scan) {
+            int hi = v[i*2], lo = v[i*2+1];
+            hi = (hi <= '9') ? hi - '0' : (hi | 32) - 'a' + 10;
+            lo = (lo <= '9') ? lo - '0' : (lo | 32) - 'a' + 10;
+            g_scan[i] = (unsigned char)((hi << 4) | lo);
+            i++;
+        }
+        g_scan_len = i;
+    }
     parse_peek(envs("SUNF_PEEK"), 0);
     parse_peek(envs("SUNF_PEEK_PTR"), 1);
 }
@@ -165,7 +188,11 @@ int __stdcall FMUSIC_GetOrder(DWORD song) {
      * reached its threshold for reasons that were costing a container run each to
      * chase. Delayed a few frames so the scene is built before it is read. */
     if (++g_peek_frames <= 3 || g_peek_frames % 50 == 0) TR("GetOrder call #%ld -> %d", g_peek_frames, (int)g_order);
-    if (g_peek_frames >= 2) do_peek();
+    if (g_peek_frames >= 2) {
+        do_peek();
+        static int scanned = 0;
+        if (!scanned) { scanned = 1; do_scan(); }
+    }
     int r = (int)g_order;
     if (g_order_step != 0.0) g_order += g_order_step;
     return r;
@@ -255,6 +282,34 @@ static void parse_peek(const char *v, int deref) {
     g_peek_len = strtoul(colon + 1, NULL, 16);
     g_peek_deref = deref;
     if (g_peek_len > 0x8000) g_peek_len = 0x8000;
+}
+
+/* Walk memory in 64 KB steps, skipping unreadable regions, and report every hit.
+ * A vertex position is a 12-byte float triple and is distinctive enough that a
+ * false positive is unlikely; hits are dumped as whole vertex structs so the flag
+ * at +0x4c can be read directly rather than inferred. */
+static void do_scan(void) {
+    if (!g_scan_len) return;
+    TR("scan: %d-byte pattern over %#lx..%#lx", g_scan_len, g_scan_lo, g_scan_hi);
+    unsigned long hits = 0;
+    for (unsigned long page = g_scan_lo; page < g_scan_hi; page += 0x10000) {
+        unsigned char *p = (unsigned char *)page;
+        if (IsBadReadPtr(p, 0x10000)) continue;
+        for (unsigned long o = 0; o + g_scan_len <= 0x10000; o++) {
+            int k = 0;
+            while (k < g_scan_len && p[o + k] == g_scan[k]) k++;
+            if (k != g_scan_len) continue;
+            unsigned long hit = page + o;
+            if (hit < 0x30) continue;
+            unsigned char *v = (unsigned char *)(hit - 0x30);
+            if (IsBadReadPtr(v, 0x74)) continue;
+            unsigned long f = *(unsigned long *)(v + 0x4c);
+            TR("scan hit %#lx  vertex@%#lx  +0x4c = %#lx  +0x10 = %#lx",
+               hit, (unsigned long)v, f, *(unsigned long *)(v + 0x10));
+            if (++hits >= 12) { TR("scan: stopping at 12 hits"); return; }
+        }
+    }
+    TR("scan: %lu hits", hits);
 }
 
 static void do_peek(void) {

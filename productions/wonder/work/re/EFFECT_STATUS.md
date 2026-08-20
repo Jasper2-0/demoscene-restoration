@@ -863,3 +863,33 @@ against the binary before believing the measurement.**
 
 The remaining defect is real and is one unread value away: `vertex+0x4c`, the gate at
 0x004076cf. Five approaches are documented above.
+
+### The vertex array is reachable — found by content, not by pointer
+
+The object lives only in `ECX` at the draw site, so it cannot be read from a global.
+But a vertex's position sits at `+0x30` and its values come straight from the EXP, so
+scanning for a known position locates the struct. `B2.LWO01`'s first vertex is
+`[0.005361628, -0.664826393, -0.280026942]` = bytes `98b0af3b10322abfb15f8fbe`, which
+also matches what apitrace observed the original submitting.
+
+`SUNF_SCAN=98b0af3b10322abfb15f8fbe SUNF_SCAN_LO=4400000 SUNF_SCAN_HI=4c00000` finds
+two distinct groups:
+
+| group | spacing | `+0x10` | `+0x4c` | identification |
+|---|---|---|---|---|
+| 5 hits from 0x441e298 | ~0xd49c | `0x277` = **631** | float -0.77 | the loaded EXP data — 631 is `B2.LWO0n`'s vertex count |
+| 6 hits from 0x4460bb4 | ~0x30000 | `0xff` = **255** | **0** | the RUNTIME vertex structs |
+
+`+0x10 = 0xff` is the lighting byte written by `FUN_004070d0`'s unlit branch, which is
+what identifies the second group as live vertices rather than source data. Six of them
+matches `Original` plus the five `B2.LWO0n` copies.
+
+**The first vertex of each has `+0x4c = 0`**, consistent with its triangles being
+rejected, and consistent with the gate.
+
+### What remains
+
+Dump `+0x4c` across a whole array at stride 116 and correlate the non-zero entries
+against which triangles survive. Both halves are now available: the array base comes
+from the scan, and the survivor set comes from the draw stream. That turns the
+criterion from a search into a comparison.
