@@ -970,3 +970,43 @@ dot product against a fixed direction and stores a boolean at `+0x4c`", and the
 direction is known to within a few percent. `FUN_00406e20` — the normal-accumulation
 pass, which already walks the vertex array at stride 116 — is the obvious place to
 look next.
+
+### Three model forms tested; the per-vertex facing model is the best and caps at 96%
+
+| model | best accuracy |
+|---|--:|
+| per-vertex normal, `dot(n, D) > t`, 300-restart optimiser | **96.04%** |
+| same, using the ENGINE's own normals from `+0x3c` | 95.56% |
+| per-FACE facing, vertex flagged if ANY adjacent face faces D | **70.52%** |
+| "normal is non-degenerate" alone | 50.55% |
+
+The per-face form is decisively worse, so the flag is a property of the **vertex
+normal**, not of adjacent faces. Zero-length normals (7 of 631) are all unflagged,
+consistent with `dot = 0` failing `> 0`, and excluding them changes nothing (95.51%).
+
+The 28 mismatches sit at the boundary — median |dot| 0.135 against 0.528 overall —
+which initially looked like an imprecise direction estimate. It is not: a
+300-restart optimiser over direction *and* threshold still caps at 96.04%. **The
+plateau is real**, so a single fixed direction does not fully determine the flag and
+some term remains unidentified.
+
+### Where this stops, and why nothing was implemented
+
+The criterion is characterised but not derived:
+
+```
+  vertex+0x4c  = boolean, value 0x1, written once at load
+               ~ dot(vertexNormal, D) > t   with D ~ (-0.504, -0.802, +0.321)
+               = 96% of observed bits; the residual 4% is unexplained
+  triangle drawn = flag[v0] | flag[v1] | flag[v2]     (gate at 0x004076cf)
+```
+
+Static search for the writing code is exhausted — byte, dword, float, indexed,
+LEA-computed and pre-advanced-pointer stores, all over the force-disassembled export.
+`FUN_00406e20` (the normal pass) was checked and is not it.
+
+A 96% model is not implementable here. It would be wrong at the silhouette, which is
+exactly where the difference is visible, and it would be indistinguishable from
+correct in the sweep score — the worst combination available. METHOD.md's rule
+applies directly: an empirical fit is acceptable only as an explicitly marked
+placeholder, and is most dangerous when it looks convincing.
