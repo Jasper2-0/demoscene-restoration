@@ -34,6 +34,18 @@
  *   SUNF_QPC_HOLD    seconds INTO the pinned order to freeze at (see below)
  *   SUNF_QPC_LATCH   calls to report 0 before jumping to HOLD (default 8)
  *   SUNF_TRACE       log every call to stderr as [fsoundstub] ...
+ *   SUNF_PEEK        "addr:len" (hex) — dump engine memory once per frame
+ *   SUNF_PEEK_PTR    "addr:len" (hex) — DEREFERENCE addr, then dump len from there
+ *
+ *   ** THE PEEK DOES NOT FIRE YET. ** It is configured correctly (the attach line
+ *   reports the parsed address, length and deref flag) and the run renders normally
+ *   — 47 frames, 466,832 GL calls, no crash — but do_peek's own entry trace never
+ *   appears, so the counter in the QPC hook is not reaching its threshold. The QPC
+ *   hook itself IS working: SUNF_QPC_HOLD demonstrably changes what the engine
+ *   renders. Unresolved, and left in place rather than removed because the approach
+ *   is sound: the stub is inside the process, the PE has no ASLR, and reading the
+ *   engine's own memory is the one route that answers layout questions static
+ *   analysis cannot.
  *
  * ADDRESSING A SHOW TIME, not just an order. wONDEr.exe's clock is (read out of the
  * frame handler around 0x40e8xx, constants at 0x4337b0 = 1000 and 0x4337a8 = 0.001,
@@ -79,6 +91,8 @@ static double g_qpc_hold = -1.0;      /* seconds into the order; <0 = disabled *
 static long   g_qpc_latch = 8;        /* calls reported as 0 before the jump */
 static long   g_qpc_calls = 0;
 
+static void parse_peek(const char *v, int deref);   /* defined below, used by init_once */
+
 static const char *envs(const char *n) {
     static char buf[64];
     DWORD r = GetEnvironmentVariableA(n, buf, sizeof buf);
@@ -99,6 +113,8 @@ static void init_once(void) {
     if ((v = envs("SUNF_QPC_FREQ")))     g_qpc_freq = atoll(v);
     if ((v = envs("SUNF_QPC_LATCH")))    g_qpc_latch = atol(v);
     if ((v = envs("SUNF_QPC_HOLD")))   { g_qpc_hold = atof(v); g_qpc_forced = 1; }
+    parse_peek(envs("SUNF_PEEK"), 0);
+    parse_peek(envs("SUNF_PEEK_PTR"), 1);
 }
 #define TR(...) do { init_once(); if (g_trace) { fprintf(stderr, "[fsoundstub] " __VA_ARGS__); fputc('\n', stderr); fflush(stderr); } } while (0)
 
@@ -152,8 +168,14 @@ static DWORD WINAPI hooked_GetTickCount(void) {
     return r;
 }
 
+static long g_peek_frames = 0;
+static void do_peek(void);
+
 static BOOL WINAPI hooked_QueryPerformanceCounter(LARGE_INTEGER *out) {
     if (!out) return FALSE;
+    /* Let the scene load and draw a few frames before looking — the pointers this
+     * reads are null until the engine has built them. */
+    if (++g_peek_frames >= 30) do_peek();   /* self-guards via g_peek_done */
     if (g_qpc_hold >= 0.0) {
         /* Two-phase: zero while the engine latches its order start, then a
          * constant offset forever. elapsed == HOLD exactly, on every frame. */
@@ -200,10 +222,71 @@ static int patch_iat(const char *dll, const char *fn, void *repl) {
     return 0;
 }
 
+/* ---- reading the engine's own memory.
+ *
+ * The stub is loaded INTO the process, so absolute addresses in the executable's
+ * image are directly readable — these PEs have no ASLR and Wine honours the
+ * 0x400000 ImageBase. That settles questions static analysis cannot: whether a
+ * runtime struct matches the layout of the file it was built from, and what a
+ * field actually holds while the demo is running.
+ *
+ * Guarded with IsBadReadPtr because a wrong address here takes the whole process
+ * down and the run reports nothing at all. */
+static unsigned long g_peek_addr = 0, g_peek_len = 0;
+static int g_peek_deref = 0, g_peek_done = 0;
+
+static void parse_peek(const char *v, int deref) {
+    if (!v) return;
+    char buf[64]; size_t i = 0;
+    while (v[i] && i < sizeof buf - 1) { buf[i] = v[i]; i++; }
+    buf[i] = 0;
+    char *colon = buf;
+    while (*colon && *colon != ':') colon++;
+    if (*colon != ':') return;
+    *colon = 0;
+    g_peek_addr = strtoul(buf, NULL, 16);
+    g_peek_len = strtoul(colon + 1, NULL, 16);
+    g_peek_deref = deref;
+    if (g_peek_len > 0x400) g_peek_len = 0x400;
+}
+
+static void do_peek(void) {
+    if (!g_peek_addr || g_peek_done) return;
+    TR("peek: firing at addr=%#lx len=%#lx deref=%d after %ld calls",
+       g_peek_addr, g_peek_len, g_peek_deref, g_peek_frames);
+    unsigned char *p = (unsigned char *)g_peek_addr;
+    if (IsBadReadPtr(p, 4)) { TR("peek: %#lx unreadable", g_peek_addr); g_peek_done = 1; return; }
+    if (g_peek_deref) {
+        unsigned long target = *(unsigned long *)p;
+        TR("peek: [%#lx] -> %#lx", g_peek_addr, target);
+        if (!target || IsBadReadPtr((void *)target, g_peek_len)) {
+            TR("peek: target %#lx unreadable", target); g_peek_done = 1; return;
+        }
+        p = (unsigned char *)target;
+    } else if (IsBadReadPtr(p, g_peek_len)) {
+        TR("peek: range unreadable"); g_peek_done = 1; return;
+    }
+    static const char HEX[] = "0123456789abcdef";
+    for (unsigned long off = 0; off < g_peek_len; off += 16) {
+        char line[80]; int n = 0;
+        line[n++] = '+';
+        line[n++] = HEX[(off >> 8) & 0xf]; line[n++] = HEX[(off >> 4) & 0xf];
+        line[n++] = HEX[off & 0xf]; line[n++] = ' ';
+        for (int k = 0; k < 16 && off + k < g_peek_len; k++) {
+            line[n++] = HEX[p[off + k] >> 4];
+            line[n++] = HEX[p[off + k] & 0xf];
+            line[n++] = ' ';
+        }
+        line[n] = 0;
+        TR("peek %s", line);
+    }
+    g_peek_done = 1;
+}
+
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         init_once();
-        TR("attached: order=%.2f step=%.3f", g_order, g_order_step);
+        TR("attached: order=%.2f step=%.3f peek=%#lx len=%#lx deref=%d", g_order, g_order_step, g_peek_addr, g_peek_len, g_peek_deref);
         if (g_ticks_forced) {
             int ok = patch_iat("KERNEL32.dll", "GetTickCount", (void *)hooked_GetTickCount);
             TR("GetTickCount IAT patch: %s (ticks=%lu step=%.3f)",
