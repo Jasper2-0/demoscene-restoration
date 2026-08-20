@@ -351,13 +351,30 @@ seconds after the boundary. The camera is unaffected — `CAMERA_RATE = 10` puts
 `cameraFrame` at 325 of 400 at the same instant, still inside its range, which fits
 the reference keeping the objects framed while the backdrop leaves.
 
-**Do not change the interpolator on this hypothesis.** The evaluator's end behaviour
-is decidable from `FUN_00410770` (the runtime track evaluator, whose clamp/hold ends
-are already recorded above) and from the original's own draw stream — the recorder in
-`tools/winebox/` reports the matrices the executable submits, so extrapolate-vs-clamp
-is directly observable rather than inferable. METHOD.md's Lapsus lesson is exactly
-this shape: the key layout was right and the tangent formula was wrong, and it
-presented as a timing error that varied with time.
+**DISPROVEN, 2026-08-20 — the native clamps exactly as the port does.** Two errors
+of mine are corrected here.
+
+First, the citation: I attributed the evaluator to `FUN_00410770`. **That address
+does not exist in wONDEr.exe** — it is from Moments.exe, a different binary in the
+Haujobb work. Wonder's segment search is `FUN_00404f70` / `FUN_00405960`, with the
+vector evaluators at 0x4051f0/0x4053c0 and scalar at 0x405790/0x405820, exactly as
+`shared/sunflower/js/scene.js:71` already records.
+
+Second, the hypothesis. `FUN_00404f70` past the last key:
+
+```
+  00404f99  FCOMP [EDI + EAX*4]     ; frame vs keys[last].time
+  00404f9e  TEST AH,0x41 / JNZ      ; if frame <= last -> normal search
+  00404fa3  FLD  [0x433258]         ; else: load 1.0
+  00404fa9  DEC  EDX                ;       index = nkeys-1
+  00404faa  MOV  [ECX+4],EDX
+  00404fad  RET                     ;       return u = 1.0
+```
+
+That is `{ index: last - 1, t: 1 }` — identical to `findSegment` in `scene.js:16`.
+It also clamps the low end (`frame < const` -> `frame = 0`). **Extrapolation is not
+the difference**, and changing the interpolator would have altered every Sunflower
+production to fix nothing.
 
 ### Ruled out
 
@@ -371,3 +388,47 @@ presented as a timing error that varied with time.
 * **Repeatability.** `repeatability.mjs wonder` passes all four assertions (ORDER,
   STATE, REPEAT, ISOLATION), so the baseline scores are of frames a viewer would see.
   Wonder does NOT have lapsus's defect (#36).
+
+
+---
+
+## Correction: the surviving counts are NOT fixed. The earlier test froze the clock.
+
+Recording order 12 (show 95.5-104.1 s, which contains the whole anti-correlation
+window) with the module order pinned and the performance counter ADVANCING:
+
+```
+  frame  prims    verts   distinct per-object counts
+     40     35    20560   6519, 2565, 2559, 2499, 2466, 1944, 4
+     44     35    20551   6534, 2562, 2550, 2487, 2466, 1944, 4
+     48     35    20533   6528, 2562, 2544, 2481, 2466, 1944, 4
+     52     35    20542   6516, 2565, 2547, 2481,       1944, 4
+     56     25     3952                                 1944, 4
+```
+
+The counts **move frame to frame**. The earlier entry above concluded "the counts are
+fixed, so there is no runtime rejection" from a run with the clock FROZEN — the one
+condition under which fixed counts prove nothing. That conclusion is withdrawn.
+
+Also visible: near the end of the window the original **stops drawing the large
+meshes altogether**, falling to 25 primitives and 3,952 vertices with only the
+1944-vertex QuadPatches and the 4-vertex quads left.
+
+### Still open, and NOT to be guessed
+
+There is no frame-to-show-time mapping for these recordings yet, so it cannot be said
+whether that drop coincides with the reference's fade (which begins just after
+capture 96.4 s and reaches luma 6.6 by 102.3 s) or happens later, after the clip ends
+at 104.0 s. Without that mapping the observation is real but unplaced.
+
+Getting it is the next step, and it is a measurement, not an inference: the engine's
+own frame counter is available in the recording, and `SUNF_QPC` / `SUNF_QPC_STEP`
+control the clock the engine reads. Establishing what show time a recorded frame
+corresponds to makes every future comparison in this window decidable.
+
+### Method note — Sunflower layers
+
+These productions run a layered timeline: a sample is filed under one clip while the
+frame is everything active. Any diagnosis here must isolate EVERY live layer with
+`?only=`, not just the part the sweep names. That is what showed #31's `effect_40dab0`
+to be innocent, and it should be the first step on every part, not an afterthought.
