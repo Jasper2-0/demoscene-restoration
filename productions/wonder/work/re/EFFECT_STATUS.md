@@ -820,3 +820,46 @@ the port takes from the EXP and which has not been checked.
 
 **Do not "fix" faceted.js.** Four of its constants are now confirmed against the
 binary.
+
+---
+
+## Phase 5 — re-measured, no regression, findings filed
+
+`node tools/inspect/sweep.mjs wonder --tag=verify`, compared against the baseline
+pinned before any work started:
+
+```
+  baseline  medianR 0.6481  medianRmse 49.69  191 samples
+  verify    medianR 0.6481  medianRmse 49.69  191 samples
+  delta     +0.0000        22 of 22 parts identical, 0 moved
+  still below 0.55: effect_40c990 0.265, effect_410300 0.328, effect_40dab0 0.359,
+                    effect_40b040 0.427, effect_40de00 0.430, effect_4106a0 0.476
+```
+
+Exactly as expected: this work changed `tools/`, `docs/` and these notes, and **no
+runtime code**. The re-sweep is a control confirming that, not an improvement.
+
+Findings filed to the tracker: the corrected diagnosis on **#31** (one clip, not two;
+it is the geometry defect; timing, fades, the pulse envelope and clamp-vs-extrapolate
+each ruled out by measurement) and on **#32** (no shared additive term; four of the
+six are geometry-bound; both shading candidates dissolved; `effect_40de00` and
+`effect_4106a0` are structure faults with correct level, so the issue's framing does
+not apply to them).
+
+### Why no fix landed, stated plainly
+
+Three separate times a well-evidenced defect turned out to be correct code or a faulty
+instrument:
+
+| suspected | reality |
+|---|---|
+| `scene.js` clamps where the original extrapolates | `FUN_00404f70` clamps identically |
+| `design-tunnel.js` batches away a per-instance ramp | the ramp is there; the recorder latched colour at `begin()` |
+| `faceted.js` has a copy-pasted envelope origin | both effects share `_DAT_004333c8` = 69.753 in the original |
+
+Each would have damaged verified-correct code to chase a number. The rule that caught
+all three is worth keeping: **when a measurement says the port is wrong, check the port
+against the binary before believing the measurement.**
+
+The remaining defect is real and is one unread value away: `vertex+0x4c`, the gate at
+0x004076cf. Five approaches are documented above.
