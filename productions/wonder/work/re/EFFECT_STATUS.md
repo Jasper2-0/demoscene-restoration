@@ -45,3 +45,67 @@ keep equality on the preceding segment, preserving Wonder's duplicate-time
 All 22 scheduled classes now have address-derived implementations. None of the
 rows is reference-signed-off yet; aligned capture and difference review remain
 the next Wonder milestone.
+
+---
+
+## The port submits geometry the original rejects (2026-08-20)
+
+Found by diffing the port's draw stream against the original's, recorded from
+`wONDEr.exe` under `tools/winebox/` with the module order pinned by the FSOUND
+stub. Not by pixel correlation — the sweep's median r of 0.648 says a frame is
+wrong without saying what is wrong with it.
+
+**Measured**, original vs port vertices at seven orders:
+
+| order | 2 | 5 | 8 | 11 | 14 | 17 | 20 |
+|---|---|---|---|---|---|---|---|
+| original | 15530 | 9131 | 13948 | 20140 | 9168 | 9528 | 6488 |
+| port | 22520 | 10718 | 14608 | 28102 | 9924 | 10284 | 6488 |
+
+The port is never short and is over by up to 1.45x. Order 11 isolates it: the 16
+`QUADS:4` overlays and both `1944` draws match EXACTLY, and the whole difference
+is in the meshes — the original draws 6627 where the port draws 10278, and
+2496 / 2421 / 2346 / 2298 where the port draws 3468 four times.
+
+**The port's own output proves those four are one mesh** (3468, four times,
+identical), so the original is reducing the same geometry by a different amount
+per instance — 66% to 72% surviving. `GL_CULL_FACE` is DISABLED in every frame
+sampled, so this is not the driver. Confirming detail: the original emits
+`TRIANGLES:0` draws, i.e. `glBegin`/`glEnd` pairs with nothing between them,
+which is what a per-triangle reject loop produces when a whole batch fails.
+
+### The test, exactly — 0x004076cf
+
+```
+  MOV DL, byte ptr [ECX + 0x94]   ; material override
+  TEST DL,DL
+  JNZ  draw                       ; material set -> draw unconditionally
+  MOV BL, byte ptr [ECX + 0x4c]   ; vertex 0 flag
+  MOV DL, byte ptr [EDX + 0x4c]   ; vertex 1 flag
+  OR   DL, BL
+  OR   DL, byte ptr [ECX + 0x4c]  ; vertex 2 flag
+  JZ   skip                       ; ALL THREE ZERO -> triangle not submitted
+  INC  dword ptr [0x00485e08]     ; drawn-triangle counter
+  CALL dword ptr [EDX + 0xcc]     ; per-triangle handler
+```
+
+So a triangle is submitted iff **any of its three vertices carries a non-zero
+byte at vertex+0x4c**, unless the material's byte at +0x94 overrides. A material
+holds two handlers, selected by a jump table at 0x4081d0: `+0xcc` per triangle,
+`+0xd0` per batch.
+
+### Open — do not implement culling until this is answered
+
+**Where vertex+0x4c is SET is not yet located**, and that is the actual
+visibility criterion. Until it is read, we know triangles are filtered by a
+per-vertex flag but NOT what the flag means. 66-72% survival does not match the
+50% a closed convex mesh gives under backface culling alone, so it is plausibly
+frustum or near-plane rejection, or a combination — a guess here would be an
+empirical fit of exactly the kind METHOD.md warns produces convincing wrong
+answers. The flag is written somewhere in the transform pass; the grep for byte
+writes to `[reg + 0x4c]` did not find it, so it likely uses an indexed form or
+sits in an x87-heavy function.
+
+**Why it matters visually**: `GL_BLEND` is enabled and depth is off for part of
+these frames, so the surplus triangles the port submits are drawn and do
+composite. This is not a performance difference.
