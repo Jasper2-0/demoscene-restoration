@@ -938,12 +938,31 @@ That reconciles every earlier observation: boolean, ~48% set, spatially clustere
 (facing is continuous over a surface), fixed per instance across frames, and varying
 slightly between instances whose only difference is scale.
 
-**This is a characterisation at 95.7%, NOT the formula.** The residual ~4% probably
-comes from the normals used here being the port's `buildWonderVertexNormals` rather
-than the original's `FUN_00406e20`, or from the test running on transformed rather
-than object-space normals. Implementing this as-is would be an empirical fit of
-exactly the kind METHOD.md warns about — it would look convincing and be wrong at the
-silhouette, which is precisely where it matters.
+**This is a characterisation at ~95%, NOT the formula — and that has now been tested
+the obvious way.** The stub dumps the engine's OWN normals from `+0x3c/+0x40/+0x44`
+alongside each flag, so the rule can be checked against the data the engine actually
+used rather than against the port's recomputation:
+
+| normals used | array | best facing split | direction |
+|---|---|--:|---|
+| port's `buildWonderVertexNormals` | LWO01 | 95.7% | (0.519, 0.773, -0.366) |
+| **engine's own** | LWO01 | **95.56%** | (-0.5645, -0.7175, +0.4082) |
+| **engine's own** | LWO02 | **94.45%** | (-0.5645, -0.7175, +0.4082) |
+
+(The sign flip is the search's convention; the axis is the same.)
+
+**It plateaus at ~95% either way**, and both arrays agree on ONE fixed direction. That
+is decisive in an unwelcome direction: a pure `dot(n, D) > t` fed the engine's own
+normals would score 100%, and it does not. So the rule is *approximately* a
+fixed-direction facing test and something else supplies the residual ~5%.
+
+One detail that may bear on it: **some normals are exactly zero length**, which no
+facing test classifies meaningfully — degenerate vertices that the real rule must
+handle some other way.
+
+Implementing the 95% model would be an empirical fit of exactly the kind METHOD.md
+warns about. It would look convincing and be wrong at the silhouette, which is
+precisely where the difference shows.
 
 **What it does buy** is a target for reading the code. The search is no longer "what
 writes `+0x4c`" with no constraints; it is "find the load-time pass that computes a

@@ -105,6 +105,7 @@ static unsigned long g_peek_back = 0;
 static unsigned char g_scan[32]; static int g_scan_len = 0;
 static unsigned long g_scan_lo = 0x1000000, g_scan_hi = 0x8000000;
 static unsigned long g_scan_count = 0;   /* vertices to walk at each live hit */
+static unsigned long g_scan_norm = 0;    /* how many normals to dump */
 
 static const char *envs(const char *n) {
     static char buf[64];
@@ -130,6 +131,7 @@ static void init_once(void) {
     if ((v = envs("SUNF_SCAN_LO")))      g_scan_lo = strtoul(v, NULL, 16);
     if ((v = envs("SUNF_SCAN_HI")))      g_scan_hi = strtoul(v, NULL, 16);
     if ((v = envs("SUNF_SCAN_COUNT")))   g_scan_count = strtoul(v, NULL, 10);
+    if ((v = envs("SUNF_SCAN_NORM")))    g_scan_norm = strtoul(v, NULL, 10);
     if ((v = envs("SUNF_SCAN"))) {
         int i = 0;
         while (v[i * 2] && v[i * 2 + 1] && i < (int)sizeof g_scan) {
@@ -328,6 +330,21 @@ static void do_scan(void) {
                 line[ln] = 0;
                 /* Emit the FULL bitmap in 64-vertex rows so the rule can be
                  * correlated against vertex positions offline. */
+                /* Dump the engine's OWN normals (+0x3c/+0x40/+0x44) alongside the
+                 * flag, so the facing rule can be tested against the data the engine
+                 * actually used rather than against the port's recomputation. Raw
+                 * float bits, printed as hex, so nothing is lost to formatting. */
+                if (g_scan_norm) {
+                    unsigned long k3;
+                    for (k3 = 0; k3 < i && k3 < g_scan_norm; k3++) {
+                        unsigned char *vk = v + k3 * 0x74;
+                        unsigned long nx = *(unsigned long *)(vk + 0x3c);
+                        unsigned long ny = *(unsigned long *)(vk + 0x40);
+                        unsigned long nz = *(unsigned long *)(vk + 0x44);
+                        TR("nrm %lu %lx %lx %lx %lu", k3, nx, ny, nz,
+                           *(unsigned long *)(vk + 0x4c));
+                    }
+                }
                 { unsigned long r; for (r = 0; r < i; r += 64) {
                     unsigned long c; int m = 0;
                     for (c = r; c < r + 64 && c < i; c++)
