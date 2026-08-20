@@ -116,3 +116,9 @@ productions/*/work/verify/inspect/notes/
 # Makefile are committed, the PE is not. It is a Windows binary (the pre-commit
 # hook rejects MZ headers) and it is regenerable in one `make`.
 tools/winebox/bassstub/BASS.DLL
+# Genoaux's soundtrack, held back like Energia's: the extraction's other 19 files
+# are tracked so a fresh clone can run the corpus check and the runtime, but the
+# music is 3.7 MB of a scener's work and this repo does not publish it until the
+# site's publication story is decided. work/MANIFEST.sha256 still hashes it, so
+# the extraction remains fully described; rehydrate with work/unpack.mjs.
+productions/genoaux/work/unpacked/hjb_geno/Data/mouthwash.mp3

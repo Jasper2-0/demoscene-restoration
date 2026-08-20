@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "slug": "genoaux",
+  "title": "Genoaux",
+  "group": "Haujobb",
+  "kind": "restoration",
+  "platform": "Windows",
+  "releaseDate": "2003-01-11",
+  "party": {
+    "name": "Alternative Party 2003",
+    "compo": "Alternative Demo",
+    "ranking": 17
+  },
+  "ids": {
+    "demozoo": 63983,
+    "pouet": 8528
+  },
+  "links": {
+    "demozoo": "https://demozoo.org/productions/63983/",
+    "pouet": "https://www.pouet.net/prod.php?which=8528",
+    "youtube": "https://www.youtube.com/watch?v=6xZLjlROah0"
+  },
+  "credits": [
+    {
+      "name": "Cynic",
+      "role": "Code"
+    },
+    {
+      "name": "Droidi",
+      "role": "Code"
+    },
+    {
+      "name": "Xhale",
+      "role": "Music"
+    },
+    {
+      "name": "Visualice",
+      "role": "Other",
+      "note": "direction"
+    }
+  ],
+  "originals": [
+    {
+      "path": "originals/haujobb/hjb_geno.zip",
+      "urls": [
+        "https://files.scene.org/get/parties/2003/altparty03/demo/hjb_geno.zip",
+        "https://files.scene.org/get/demos/groups/haujobb/hjb_geno.zip"
+      ],
+      "sha256": "777c5b8511147641c5d25f6108d245174e441c2b1ed425a2a1ac26929b096e04",
+      "bytes": 5043798,
+      "note": "archive VERIFIED byte-identical to the unpacked tree at originals/haujobb/hjb_geno/ (recursive diff clean, 24 files) on 2026-08-19."
+    }
+  ],
+  "captures": [
+    {
+      "youtube": "6xZLjlROah0",
+      "path": "productions/genoaux/work/reference/genoaux_ref.mkv",
+      "format": "bestvideo+bestaudio",
+      "sha256": null,
+      "alignmentOffsetMs": null,
+      "note": "CANDIDATE, not fetched and not confirmed to be this production. Sourced from the pouet page. Verify it is Genoaux and not a sibling before recording; the soundtrack is mouthwash.mp3, 160.026 s, so a capture much longer or shorter than ~2:40 is the wrong prod."
+    }
+  ],
+  "status": {
+    "web": "engineering",
+    "pagesRepo": null
+  }
+}
