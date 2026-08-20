@@ -711,9 +711,27 @@ confirmed to be the material struct the draw path consumes, not a lookalike.
 — woah3's material 2, the one the `B2.LWO0n` meshes use, and the one whose triangles
 are measurably rejected (3468 -> ~2400).
 
-That **resolves the blocking caveat**: the file blob's byte 0x94 and the runtime
-struct's `+0x94` agree, so the asset table recorded above can be read at face value.
-The gate is confirmed ACTIVE for the LWO meshes.
+**RETRACTED — that inference was one sample wide.** Dumping the material
+neighbourhood (stride **0xe0**) reads two of woah3's three materials:
+
+| address | name | `+0x94` | blend `+08/+0c` | mesh | rejected? |
+|---|---|--:|---|---|---|
+| 0x4785720 | Material #2 | **0** | 0x302 / 0x303 | `B2.LWO0n` | **YES** |
+| 0x4785800 | Material #1 | **0** | 0x302 / 0x0001 | `QuadPatch01/02` | **no** |
+
+Both are zero. So `material+0x94` does **not** discriminate: the gate is uniformly
+ACTIVE, and QuadPatch keeps all 1944 vertices while the LWOs lose ~30% anyway.
+
+Two consequences, both important:
+
+* **The file blob does NOT map to the runtime struct at 0x94.** The asset bytes read
+  62 / 63 / 0 for materials 0 / 1 / 2; the runtime reads 0 / 0 / ?. Material 2
+  agreeing was coincidence. **The asset-side correlation table above is meaningless
+  and must not be used** — including as the basis for any threshold.
+* **The criterion is the per-vertex `+0x4c`, confirmed.** It is not a material
+  property, not a scale threshold on a material float, and not an override. Two
+  meshes under materials with identical `+0x94` behave differently, so the
+  discrimination is per vertex, exactly as the gate reads it.
 
 **Still unexplained**: material 0 (`Original`) has a non-zero 0x94 yet its mesh is
 also reduced, 10278 -> 6525. Either the runtime material order differs from the file

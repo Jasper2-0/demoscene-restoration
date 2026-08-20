@@ -36,6 +36,9 @@
  *   SUNF_TRACE       log every call to stderr as [fsoundstub] ...
  *   SUNF_PEEK        "addr:len" (hex) — dump engine memory once per frame
  *   SUNF_PEEK_PTR    "addr:len" (hex) — DEREFERENCE addr, then dump len from there
+ *   SUNF_PEEK_BACK   hex bytes to step BACK from the dereferenced target before
+ *                    dumping. The engine binds one material at a time, so reaching
+ *                    its siblings means walking the allocation neighbourhood.
  *
  * WORKING. It is triggered from FMUSIC_GetOrder rather than from the QPC hook,
  * because the engine calls GetOrder only about THREE times over a whole run — not
@@ -90,6 +93,7 @@ static long   g_qpc_calls = 0;
 static void parse_peek(const char *v, int deref);   /* defined below, used by init_once */
 static void do_peek(void);                          /* and by FMUSIC_GetOrder */
 static long g_peek_frames = 0;
+static unsigned long g_peek_back = 0;
 
 static const char *envs(const char *n) {
     static char buf[64];
@@ -111,6 +115,7 @@ static void init_once(void) {
     if ((v = envs("SUNF_QPC_FREQ")))     g_qpc_freq = atoll(v);
     if ((v = envs("SUNF_QPC_LATCH")))    g_qpc_latch = atol(v);
     if ((v = envs("SUNF_QPC_HOLD")))   { g_qpc_hold = atof(v); g_qpc_forced = 1; }
+    if ((v = envs("SUNF_PEEK_BACK")))    g_peek_back = strtoul(v, NULL, 16);
     parse_peek(envs("SUNF_PEEK"), 0);
     parse_peek(envs("SUNF_PEEK_PTR"), 1);
 }
@@ -261,9 +266,12 @@ static void do_peek(void) {
     if (g_peek_deref) {
         unsigned long target = *(unsigned long *)p;
         TR("peek: [%#lx] -> %#lx", g_peek_addr, target);
-        if (!target || IsBadReadPtr((void *)target, g_peek_len)) {
+        if (!target) { TR("peek: null target"); g_peek_done = 1; return; }
+        target -= g_peek_back;
+        if (IsBadReadPtr((void *)target, g_peek_len)) {
             TR("peek: target %#lx unreadable", target); g_peek_done = 1; return;
         }
+        TR("peek: dumping from %#lx (back %#lx)", target, g_peek_back);
         p = (unsigned char *)target;
     } else if (IsBadReadPtr(p, g_peek_len)) {
         TR("peek: range unreadable"); g_peek_done = 1; return;
