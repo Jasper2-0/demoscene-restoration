@@ -1,0 +1,5 @@
+block .text 00401000-00432fff execute=true
+undefined bytes in executable blocks: 141809
+disassembly attempted at 132085 addresses, 1573 produced code
+instructions 62574 -> 70205  (+7631)
+functions    1077 -> 1279  (+202, 198 created here)

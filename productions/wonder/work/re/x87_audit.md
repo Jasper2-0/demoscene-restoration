@@ -1,29 +1,49 @@
-# x87 audit — 61 flagged of 954 functions
+# x87 audit — 91 flagged of 1152 functions
 
 Treat DROPPED as un-ported until the asm has been read (METHOD.md §3).
 
 | verdict | function | addr | x87 instrs | C float evidence |
 |---|---|---|---:|---:|
 | DROPPED | FUN_00427c06 | 00427c06 | 38 | 0 |
+| DROPPED | FUN_00427ebe | 00427ebe | 38 | 0 |
+| DROPPED | FUN_00427400 | 00427400 | 29 | 0 |
 | DROPPED | FUN_004318f2 | 004318f2 | 23 | 0 |
 | DROPPED | FUN_00404a00 | 00404a00 | 22 | 0 |
 | DROPPED | FUN_00427e0c | 00427e0c | 19 | 0 |
+| DROPPED | FUN_004280c4 | 004280c4 | 19 | 0 |
 | DROPPED | FUN_0040e060 | 0040e060 | 15 | 0 |
+| DROPPED | FUN_00431c4e | 00431c4e | 15 | 0 |
 | DROPPED | FUN_00404760 | 00404760 | 14 | 0 |
 | DROPPED | FUN_004265ba | 004265ba | 14 | 0 |
 | DROPPED | FUN_00406d20 | 00406d20 | 12 | 0 |
 | DROPPED | FUN_004230a2 | 004230a2 | 11 | 0 |
 | DROPPED | FUN_00425be0 | 00425be0 | 10 | 0 |
 | DROPPED | FUN_00431ac5 | 00431ac5 | 10 | 0 |
+| DROPPED | FUN_00431c91 | 00431c91 | 10 | 0 |
 | DROPPED | __trandisp2 | 00425a17 | 7 | 0 |
+| DROPPED | FUN_00431afd | 00431afd | 7 | 0 |
 | DROPPED | FUN_00404e10 | 00404e10 | 6 | 0 |
 | DROPPED | FUN_00404e40 | 00404e40 | 6 | 0 |
 | DROPPED | FUN_00404e80 | 00404e80 | 6 | 0 |
+| DROPPED | FUN_00425b17 | 00425b17 | 6 | 0 |
 | DROPPED | FUN_00425e58 | 00425e58 | 6 | 0 |
 | DROPPED | __cintrindisp2 | 00427190 | 5 | 0 |
+| DROPPED | FUN_00427a03 | 00427a03 | 5 | 0 |
+| DROPPED | FUN_00427a4f | 00427a4f | 5 | 0 |
+| DROPPED | FUN_00427a8b | 00427a8b | 5 | 0 |
+| DROPPED | FUN_00427abf | 00427abf | 5 | 0 |
+| DROPPED | FUN_00427b03 | 00427b03 | 5 | 0 |
+| DROPPED | FUN_00427b4f | 00427b4f | 5 | 0 |
+| DROPPED | FUN_00427b8b | 00427b8b | 5 | 0 |
+| DROPPED | FUN_00427bbf | 00427bbf | 5 | 0 |
+| DROPPED | FUN_00431c00 | 00431c00 | 5 | 0 |
 | DROPPED | FUN_00404de0 | 00404de0 | 4 | 0 |
 | DROPPED | FUN_00406db0 | 00406db0 | 4 | 0 |
+| DROPPED | FUN_004224b4 | 004224b4 | 4 | 0 |
+| DROPPED | FUN_00425aed | 00425aed | 4 | 0 |
 | DROPPED | __trandisp1 | 004259b0 | 3 | 0 |
+| DROPPED | FUN_00425ab4 | 00425ab4 | 3 | 0 |
+| DROPPED | FUN_00425b56 | 00425b56 | 3 | 0 |
 | DROPPED | FUN_00401230 | 00401230 | 2 | 0 |
 | DROPPED | FUN_00401360 | 00401360 | 2 | 0 |
 | DROPPED | FUN_00401460 | 00401460 | 2 | 0 |
@@ -32,17 +52,27 @@ Treat DROPPED as un-ported until the asm has been read (METHOD.md §3).
 | DROPPED | FUN_00423207 | 00423207 | 2 | 0 |
 | DROPPED | FUN_0042332a | 0042332a | 2 | 0 |
 | DROPPED | FUN_00423426 | 00423426 | 2 | 0 |
+| DROPPED | FUN_00425aa8 | 00425aa8 | 2 | 0 |
 | DROPPED | __fload_withFB | 00425c25 | 2 | 0 |
 | DROPPED | __math_exit | 00425c8b | 2 | 0 |
 | DROPPED | FUN_00426597 | 00426597 | 2 | 0 |
 | DROPPED | __cintrindisp1 | 004271ce | 2 | 0 |
+| DROPPED | FUN_004279b6 | 004279b6 | 2 | 0 |
+| DROPPED | FUN_004279c9 | 004279c9 | 2 | 0 |
+| DROPPED | FUN_00427bf1 | 00427bf1 | 2 | 0 |
 | DROPPED | FUN_0042980d | 0042980d | 2 | 0 |
+| DROPPED | FUN_00431b46 | 00431b46 | 2 | 0 |
+| DROPPED | FUN_00425adf | 00425adf | 1 | 0 |
 | DROPPED | FUN_00425bf5 | 00425bf5 | 1 | 0 |
 | DROPPED | FUN_00425c0c | 00425c0c | 1 | 0 |
 | DROPPED | FUN_00425c7e | 00425c7e | 1 | 0 |
 | DROPPED | FUN_0042657a | 0042657a | 1 | 0 |
 | DROPPED | __ctrandisp2 | 0042720b | 1 | 0 |
 | DROPPED | __ctrandisp1 | 0042738b | 1 | 0 |
+| DROPPED | FUN_00427a20 | 00427a20 | 1 | 0 |
+| DROPPED | FUN_00427a6c | 00427a6c | 1 | 0 |
+| DROPPED | FUN_00427b20 | 00427b20 | 1 | 0 |
+| DROPPED | FUN_00427b6c | 00427b6c | 1 | 0 |
 | SUSPECT | FUN_00430e80 | 00430e80 | 456 | 17 |
 | SUSPECT | FUN_004024a0 | 004024a0 | 417 | 39 |
 | SUSPECT | FUN_0040ab70 | 0040ab70 | 394 | 10 |

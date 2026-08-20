@@ -122,10 +122,33 @@ Searched and NOT found in `disasm.asm`: any byte or dword store to `+0x4c` on a
 (`0x004063a7`, `0x004069f4`) belong to other structures — one is a 4x4 identity
 matrix init, recognisable by `0x3f800000` at +0x70.
 
-The likely reason is that **the export is incomplete**: the jump-table targets at
-0x408140-0x4081bf were also absent from `disasm.asm` and had to be disassembled
-directly with capstone before the handler selection could be read at all. A fresh
-Ghidra pass that force-disassembles the gaps is the next step, not more grepping.
+**The export was in fact incomplete, and that has now been fixed** —
+`tools/ghidra/ForceDisasm.java`, run before the exporters, disassembles executable
+bytes the analyser left undefined and promotes them to functions so
+`ExportDisasm`/`ExportDecomp` (which iterate FUNCTIONS) can see them:
+
+```
+undefined bytes in executable blocks: 141809
+disassembly attempted at 132085 addresses, 1573 produced code
+instructions 62574 -> 70205  (+7631)
+functions    1077 -> 1279  (+202)
+```
+
+Validated on the known gap: 0x408140-0x4081bf went from 1 line to 18 and now
+matches what capstone produced by hand. The x87 audit was re-run over the larger
+export and flags 91 of 1152 functions, up from 61 of 954.
+
+**The write to vertex+0x4c is STILL not located**, now searched against the
+complete export. Eliminated by inspection rather than by absence of a grep hit:
+the `0x4c` sites at 0x409660/0x409680 are a doubly-linked list's prev/next pair,
+0x004069f4 is a 4x4 identity-matrix init, and `param_1[0x4c] = 1` in FUN_00415d30
+is libjpeg (`param_1` is `int*`, so byte offset 0x130).
+
+No byte-sized store to +0x4c exists anywhere in the binary, so the flag is
+written as a dword and read as a byte by the cull test. That is a useful
+constraint on where to look next, and it argues for approaching from the
+transform side — find what fills the 116-byte vertex array at `[obj+0x80]` per
+instance — rather than by searching for the offset.
 
 Two observations for whoever picks this up:
 
