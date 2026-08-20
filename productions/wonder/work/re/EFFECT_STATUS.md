@@ -787,3 +787,36 @@ nobody has yet. The bounded ways to get one:
 * or find the container that owns the objects — `[obj+0xe0]` points AT a material, so
   a scan for a dword equal to a known material address yields an object minus 0xe0,
   given a wide enough window to scan.
+
+### faceted.js is VERIFIED CORRECT against the binary
+
+Chasing the 3.82x alpha discrepancy on `effect_40c990` led to `faceted.js`'s
+`ENVELOPE_TIME_ORIGIN = 69.753`, which looks wrong — the clip starts at 138.302, and
+69.753 is *woah3's* start, present in `woah3.js` with the same name. It reads exactly
+like a copy-paste bug.
+
+**It is not.** `forced_0040cb20` (faceted) samples its envelope with
+`FUN_004058b0(env, localTime + _DAT_004333c8)`, and `forced_00410410` (woah3) uses
+**the same constant**. `_DAT_004333c8` is a double equal to **69.753**, so the origin
+is genuinely shared between the two effects in the original.
+
+The rest of the effect's scalars check out too:
+
+| original | value | port |
+|---|--:|---|
+| `_DAT_00433238` | 1.0 | `firstAlpha = 1 - pulse * 0.8` |
+| `_DAT_004334e0` | 0.8 | ^ |
+| `_DAT_004334d0` | 15.138 | `SECOND_FADE_START = 15.138` |
+| `_DAT_004334c8` | 0.6 | `fade = min(1, (time - START) * 0.6)` |
+
+`_DAT_004360c4 = _DAT_00433238 - env * _DAT_004334e0` is the original's global-alpha
+write, and it is `1 - pulse * 0.8` exactly.
+
+**So the 3.82x discrepancy is not in this effect's alpha logic.** It is either a
+measurement artefact — the two sides may not have been at the same instant, since the
+port sample came from `--order 18` via `positionAt` while the original came from a
+frozen-clock recording — or it is in the material opacity that multiplies it, which
+the port takes from the EXP and which has not been checked.
+
+**Do not "fix" faceted.js.** Four of its constants are now confirmed against the
+binary.
