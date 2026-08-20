@@ -558,3 +558,40 @@ in `dust-tunnel.js`.
 * **apitrace replay** as a way to render the original's own frames — `glretrace`
   segfaults under `qemu-i386`. The reference capture remains the only pixel ground
   truth.
+
+### The rejection is at DRAW time, not load time — and the criterion is still unread
+
+The loader `FUN_00401b20` (547 instructions) reads faces in a plain loop and stores
+every one of them via `FUN_00406c20`; there is no rejection there, and the triangle
+array holds all 1156. The draw loop at 0x004076aa iterates `[obj+0xdc]` — the full
+count — and the gate at 0x004076cf decides per triangle, incrementing the survivor
+counter at 0x00485e08. So the reduction is a draw-time test, as first read.
+
+**But no write to `vertex+0x4c` exists anywhere in the binary.** Searched, over the
+force-disassembled export (+7,631 instructions): byte stores, dword stores, indexed
+forms, `LEA`-computed addresses, and float stores. Every non-stack `+0x4c` site
+belongs to another structure — a doubly-linked list's prev/next, a 4x4 identity
+matrix init, libjpeg's `int*` at byte offset 0x130, or CRT code above 0x430000.
+
+That leaves an unresolved contradiction worth stating rather than papering over:
+
+* if `+0x4c` is never written it stays 0, the `OR` of three zeros is zero, and the
+  gate would skip EVERY triangle — but triangles are plainly drawn;
+* so either the material override at `+0x94` is non-zero for these meshes, making the
+  `+0x4c` test irrelevant and the real reduction something else entirely, or the
+  write exists somewhere the export still does not reach.
+
+**Both branches are testable and neither is guessable.** The decisive one is cheap:
+read `material+0x94` for woah3's materials. If it is non-zero, this gate is a red
+herring and the search restarts from the survivor counter at 0x00485e08 — find who
+else writes it, or trace back from `[EDX+0xcc]`, the per-triangle handler.
+
+A second option now exists that did not before: the FSOUND stub runs **inside the
+process**, so it can read the engine's memory directly. Walking the vertex array at
+`[obj+0x80]` and printing `+0x4c` for a known object would settle in one run what
+static search has not settled in several. That is a bigger change than it sounds —
+the stub would need the object pointer — but it is the direction with a guaranteed
+answer.
+
+**Status: Phase 4 of the plan is BLOCKED on this, and Phase 1 depends on Phase 4**
+because they are the same defect. Phases 2, 3 and 5 remain open and independent.
