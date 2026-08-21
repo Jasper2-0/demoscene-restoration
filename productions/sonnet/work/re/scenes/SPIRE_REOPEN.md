@@ -367,3 +367,125 @@ scene-0 RMSE, adds a fitted model to the instrument, and perturbs every other
 frame-count accumulator demo-wide (would need a full-sweep A/B + rebless).
 Constant-30 is refuted (late positions regress).  Per FIXLOOP.md, changing
 the instrument is not the loop's call.
+
+## Session 2026-08-21 — answering the surfaced question, and the scope is DEMO-WIDE
+
+The 2026-08-11 session closed with "surfaced to Jasper (harness-calibration
+decision)", recommending option (a): document the floor, **judge scene 0 by
+eye**, move on.
+
+Jasper judged it by eye. The verdict came back negative — from the inspector at
+**0x0606**, filed as issue #46:
+
+> in the reference there are 8 spires visible in ours I count 24
+
+Note the position. Every by-eye check in this file was done at **0x0628**, in
+the steady state where all 80 blades are grown. 0x0606 is inside the GROWTH
+band — the region §"The frame-rate fit" measured as fitting ~30 fps, not 60.
+The eye was pointed somewhere the previous sessions never looked.
+
+### The count reproduces the frame-rate fit, independently
+
+`?pos=0x0606&quality=original&warm=0`, counting instances directly out of
+`__sonnetObjects[].spires[].recs`:
+
+| warmstep | armed | grown (t = 1) | partial | mean cluster T |
+|---|--:|--:|--:|--:|
+| 30 | 49 | **21** | 28 | 0.53 |
+| 60 | 80 | **68** | 12 | 0.53 |
+| 120 | 80 | **80** | 0 | 0.53 |
+
+**`mean T` is identical at all three rates.** That is the control, and it is
+what makes this a measurement rather than an observation: `T` accumulates
+`+= dt` where `dt` comes from elapsed MUSIC ms, so it cannot be the clock, the
+position or `SPIRE_GROW`. The difference is isolated to the two lines that run
+once per TICK rather than once per unit time:
+
+```js
+if (c.growing) rec.delay = F(rec.delay - T);     // Σ over ticks, not ∫ dt
+rec.t = F(rec.t + F(T * K.SPIRE_GROW));
+```
+
+Grown count 21 -> 68 across 30 -> 60 fps is **3.2x**. Jasper counted 8 -> 24,
+which is **3x**. An eyeball count and a disassembly-derived rate fit agreeing
+to within 7% is much stronger than either alone, and it means the reference
+machine was running at roughly HALF our default warm rate through this band —
+exactly what §"The frame-rate fit" concluded from RMSE, reached by a completely
+different route.
+
+### Why the count is the right instrument and RMSE is not
+
+§"The steady state" hit a floor because thin high-contrast blades are dominated
+by sub-pixel registration: a few pixels of offset costs RMSE enormously while
+saying nothing about whether the FIELD is right. A count is immune to
+registration entirely. This is TODO.md's "silhouette-based timing probe"
+argument arriving in practice: whole-frame luma is badly conditioned for
+judging animation TIMING, and the fix is to measure the thing that is actually
+wrong.
+
+That is why three sessions of RMSE could not settle this and one glance could.
+
+### THE SCOPE IS NOT THE SPIRES — every scene is frame-rate dependent
+
+Render the same music position at two warm rates and diff the pixels. A
+frame-rate-independent scene must come back identical.
+
+| position | scene | RMSE (30 vs 60) |
+|---|---|--:|
+| 0x0200 | title / poem | 0.072 |
+| **0x0606** | **scene 0 spires** | **55.77** |
+| 0x0900 | scene 1 lakes | 9.33 |
+| 0x0c08 | scene 2 trees | 6.35 |
+| 0x1000 | scene 3 cloud sea | 4.97 |
+| **0x1410** | **scene 4 beach** | **36.09** |
+| 0x1a30 | scene 5 autumn | 6.38 |
+| **0x2030** | **scene 7 winter** | **21.52** |
+| 0x2500 | scene 8 finale | 3.44 |
+
+The title card's **0.072 is the noise floor** — float accumulation over a
+different number of smaller steps. Everything above it is a real mechanism.
+
+Put beside the port's own accuracy, this is not a minor axis: the whole-demo
+median RMSE is **24.35**, and spires, beach and winter all meet or exceed it.
+**Frame rate is one of the largest single error sources in the port**, larger
+than most defects the fix loop has chased. The 2026-08-11 session suspected as
+much — it warned that option (b) "perturbs every other frame-count accumulator
+demo-wide" — but it was never measured until now.
+
+A grep for the spires' double-integration pattern found NOTHING outside
+`#stepSpires`, and that grep was wrong: it matched only the mechanism already
+known, so it confirmed the expectation instead of testing it. Beach and winter
+must therefore have their own per-tick mechanisms (ribbon phase wrap and
+precipitation respawn are the obvious suspects) and neither has been read yet.
+
+⚠ **METHOD NOTE, worth more than the finding.** The first version of this
+measurement reported all nine scenes IDENTICAL, and that was a broken test:
+`toDataURL` was read in a separate `page.evaluate` from the render, so the
+drawing buffer had already been cleared and every frame compared was BLANK.
+`sweep.mjs:49` documents the requirement — render and read back in ONE
+evaluate — and it was not followed. The failure mode is the dangerous kind: a
+blank-vs-blank comparison reads as "identical", which was both a plausible
+answer and the one being looked for. Only a control — rmse(0x0606, 0x0900),
+which MUST be large — caught it. Any diff harness in this repo that can return
+"no difference" needs a positive control in the same run.
+
+### What this does NOT settle
+
+`FUN_0040bfc1` really is doubly integrated in the ORIGINAL, so the original was
+frame-rate dependent too and looked different on different 2001 machines. There
+is no single "correct" appearance to port to.
+
+But the live page ticks per `requestAnimationFrame` (main.js `frame`), while
+every harness path uses a fixed `WARM_STEP`. So the PUBLISHED SITE renders a
+different demo depending on the viewer's monitor: 68 grown spires at 0x0606 on
+a 60 Hz display, all 80 on a 120 Hz one. That is not a capture-matching
+question and it is not what any previous session was weighing — it is
+non-determinism in the artefact itself, and it now matters because the shipped
+default was just changed to publish sonnet as it was (REMASTER.md, 2026-08-21).
+
+Open decision, NOT taken here: pin the per-tick accumulation to a fixed
+timestep so the visual state is a function of music position alone. That
+diverges from the original's code in order to preserve the original's
+appearance — the same trade as the resolution reset, and the same kind of call.
+Deciding it needs the beach and winter mechanisms read first, since a fix aimed
+only at `#stepSpires` would leave the other two thirds of the error in place.
