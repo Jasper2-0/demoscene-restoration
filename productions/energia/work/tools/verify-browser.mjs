@@ -1,3 +1,7 @@
+// MODE:       CHECK — node:assert/strict, so a failed checkpoint exits non-zero.
+// OBSERVABLE: the set of effects the port reports ACTIVE at fixed show seconds,
+//             against boundaries read from FUN_0040d950's paired x87 comparisons.
+// UNITS:      show seconds. Checkpoints are boundaries plus midpoints, not a sweep.
 import assert from 'node:assert/strict';
 import { assertClean, withPage } from '../../../../tools/harness/index.mjs';
 

@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 // Verify an assembled Wonder dist tree independently of the build that made it.
 //
+// MODE:       CHECK
+// OBSERVABLE: what is ACTUALLY on disk in the dist tree — presence, size and
+//             filename case — never what the build intended to put there.
+// UNITS:      bytes and exact paths.
+//
 //   node tools/verify-wonder-dist.mjs dist/wonder-webgl
 //
 // WHY THIS EXISTS SEPARATELY FROM check-sunflower-assets.mjs.  That tool proves

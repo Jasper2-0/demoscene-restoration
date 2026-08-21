@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+// MODE:       CHECK — throws, and therefore exits non-zero, on any mismatch.
+// OBSERVABLE: SHA-256 of every runtime asset against the manifest and against the
+//             preserved extraction, plus path spelling and filename case.
+// UNITS:      digests and exact paths. Case matters: it is the difference a
+//             case-insensitive volume hides until publication.
 
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';

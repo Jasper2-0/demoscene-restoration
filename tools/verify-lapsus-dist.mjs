@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 // Verify an assembled Lapsus dist tree independently of the build that made it.
 //
+// MODE:       CHECK
+// OBSERVABLE: what is ACTUALLY on disk in the dist tree — presence, size and
+//             filename case — never what the build intended to put there.
+// UNITS:      bytes and exact paths.
+//
 //   node tools/verify-lapsus-dist.mjs dist/lapsus-webgl
 //
 // WHY THIS IS SEPARATE FROM THE BUILD.  The build knows what it MEANT to copy.

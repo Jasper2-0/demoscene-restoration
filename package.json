@@ -1,7 +1,7 @@
 {
   "name": "demoscene-restoration",
   "private": true,
-  "description": "Demoscene restoration monorepo — reverse-engineered browser reconstructions of classic productions. Dependencies here are authoring/verification toolchain only; every shipped site is dependency-free at runtime.",
+  "description": "Demoscene restoration monorepo \u2014 reverse-engineered browser reconstructions of classic productions. Dependencies here are authoring/verification toolchain only; every shipped site is dependency-free at runtime.",
   "workspaces": [
     "tools",
     "productions/ptct/work/js"
@@ -10,6 +10,11 @@
     "test:shared": "node --test \"shared/sunflower/test/*.test.mjs\"",
     "test:haujobb": "node shared/haujobb/test/hjb-vs-oracle.mjs ${HAUJOBB_CORPUS:-originals/haujobb}",
     "verify:energia": "node productions/energia/work/tools/verify-browser.mjs",
-    "test:haujobb-geometry": "node shared/haujobb/test/geometry-vs-trace.mjs \"${HAUJOBB_LISTS:-work/lists.json}\" \"${HAUJOBB_DATA:-productions/genoaux/work/unpacked/hjb_geno/Data}\""
+    "test:haujobb-geometry": "node shared/haujobb/test/geometry-vs-trace.mjs \"${HAUJOBB_LISTS:-work/lists.json}\" \"${HAUJOBB_DATA:-productions/genoaux/work/unpacked/hjb_geno/Data}\"",
+    "lint:tools": "node tools/lint-investigation-tools.mjs",
+    "check:shared-runtime": "node tools/sync-shared-runtime.mjs --check",
+    "verify:repo": "npm run lint:tools && npm run test:tools && npm run check:shared-runtime",
+    "verify:all": "npm run verify:repo && npm run test:shared",
+    "test:tools": "node --test \"tools/test/*.test.mjs\""
   }
 }

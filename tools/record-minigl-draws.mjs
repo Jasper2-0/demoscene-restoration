@@ -3,6 +3,7 @@
 // same shape tools/winebox/parse-gl-trace.mjs produces for the ORIGINAL.
 //
 //   node tools/record-minigl-draws.mjs <production> --time 12.5 [--out port.jsonl]
+//   node tools/record-minigl-draws.mjs wonder --time 54.87 --only effect_40ec40
 //   node tools/record-minigl-draws.mjs wonder --order 20 [--out port.jsonl]
 //
 // WHY NOT RECORD WebGL. The obvious move is to wrap the WebGL2 context and log
@@ -22,12 +23,15 @@
 // the app is using, and patching its prototype affects the live instance. The
 // adapter's render() is documented as safe to call repeatedly, so recording is
 // just: patch, render, read back.
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { withPage } from './harness/index.mjs';
+import { withPage, fromRepo } from './harness/index.mjs';
 
 const argv = process.argv.slice(2);
 const production = argv.find((a) => !a.startsWith('--'));
+// A comma-separated whitelist passed to render({ only }), not to the URL.
+const onlyArg = (() => { const i = argv.indexOf('--only'); return i < 0 ? null : argv[i + 1]; })();
+const onlyList = onlyArg ? onlyArg.split(',').map((x) => x.trim()).filter(Boolean) : null;
 const opt = (n, d = null) => {
   const i = argv.indexOf(`--${n}`);
   return i < 0 ? d : argv[i + 1] ?? true;
@@ -37,18 +41,30 @@ if (!production) {
   process.exit(2);
 }
 
-const ROOTS = {
-  wonder: { root: 'productions/wonder/web', minigl: './js/shared/minigl.js' },
-  energia: { root: 'productions/energia/web', minigl: './js/shared/minigl.js' },
-};
-const cfg = ROOTS[production];
-if (!cfg) { console.error(`unknown production ${production}; known: ${Object.keys(ROOTS).join(', ')}`); process.exit(2); }
+// Derived, not tabulated. A shared tool must not carry a list of the productions it
+// happens to have been used on — that is how `oracle-at.sh` came to look general while
+// only working for Wonder. Every port that vendors the shared runtime puts MiniGL at
+// the same place, so the layout IS the contract; anything that does not follow it says
+// so here rather than being silently absent from a table.
+const cfg = { root: `productions/${production}/web`, minigl: './js/shared/minigl.js' };
+for (const [what, rel] of [['production', ''], ['MiniGL module', 'js/shared/minigl.js'],
+                           ['page', 'index.html']]) {
+  const probe = rel ? fromRepo(cfg.root, rel) : fromRepo(cfg.root);
+  if (!existsSync(probe)) {
+    console.error(`no ${what} at ${cfg.root}${rel ? `/${rel}` : ''}`);
+    console.error(`known productions: ${readdirSync(fromRepo('productions')).sort().join(', ')}`);
+    process.exit(2);
+  }
+}
 
 let status = 0;
 // withPage owns the server and the browser, per tools/harness/README.md — this
 // tool should not stand up its own, which is exactly the duplication the shared
 // harness exists to end.
-await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors }) => {
+// --query appends to the page URL, so an experimental flag in the port (e.g.
+// ?cull=facing) can be recorded against the SAME original trace as the default.
+const extraQuery = opt('query', '');
+await withPage({ root: cfg.root, query: `?inspect=1${extraQuery ? `&${extraQuery}` : ''}` }, async ({ page, errors }) => {
   await page.waitForFunction('window.__demoReady === true || !!window.__demo', { timeout: 60000 });
 
   // Install the recorder on the shared prototype.
@@ -57,7 +73,8 @@ await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors })
     const P = mod.MiniGL?.prototype;
     if (!P) return { ok: false, why: 'no MiniGL export' };
     if (P.__recInstalled) return { ok: true, already: true };
-    const rec = (window.__rec = { ops: [], prim: null, tex: 0, unit: 0, on: false });
+    const rec = (window.__rec = { ops: [], prim: null, tex: 0, unit: 0, on: false,
+      blend: false, bf: '?', depth: false, dmask: '?' });
     // minigl's own primitive constants (QUADS 1, TRIANGLES 2, LINES 3, POINTS 4).
     // Emit GL's NAMES so a record lines up with the original's side, which comes
     // from Wine and is named. Comparing 2 against "TRIANGLES" would fail for a
@@ -75,7 +92,75 @@ await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors })
       return t.__recId;
     };
 
+    // A CANONICAL PIPELINE SNAPSHOT per draw. The op strings above stay as they
+    // are (compare-draws reads them); this is the parallel record that can be
+    // diffed field-by-field against the executable's, so a divergence names
+    // itself instead of being guessed at. The fixed-function pipeline is a closed
+    // set: transform, vertex attributes, per-unit texture state, and the raster
+    // gates. Everything below is one of those.
+    rec.states = [];
+    const m16 = (mat) => (mat?.m ? [...mat.m].map((v) => Math.round(v * 1e4) / 1e4) : null);
+    // EFFECTIVE UV, not raw. Wonder scrolls a texture by baking the offset into
+    // its texcoords; the port does the same thing with a texture-matrix
+    // translation. Comparing the matrix alone reports a difference on every such
+    // draw and means nothing — the sampled texel is identical. So apply the unit's
+    // matrix here and compare where the draw actually READS.
+    const uvExtent = (uvs, mat) => {
+      if (!uvs || !uvs.length) return null;
+      const m = mat?.m;
+      let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9;
+      for (let i = 0; i + 1 < uvs.length; i += 2) {
+        let u = uvs[i], v = uvs[i + 1];
+        if (m) { const uu = u * m[0] + v * m[4] + m[12]; v = u * m[1] + v * m[5] + m[13]; u = uu; }
+        if (u < u0) u0 = u; if (u > u1) u1 = u;
+        if (v < v0) v0 = v; if (v > v1) v1 = v;
+      }
+      return [u0, u1, v0, v1].map((x) => Math.round(x * 1e5) / 1e5);
+    };
+    const snapshot = (self, extra) => {
+      const units = (self.textureUnits ?? []).map((u) => ({
+        tex: texId(u.boundTex),
+        size: u.boundTex ? [u.boundTex.__w ?? 0, u.boundTex.__h ?? 0] : [0, 0],
+        enabled: !!u.enabled,
+        sphereMap: !!u.sphereMap,
+        env: u.env?.mode ?? null,
+        envRgb: u.env?.rgb ? `${u.env.rgb.operation}(${(u.env.rgb.sources ?? []).join('|')})` : null,
+        matrix: m16(u.matrix),
+      }));
+      rec.states.push({
+        ...extra,
+        uv: rec.uv ?? null,
+        color: rec.col ?? null,
+        blend: rec.blend, blendFunc: rec.bf,
+        depthTest: rec.depth, depthMask: rec.dmask,
+        cull: rec.cull ?? null, cullFace: rec.cullFace ?? null,
+        lighting: rec.lighting ?? null,
+        modelview: m16(self.matrices?.[self.MODELVIEW]),
+        projection: m16(self.matrices?.[self.PROJECTION]),
+        units,
+      });
+    };
+
+    // TEXTURE IDENTITY BY SIZE, not by bind order. The "n-th distinct texture seen
+    // this frame" scheme is order-sensitive and produced 23 of the 24 differences
+    // this tool still reports. glretrace gives GL_TEXTURE_WIDTH/HEIGHT for the
+    // bound texture on the executable's side, so stamping the same here gives both
+    // sides a key that does not depend on the order anything happened in.
+    const stampSize = (tex, w, h) => { try { if (tex) { tex.__w = w; tex.__h = h; } } catch { /* frozen */ } };
+
     const wrap = (name, fn) => { const orig = P[name]; if (orig) P[name] = fn(orig); };
+    wrap('createTextureFromImage', (o) => function (image, ...rest) {
+      const t = o.call(this, image, ...rest);
+      stampSize(t, image?.width ?? image?.naturalWidth ?? 0, image?.height ?? image?.naturalHeight ?? 0);
+      return t;
+    });
+    wrap('createTextureFromData', (o) => function (data, w, h, ...rest) {
+      const t = o.call(this, data, w, h, ...rest);
+      stampSize(t, w, h);
+      return t;
+    });
+    wrap('enableCullFace', (o) => function (on) { if (rec.on) rec.cull = !!on; return o.apply(this, arguments); });
+    wrap('enableLighting', (o) => function (on) { if (rec.on) rec.lighting = !!on; return o.apply(this, arguments); });
     wrap('begin', (o) => function (mode) { if (rec.on) rec.prim = { mode, n: 0, tex: rec.tex, unit: rec.unit, col: rec.col }; return o.apply(this, arguments); });
     wrap('end', (o) => function () {
       if (rec.on && rec.prim) {
@@ -83,12 +168,27 @@ await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors })
         const c = cols.length === 0 ? ''
           : cols.length === 1 ? ` c${cols[0]}`
           : ` c${cols.length}x[${cols[0]} .. ${cols[cols.length - 1]}]`;
-        rec.ops.push(`prim ${MODE[rec.prim.mode] ?? rec.prim.mode}:${rec.prim.n}:t${rec.prim.tex}${c}`);
+        rec.ops.push(`prim ${MODE[rec.prim.mode] ?? rec.prim.mode}:${rec.prim.n}:t${rec.prim.tex}${c}`
+          + ` [blend=${rec.blend} ${rec.bf} depth=${rec.depth} dmask=${rec.dmask}]`);
+        snapshot(this, { kind: 'prim', mode: MODE[rec.prim.mode] ?? rec.prim.mode, n: rec.prim.n });
         rec.prim = null;
       }
       return o.apply(this, arguments);
     });
     for (const v of ['vertex3', 'vertex3v']) wrap(v, (o) => function () { if (rec.on && rec.prim) rec.prim.n++; return o.apply(this, arguments); });
+    // GL STATE. `compare-draws.mjs` pairs draws by vertex count and says nothing
+    // about the state they were issued under, which is where Wonder's remaining
+    // differences live — an identical primitive under a different blend function
+    // is a different picture. Recording it here lets the two sides be joined.
+    const BF = { 0: 'ZERO', 1: 'ONE', 768: 'SRC_COLOR', 769: 'ONE_MINUS_SRC_COLOR',
+      770: 'SRC_ALPHA', 771: 'ONE_MINUS_SRC_ALPHA', 774: 'DST_COLOR' };
+    wrap('enableBlend', (o) => function (e) { if (rec.on) rec.blend = !!e; return o.apply(this, arguments); });
+    wrap('blendFunc', (o) => function (a, b) {
+      if (rec.on) rec.bf = `${BF[a] ?? a},${BF[b] ?? b}`;
+      return o.apply(this, arguments);
+    });
+    wrap('enableDepthTest', (o) => function (e) { if (rec.on) rec.depth = !!e; return o.apply(this, arguments); });
+    wrap('depthMask', (o) => function (e) { if (rec.on) rec.dmask = String(!!e); return o.apply(this, arguments); });
     wrap('bindTexture', (o) => function (t) { if (rec.on) { rec.tex = texId(t); rec.ops.push(`bind ${rec.tex}@${rec.unit}`); } return o.apply(this, arguments); });
     wrap('activeTexture', (o) => function (u) { if (rec.on) rec.unit = u; return o.apply(this, arguments); });
     // Colour is the SHADING RESULT on the original's side: its per-triangle
@@ -118,7 +218,19 @@ await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors })
     // each so a port that batches is not reported as drawing nothing.
     const colSuffix = () => (rec.col ? ` c${rec.col.join(',')}` : '');
     wrap('drawMesh', (o) => function (mesh, o2) { if (rec.on) rec.ops.push(`mesh ${o2?.count ?? mesh?.count ?? '?'}:t${rec.tex}${colSuffix()}`); return o.apply(this, arguments); });
-    wrap('drawElements', (o) => function (pos, uvs, idx) { if (rec.on) rec.ops.push(`elems ${idx?.length ?? '?'}:t${rec.tex}${colSuffix()}`); return o.apply(this, arguments); });
+    wrap('drawElements', (o) => function (pos, uvs, idx) {
+      if (rec.on) {
+        rec.uv = uvExtent(uvs, this.textureUnits?.[0]?.matrix);
+        // The MODELVIEW in force, rounded. apitrace gives the executable's
+        // glLoadMatrixf values, so this is the last observable that can be
+        // compared directly; Wine's +opengl channel logs only the pointer.
+        const mv = this.cur?.m ? [...this.cur.m].map((v) => Math.round(v * 1e4) / 1e4).join(',') : '?';
+        rec.ops.push(`elems ${idx?.length ?? '?'}:t${rec.tex}${colSuffix()}`
+          + ` [blend=${rec.blend} ${rec.bf} depth=${rec.depth} dmask=${rec.dmask}] mv=${mv}`);
+        snapshot(this, { kind: 'elems', mode: 'TRIANGLES', n: idx?.length ?? 0 });
+      }
+      return o.apply(this, arguments);
+    });
     P.__recInstalled = true;
     return { ok: true };
   }, cfg.minigl);
@@ -155,10 +267,11 @@ await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors })
       const f = await page.evaluate(async (tt) => {
         const d = window.__demo, parts = d.schedule();
         const part = parts.find((p) => tt >= p.start && tt < p.start + p.dur) ?? parts[0];
-        window.__rec.ops.length = 0; window.__rec.on = true;
+        window.__rec.ops.length = 0;
+    if (window.__rec.states) window.__rec.states.length = 0; window.__rec.on = true;
         await d.render({ part: part.name, local: tt - part.start });
         window.__rec.on = false;
-        return { part: part.name, local: tt - part.start, ops: window.__rec.ops.slice() };
+        return { part: part.name, local: tt - part.start, ops: window.__rec.ops.slice(), states: (window.__rec.states ?? []).slice() };
       }, t);
       f.order = ord; f.showTime = t;
       f.digest = createHash('sha256').update(f.ops.join('|')).digest('hex').slice(0, 12);
@@ -185,16 +298,19 @@ await withPage({ root: cfg.root, query: '?inspect=1' }, async ({ page, errors })
     return;
   }
 
-  const frame = await page.evaluate(async (t) => {
+  // --only exercises the adapter's PER-CALL whitelist. `--query only=a,b` sets the
+  // same filter at page load; both must produce the same draw stream, which is how
+  // the per-call path is held to the one that was already proven.
+  const frame = await page.evaluate(async ([t, only]) => {
     const d = window.__demo;
     const parts = d.schedule();
     const part = parts.find((p) => t >= p.start && t < p.start + p.dur) ?? parts[0];
     window.__rec.ops.length = 0;
     window.__rec.on = true;
-    const info = await d.render({ part: part.name, local: t - part.start });
+    const info = await d.render({ part: part.name, local: t - part.start, ...(only ? { only } : {}) });
     window.__rec.on = false;
-    return { part: part.name, local: t - part.start, ops: window.__rec.ops.slice(), info };
-  }, showTime);
+    return { part: part.name, local: t - part.start, ops: window.__rec.ops.slice(), states: (window.__rec.states ?? []).slice(), info };
+  }, [showTime, onlyList]);
 
   frame.showTime = showTime;
   frame.digest = createHash('sha256').update(frame.ops.join('|')).digest('hex').slice(0, 12);

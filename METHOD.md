@@ -481,6 +481,216 @@ it costs to take if it is recorded where it will be re-read — and if the docum
 disagrees with a fresh impression, the document is more likely to be right,
 because it was written when someone was looking at the data.
 
+## Let a tool earn the right to be believed
+
+The tools here already have a lineage. `tools/inspect/frame.mjs` records that it was
+promoted from Lapsus verification work; `tools/inspect/contrast.mjs` names the Wonder
+script whose paths were compiled in. What was missing is the rule that decides when
+such a script is evidence, when it belongs to one production, and when it has earned a
+place under `tools/`.
+
+The directory does not grant authority. A general-looking program can measure the wrong
+layer, and a ten-line probe can settle a question exactly. A tool earns the right to be
+believed by naming its observable, asserting its preconditions, and having been seen to
+produce both a right answer and a failure.
+
+This matters because the instrument is a real source of wrong findings, not a
+hypothetical one. In one Wonder campaign, two of the five dead ends were the
+measurement rather than the port: a "global capture zoom" that resampling refuted at a
+best scale of exactly 1.00, and a clean one-axis "2/3 V scale defect" that was a trace
+scan covering only the last two-thirds of a primitive.
+
+### Three stages, with gates between them
+
+| stage | home | scope |
+|---|---|---|
+| scratch | `productions/<name>/work/tools/scratch/` | one question, one investigation |
+| production-local | `productions/<name>/work/tools/` | repeatable knowledge about that production |
+| shared | `tools/inspect/`, `tools/winebox/`, `tools/` | an interface proven across productions |
+
+`/tmp` is fine while a script is only helping choose the next probe. It is not an
+evidence store. The first time an output could justify a code change, close a finding,
+establish a formula, or become the only way to reach a layer, it moves into
+`scratch/` and takes on the gate below.
+
+**A tool may influence a production decision only when all of these hold:**
+
+- its source, exact invocation and input identities are recoverable from the repository;
+- its header names the observable, the units and clock domain, the pairing rule, and
+  the coverage boundary;
+- it asserts the preconditions its conclusion depends on — the instant exists, the held
+  frame settled, the scan reached both ends, the primitive closed;
+- it has been run against a control whose answer did **not** come from the port
+  assumption under test;
+- a comparison reports identity when given identical inputs, and a checker has been
+  seen to exit non-zero on a deliberate defect;
+- a second run over the same pinned inputs reproduces the result.
+
+Before that gate its numbers are directions for the next measurement, not facts.
+
+**Scratch becomes production-local** when any one of these happens: its result is cited
+in the RE notes, it causes a port change, it is run in a second session or at a second
+instant, or it is the only access to an evidence layer. Promotion means checking it in,
+replacing ephemeral inputs with arguments or repo-relative paths, and adding the
+validation below. A production-local tool may know its production; it must not depend
+on the caller's working directory, a personal absolute path, or a file left in `/tmp`.
+
+**Production-local becomes shared** only when the same observable has been required by a
+*second* production, and both pass through the proposed interface without editing the
+tool — no production name, schedule, capture offset or asset path compiled in. The
+second implementation is part of the proof: `tools/inspect/ADAPTER.md` exists because
+Wonder exposed assumptions Lapsus had hidden. Until that second caller exists, a
+reusable-looking tool is still production-local.
+
+Shared placement follows the boundary being measured. Capture alignment, frame scoring
+and per-frame diagnosis live in `tools/inspect/` and consume `window.__demo`. Running
+Win32 originals, clock control, GL recording and original-side state extraction live in
+`tools/winebox/`. A bridge between the two sides, or a repository operation, lives
+directly under `tools/`.
+
+### Interfaces, names and exit status
+
+A shared tool that resolves production data takes `<production>` as its first argument;
+a pure converter takes explicit input and output paths. Name by operation:
+`record-*`, `extract-*`, `compare-*`, `*-report`, `*-check`.
+
+**`check` and `verify` are reserved for programs that can fail on the property they
+name.** A non-gating diagnostic is a *report*: it may print differences and exit 0,
+because differences are its output — but it must say so in its header and must never be
+placed behind `&&` as though it were a gate. This is the same rule as *a check that
+cannot exit non-zero is a report*, applied at naming time.
+
+Use explicit unit names once a value crosses between tools — `captureSeconds`,
+`showSeconds`, `order`, `qpcTicks` — never a bare `time`. An unqualified time is how
+capture seconds were passed to a tool expecting show seconds, 83.3 ms apart, producing
+a fully-formed false defect ("27× too bright") that survived until the units were named.
+
+Exit status: `0` passed or completed · `1` the measured property failed, or the input
+was malformed or incomplete · `2` invocation error · `77` the oracle or platform is
+absent, as `tools/winebox/parse-gl-trace.mjs` already uses.
+
+### The header is part of the instrument
+
+The long headers on `tools/inspect/compare.mjs`, `tools/inspect/phase.mjs` and
+`tools/winebox/exe-draw-state.sh` are load-bearing: they record the wrong answer the
+guard prevents, not just what the code does. Keep that style — but keep it proportionate,
+or it becomes ceremony that gets skipped and the protocol dies.
+
+**Every tool, at any stage, states four things:**
+
+```text
+PURPOSE / INVOCATION
+MODE:        CHECK | REPORT | EXTRACT | RECORD
+OBSERVABLE:  what value leaves the instrument, at what semantic layer
+UNITS:       time domain, scale, matrix convention, image row order
+```
+
+**Promoted tools add**, because they are now being trusted by people who did not write
+them:
+
+```text
+PAIRING AND COVERAGE:   how the Nth item is joined to the Nth, and how it knows it saw all of them
+VALIDATION:             the control that was run, and what it proved
+FALSE FINDING PREVENTED: the concrete wrong decision this blocks
+LIMITATIONS:            the inputs and conclusions it excludes
+STATUS:                 experimental | active | superseded  (+ PROMOTED FROM / SUPERSEDED BY)
+```
+
+A function address establishes provenance, not truth. A known answer has to come from
+the executable's output, a driver query, or preserved bytes. A hand calculation that
+encodes the port's current assumption stays an assumption even with a real address
+printed beside it — that is exactly how a unit test asserting `20.9375` kept a wrong
+tangent bias green for months.
+
+### Choose the observable before writing the parser
+
+Compare the earliest behaviour both sides must share, not the mechanism each happens to
+use. `tools/record-minigl-draws.mjs` records MiniGL's fixed-function boundary rather
+than WebGL calls because immediate mode and batching are *supposed* to differ. Inside
+that boundary the same rule applies: comparing texture matrices reported 39 of 44 draws
+different when the executable bakes scroll into texcoords and the port uses a matrix
+translate — the sampled texel was identical, so effective UV was the observable.
+
+In order of preference:
+
+1. output or intermediate state produced by the original's own code;
+2. where API semantics decide the answer, ask the implementation that owns them —
+   `glretrace -D`, not a regex model of OpenGL's selectors;
+3. canonicalise only differences proven not to affect behaviour;
+4. pixels and statistical scores last, to rank and diagnose — and then record the
+   capture ceiling and noise floor, because a correlation is not proof of a formula.
+
+**Ordering beats counting** wherever both streams preserve order. Pair the Nth draw with
+the Nth draw and assert the count sequences first. A vertex count is a coverage value,
+not an identity: two live effects both submitted 4719 vertices, and pairing on it cost
+three wrong fixes and a −0.14 regression. `sort | uniq -c` is for inventory and is
+forbidden before pairing, because it destroys the relation the comparison needs.
+
+### Validation grows with the tool
+
+Scratch, to cross the gate: one independent control, one exercised failure path, a
+repeat run, and — if it compares — an identity check.
+
+Promoted, add whichever apply:
+
+- a known-answer fixture from the executable, preserved input, or oracle;
+- a reflexive diff proving A against A reports nothing;
+- a deliberate defect that makes it exit non-zero;
+- a **coverage assertion** — expected counts, balanced begin/end, whole primitive range,
+  explicit failure on truncation. A partial scan that happens to contain two-thirds of
+  the vertices must fail as incomplete, not return a tidy two-thirds scale;
+- a **settled-frame assertion** where startup exists — a repeated tail signature, never
+  just "the last frame";
+- an **orientation control** where storage order is ambiguous. A texture with readable
+  text proves `glretrace` emits rows bottom-up; an image that looks plausible either way
+  proves nothing;
+- explicit fixtures for foreign value representations. `"GL_TRUE"` and `"GL_FALSE"` are
+  both strings, and host truthiness is not a GL boolean parser.
+
+Identity is necessary and insufficient: an empty extractor equals itself. Assert the
+control actually contains the property the tool exists to expose —
+`parse-gl-trace.mjs` does this by rejecting a long moving run with too few distinct
+frame digests.
+
+### Limitations must execute, not merely be remembered
+
+A limitation names the inputs or conclusions it excludes. "Report only; pairing is not
+injective" is a limitation. "Experimental" is not.
+
+When a better observable supersedes a tool, change its header in the same commit as the
+replacement: `STATUS: superseded`, name `SUPERSEDED BY`, update the callers. Partial
+supersession is stated the same way — a parser can stay active for call inventory while
+being forbidden for GL state reconstruction, and it should refuse that mode rather than
+silently emit the field it is known to get wrong. Keeping a file for archaeology is
+compatible with preventing its bad answer from re-entering the investigation.
+
+### Short rules, each paid for
+
+- Don't replay GL selector semantics when a real driver can answer.
+- Don't apply host truthiness to `"GL_TRUE"` / `"GL_FALSE"`.
+- Don't pair draws by vertex count, texture size, or any non-unique value.
+- Don't aggregate, sort or deduplicate until pairing is done.
+- Don't pass a naked time between tools; name the domain and the unit.
+- Don't compare texture matrices when effective UV is the shared behaviour.
+- Don't take a startup or partial tail frame without a settled-frame guard.
+- Don't scan part of a primitive and report the fraction as geometry.
+- Don't assume image row order; prove it with an asymmetric control.
+- Don't manufacture a known answer from the assumption under test.
+- Don't call it a check until a real defect has made it exit non-zero.
+
+### Close the scratch ledger before closing the investigation
+
+An investigation that creates scratch code keeps
+`productions/<name>/work/tools/SCRATCH.md`: one line per script — purpose, path, the
+question it answered, and its disposition. At the end every entry is **promoted**
+(locally, or shared if it passed the second-production gate), **kept as a lesson** with
+its failing fixture when its wrong measurement is itself the thing another tool must
+prevent, or **deleted**, recording only the discarded question.
+
+No investigation closes while an evidence-bearing script exists only in `/tmp` or shell
+history. This does not preserve every throwaway; it preserves every instrument the
+reconstruction came to depend on.
+
 ## Reconstruction, not restoration
 
 None of this is the original source code. It is a reconstruction from the
