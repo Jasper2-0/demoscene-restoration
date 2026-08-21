@@ -214,7 +214,9 @@ Node peak RSS while generating the 4x set was **596 MB** — the texgen VM works
 generated fine in a fresh tab but **the renderer process was killed** when a 4x boot
 followed 1x and 2x boots in the same page, i.e. it is close to the edge.
 
-### Recommended default: **2x**
+### Recommended default: **2x** — superseded 2026-08-21, and the measurement still stands
+
+The engineering recommendation below was **2x**, on this evidence:
 
 - It is where the visible gain is (the crops in §8): 1x -> 2x is the step that removes
   the mush; 2x -> 4x is barely distinguishable at 640x480, which is what one would
@@ -223,6 +225,47 @@ followed 1x and 2x boots in the same page, i.e. it is close to the edge.
   that it generates its content in front of you, and it puts 223 MB of texture on the
   GPU plus a ~600 MB transient in the generator.
 - 4x is kept reachable as `?texscale=4` and works; it is a knob, not the default.
+
+**The shipped default is now 1x.** Nothing above is retracted — 2x still looks better
+and the numbers that say so were measured honestly. What changed is the question being
+answered. This site publishes *sonnet as it was*, and a texture resolution nobody in
+2001 could have seen makes a different artefact, however good it looks. That is an
+editorial decision about what is being published, not a finding about what is sharper.
+
+`?texscale=2` and `?texscale=4` remain, unchanged, one query parameter away, and every
+word of the wiring in §§1–5 and §7 still applies to them. `ATLAS_SCALE` (`?fontscale=`)
+and the render scale (`?render=N`) moved to 1 in the same change and for the same reason.
+
+Two consequences worth having in writing:
+
+- **Boot gets much faster.** Off §6's own table, the texture phase drops from
+  2253–3354 ms to 620–1485 ms and boot total from 3.7–4.9 s to about 2.0 s. The
+  preloader needed no re-measurement: `main.js`'s `texMs = 2330 * (TEX_SCALE/2)²` is
+  parameterised by the scale, so its progress weights self-adjust.
+- **The fine ground mask retires itself.** `scene7.js` passes `{ terrain }` to
+  `bakeGroundTexture` only when `TEX_SCALE > 1`, so at 1x the mask reverts to the
+  original's N x N vertex-normal resample with no separate switch to remember.
+
+#### The adaptive default that was tried and dropped
+
+Between those two states `TEX_SCALE` briefly chose its value from the display — the
+reasoning being that a wholly procedural production has no baked artwork imposing a
+ceiling, so it should fill whatever panel it is shown on. It is recorded here rather
+than in the code because the code that argued for it outlived the code that did it.
+
+It was dropped for two measured reasons and one design one:
+
+- **4x textures are 223 MB** and the renderer process was observed dying when a 4x
+  boot followed 1x and 2x boots in the same tab (§6 above). An adaptive rule aims a
+  large display straight at that case.
+- **It depended on the render scale exceeding 1280x960**, which was itself reverted
+  after a report of a black screen and no audio after precalc on real hardware.
+  ⚠ That symptom is *also* what the AudioContext ordering bug produced, and that bug
+  has since been fixed at source (see `main.js`'s `LIGHTING_MODE` note). Nobody has
+  re-tested since. **There may be one cause here or two** — do not cite the render
+  ceiling as evidence of a render-scale defect until somebody reproduces it on a build
+  carrying the AudioContext fix.
+- The scale a visitor sees should not depend on the machine they happen to open it on.
 
 ## 7. THE HARD-CODED-DIMENSION AUDIT
 

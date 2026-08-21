@@ -127,8 +127,8 @@ const ASSETS = new URL('../assets/', import.meta.url).href;
 const ATLAS_SCALE = (() => {
   if (AUTHENTIC) return 1;              // the regression guard wins, always
   const q = null;
-  const n = q === null ? 2 : parseInt(q, 10);   // 4 is available via ?fontscale=4
-  return [1, 2, 4, 8].includes(n) ? n : 2;
+  const n = q === null ? 1 : parseInt(q, 10);   // the original's own atlas
+  return [1, 2, 4, 8].includes(n) ? n : 1;
 })();
 const TEX_SCALE = (() => {
   // ?quality=original is the regression guard for the entire remaster, so it wins
@@ -141,20 +141,10 @@ const TEX_SCALE = (() => {
     if (v === 1 || v === 2 || v === 4) return v;
     console.warn(`main: ?texscale=${q} is not 1, 2 or 4 — ignoring`);
   }
-  // ADAPT TO THE PANEL, do not pick a constant.
-  //
-  // 2x used to be the default because 4x "costs 3x the load for a difference I
-  // can't see at 640x480" — which is true, and is also the wrong place to judge a
-  // remaster. The render scale is no longer capped at 1280x960 (see fit()), so on
-  // a large or HiDPI display the extra texels are now genuinely resolvable, and a
-  // 64k intro whose every asset is a GENERATOR has no reason to leave them on the
-  // table. Small windows still pay only the 2x cost.
-  // Judge by the pixels the demo will actually be rendered at, and stay off 4x on
-  // very large canvases: 4x textures (223 MB) plus a multi-megapixel backbuffer is
-  // where the renderer process was observed dying during the remaster wiring. 4x
-  // buys most on a big display and costs most there too — the useful band is the
-  // middle.
-  return 2;        // ?texscale=4 opts in; see REGRESSION note above
+  // MIRRORS web/js/main.js — see the long note there for why an adaptive default
+  // was tried and dropped. The pack has no query parameters at all (esbuild folds
+  // `q` to null above), so this constant is the whole of the pack's texture scale.
+  return 1;        // the original's own texels
 })();
 
 // The loading screen belongs to playback. The single-frame capture path renders one
@@ -201,33 +191,17 @@ function fit() {
   canvas.style.width = Math.round(640 * s) + 'px';
   canvas.style.height = Math.round(480 * s) + 'px';
   if (!AUTHENTIC) {
-    // RENDER AT THE DISPLAY'S REAL PIXELS.
-    //
-    // This used to be `Math.min(2, ...)`, i.e. 1280x960 maximum. On a 4K panel the
-    // demo was therefore rendered at 1280x960 and upscaled by the browser to ~2880
-    // — which no amount of texture resolution can undo, and which is exactly the
-    // "bilinear mush" the project owner kept seeing. The whole point of restoring a
-    // PROCEDURAL production is that every asset is a generator: there is no baked
-    // artwork imposing a ceiling, so the remaster should fill whatever panel it is
-    // shown on.
-    //
-    // `devicePixelRatio` is no longer clamped either — on a 2x HiDPI display the
-    // canvas backing store now matches the physical pixels the demo occupies.
+    // THE DEFAULT IS 640x480 — the resolution the demo was written for. MIRRORS
+    // web/js/main.js; see the long note there, including the unresolved question
+    // about whether lifting this ceiling ever really broke anything.
     const dpr = window.devicePixelRatio || 1;
-    const want = RENDER_CAP ?? (s * dpr);
+    const want = RENDER_CAP ?? 1;
     // Cap on what the GPU will actually allocate rather than an arbitrary number...
     const maxDim = d3dRef ? d3dRef.maxTextureSize ?? 8192 : 8192;
-    // ...AND on a total pixel budget. Lifting the old 2x clamp was right, but with
-    // no ceiling a 5K panel at dpr 2 asks for 5120x3840 = 19.7 Mpx, on top of the
-    // 4x texture set (223 MB) and the 4x font atlas (67 MB) — a credible way to
-    // exhaust GPU memory and hang right after precalc. 8.3 Mpx is a little over 4K
-    // and is plenty to resolve the generators' detail; ?render=N overrides it.
+    // ...AND on a total pixel budget, so a large panel cannot ask for 19.7 Mpx.
     const PIXEL_BUDGET = 8.3e6;
     const budgetScale = Math.sqrt(PIXEL_BUDGET / (640 * 480));
-    // DEFAULT IS THE OLD 2x CLAMP. Lifting it is right in principle and it broke a
-    // working demo on real hardware (black after precalc, no audio) — so the higher
-    // resolution is now OPT-IN via ?render=N until the failure is understood.
-    const ceiling = RENDER_CAP ?? 2;
+    const ceiling = RENDER_CAP ?? 1;
     const scale = Math.max(1, Math.min(want, maxDim / 640, budgetScale, ceiling, 8));
     // Quantise to eighths: enough granularity to fill a panel exactly, few enough
     // distinct values that a resize drag does not reallocate every frame.

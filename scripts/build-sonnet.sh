@@ -22,8 +22,15 @@
 # packaging exercise is a separate target (see METHOD.md).  Everything the
 # browser needs is generated at runtime from `unpacked/sonnet_img.bin` — the
 # textures, the meshes, the font atlas and the music are all computed, not
-# shipped.  That is the point of the production and it is why the site is
-# ~600 KB rather than ~20 MB.
+# shipped.  That is the point of the production and it is why the RUNTIME is
+# ~640 KB rather than ~20 MB.
+#
+# THE DIST IS LARGER THAN THE RUNTIME — about 4.7 MB, and the gap is entirely
+# the `?assets=baked` escape hatch: two 1.5 MB .xm modules plus the baked
+# texture PNGs, none of which the default path ever fetches.  Roughly 87% of
+# what is published exists so that one flag is not half-broken.  Worth knowing
+# before publishing; drop the three `cp` lines below if that trade stops being
+# worth it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -117,13 +124,20 @@ Click to start. Then:
 
 Useful URL parameters:
 
+**This renders at the original's resolution by default** — 640×480, 1× textures,
+1× font atlas. What it does *not* reproduce are the defects found since: the
+missing shadow bake, the normal transform, the flower stem the original never
+drew, and a stereo-panning bug in the music. Each of those has its own switch
+below, and `?quality=original` turns the lot off at once.
+
 | parameter | effect |
 |---|---|
 | `?start=beach` or `?start=0x1200` | boot straight into a scene |
-| `?quality=original` | reproduce the 2001 build, bugs included |
-| `?texscale=4` | higher-resolution generated textures |
-| `?fontscale=4` | higher-resolution font atlas |
-| `?render=N` | pin the render scale (default 2) |
+| `?quality=original` | the 2001 build's own behaviour, bugs included |
+| `?texscale=2` or `4` | re-generate every texture at a finer grid |
+| `?fontscale=2`, `4`, `8` | supersample the font atlas |
+| `?render=N` | render scale (default 1 = 640×480; 6 = 3840×2880) |
+| `?aniso=16` | anisotropic filtering on the terrain detail map |
 | `?lighting=legacy` | disable the shadow bake + D3D-correct normals |
 | `?audio=party` | the original's stereo-panning bug |
 | `?assets=baked` | download prebaked assets instead of generating |

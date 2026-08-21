@@ -2007,10 +2007,10 @@ export class MiniD3D8 {
     // further out, and sharpens the distant rock ridge with it. See
     // re/scenes/TERRAIN_DETAIL.md "anisotropy".
     //
-    // Not wired to anything yet — main.js constructs the device as
-    // `new MiniD3D8(canvas)` and main.js is not this agent's to change. One
-    // line there turns it on for the remaster path only:
-    //     new MiniD3D8(canvas, { anisotropy: AUTHENTIC ? 1 : 16 })
+    // WIRED, and off by default: main.js reads `?aniso=N` into its ANISO const
+    // and passes `new MiniD3D8(canvas, { anisotropy: ANISO })`, which is 1
+    // unless asked. So the shipped page gets the authentic trilinear filter and
+    // `?aniso=16` is the opt-in that reproduces the measurement above.
     if (this._aniso > 1 && hasMips && st[D3DTSS_MIPFILTER] !== D3DTEXF_NONE) {
       gl.samplerParameterf(s, this._anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, this._aniso);
     }

@@ -2,7 +2,29 @@
 
 Same philosophy as [PTCT] and [Lost Vegas]: **the authentic path is sacred, the remaster
 is strictly additive and opt-out-able.** Runtime switch `?quality=original` selects the
-byte-exact original; the default is the remaster.
+byte-exact original.
+
+> **AMENDED 2026-08-21 — which way round the default sits.**
+>
+> "The default is the remaster" was true until now and is not any more. The shipped
+> page renders at the **original's resolution**: `TEX_SCALE`, `ATLAS_SCALE` and the
+> render scale all default to 1, and `?texscale=`, `?fontscale=`, `?render=` and
+> `?aniso=` are how you opt *in* to the finer grids.
+>
+> **Nothing else about this brief changes, and nothing in it is retracted.** The
+> remaster is still built, still wired through every scene, still measured, and still
+> one query parameter away; `REMASTER_WIRING.md` §6's evidence that 2× looks better
+> still stands unchallenged. What changed is only which of the two a visitor gets
+> without asking, and the reason is editorial rather than technical: this site
+> publishes *sonnet as it was*, and a resolution nobody in 2001 could have seen makes
+> a different artefact however good it looks.
+>
+> Note the two axes were never the same axis, and the amendment moves only one of
+> them. **Resolution** goes back to the original. The **corrections** — the shadow
+> bake, the D3D-correct normals, the drawn flower stem, the fixed music module — stay
+> on by default, because each of those moves *toward* what the original produced
+> rather than away from it. Decision 1 below is the clearest case: the panning bug is
+> still reproduced by `?quality=original` and still fixed on the default path.
 
 ## Decisions
 
