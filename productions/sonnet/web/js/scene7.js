@@ -34,6 +34,14 @@ import {
 const F = Math.fround;
 const ZERO3 = [0, 0, 0];
 
+// Most simulation steps one `tick` will run before it gives up and re-anchors.
+// PORT-ONLY, and not a tuning knob: it is the guard on a stalled clock (a
+// backgrounded tab pauses requestAnimationFrame while the audio clock keeps
+// running), which is the one case where catching up honestly would hang the
+// page. 600 steps is 20 s of music at the binary's 30 Hz — far beyond any real
+// frame hitch, and unreachable from the harnesses, which step a fixed grid.
+const MAX_CATCHUP_STEPS = 600;
+
 // `FUN_00401abf` receives fog start/end as raw float BIT PATTERNS (they are
 // dwords copied straight out of the descriptor), and minid3d8's `_asFloat`
 // resolves the same ambiguity the same way: an integral JS number > 64 is read
@@ -1202,6 +1210,10 @@ function drawMesh(d3d, mesh) {
 
 // ---------------------------------------------------------------------------
 export class Landscape {
+  /** Did THIS frame run a simulation step? Gates the emitting #stepPrecip in
+   *  render(), which must not integrate on a frame that advanced nothing. */
+  #stepDue = false;
+
   /**
    * @param {object} d3d       the MiniD3D8 device
    * @param {number} sceneIdx  0..8 — which descriptor / camera set to load
@@ -1219,9 +1231,15 @@ export class Landscape {
     this.rate = 30.0;            // +0x0c, from FUN_00402e4e (0x41f00000)
     this.bias = 0;               // +0x08, set by m253
     this.dt = 0;                 // +0x04
-    // null = 'unseeded'; #tickClock seeds it with the first ms it sees,
+    // null = 'unseeded'; #stepsDue seeds it with the first ms it sees,
     // which is what FUN_004060c9 does with `call 0x402f01` (lastMs = now).
     this.lastMs = null;          // +0x10
+    // Fixed-timestep bookkeeping (port-only; see #stepsDue). `simSteps` is the
+    // whole steps taken, DERIVED from music time each call rather than
+    // accumulated, so the total cannot drift.
+    this.simSteps = 0;
+    this.simStepMs = K.FRAME_BASE / 30.0;
+    this.#stepDue = false;
     this.enabled = false;        // +0x20, set by m6
     this.camSpeed = F((1 / this.rate) * K.CAM_SPEED);   // +0x1c
     this.time = 0;               // +0x13c
@@ -2780,6 +2798,7 @@ export class Landscape {
    */
   reset() {
     this.dt = 0; this.lastMs = null;   // re-seeded on the next tick (FUN_004060c9)
+    this.simSteps = 0; this.simStepMs = K.FRAME_BASE / 30.0;
     this.visible = false;
     this.layer = 0;
     this.rate = 30.0;
@@ -2905,6 +2924,12 @@ export class Landscape {
   }
 
   // -------------------------------------------------------------------------
+  // THE ORIGINAL'S CLOCK — kept as the record of what #stepsDue must respect.
+  // The method that implemented it directly (`#tickClock`) is GONE: it computed
+  // one variable-sized dt per CALL, which is the frame-rate dependence
+  // re/scenes/FRAME_RATE.md measures. Everything below is about the BINARY and
+  // still governs; only the port's way of advancing it changed.
+  //
   // FUN_004060db — the frame delta.  `+0x04` is elapsed time expressed in
   // 1/`+0x0c` second units, i.e. "frames at `rate` fps".  Disassembled in
   // full (0x4060db-0x406124) 2026-08-12; the port had two deviations from it,
@@ -2932,20 +2957,126 @@ export class Landscape {
   // table (FUN_004100db), while the port's clock can be re-anchored by a
   // scene jump — a port-only hazard needing a port-only guard.
   // -------------------------------------------------------------------------
-  #tickClock(ms) {
-    if (this.lastMs === null) this.lastMs = ms;      // FUN_004060c9: lastMs = now
-    const d = (ms - this.lastMs) / (K.FRAME_BASE / this.rate);
+  // ---------------------------------------------------------------- FIXED TIMESTEP
+  // HOW MANY SIMULATION STEPS ARE DUE AT `ms`, AND WHY THIS EXISTS.
+  //
+  // `dt` above is honest — it is elapsed MUSIC ms — so anything that integrates
+  // it is already rate-independent. The trouble is everything that acts once per
+  // CALL rather than per unit time, and re/scenes/FRAME_RATE.md measures four:
+  //
+  //   * #stepSpires   `delay -= T` — a sum over ticks where the original integrates
+  //   * updateRibbon  `if (phase >= 2) phase -= 2` fires at a tick boundary and
+  //                   keeps that tick's overshoot
+  //   * #stepPrecip   a respawn draws THREE rand01 from the SHARED stream, so the
+  //                   stream position becomes a function of tick COUNT — the whole
+  //                   demo from scene 5 on inherits it
+  //   * #stepPrecip   snowFrames++ per call, and one lens droplet per frame
+  //
+  // The live page ticks per requestAnimationFrame, so before this the demo
+  // rendered DIFFERENTLY ON DIFFERENT MONITORS: 68 grown spires at 0x0606 on a
+  // 60 Hz display, all 80 on a 120 Hz one.
+  //
+  // Fixing the four mechanisms individually is four separate repairs against the
+  // disassembly and is still owed (FRAME_RATE.md §6). This makes them
+  // DETERMINISTIC, which is a different and smaller claim: the simulation
+  // advances in whole steps of `FRAME_BASE / rate` ms, so the state at a given
+  // music position is a pure function of that position and nothing else.
+  //
+  // ONE STEP IS dt = 1.0 EXACTLY. That is not a tuning choice: `rate` is the
+  // binary's own field (+0x0c, 30.0 from FUN_00402e4e) and `dt` is defined as
+  // elapsed / (FRAME_BASE / rate), so a step of exactly FRAME_BASE/rate ms is
+  // the unit every constant in this file was tuned against. Reading `this.rate`
+  // per call is also what keeps timeline event 254 working — it rewrites the
+  // rate per object, and the step size follows it.
+  //
+  // COUNTED FROM AN ANCHOR, NOT ACCUMULATED. `target` is derived from
+  // (ms - anchor) each time rather than by adding up leftovers, so no rounding
+  // can creep in and the count is the same however the caller chops up time.
+  #stepsDue(ms) {
+    if (!Number.isFinite(ms)) return 0;
+    const stepMs0 = K.FRAME_BASE / this.rate;
+    if (this.lastMs === null) {
+      // ANCHOR TO THE MUSIC, NOT TO THIS OBJECT'S FIRST TICK. Seeding the
+      // anchor with `ms` looks natural and is wrong: an object re-seeds after
+      // reset(), so the anchor lands on whichever grid point the CALLER
+      // happened to tick at, and two runs at different `?warmstep` get step
+      // boundaries half a step apart forever after. Measured: obj3 anchored at
+      // 41766.67 ms against 41750 ms and its step count came out 521 vs 522,
+      // which was the whole of scene 0's residual once everything else read
+      // zero. Absolute multiples of stepMs from music time 0 are the same
+      // grid for every object and every caller.
+      this.lastMs = ms;
+      this.simSteps = Math.floor(ms / stepMs0 + 1e-6);
+      this.simStepMs = stepMs0;
+      return 0;                                    // FUN_004060c9: lastMs = now
+    }
     this.lastMs = ms;
-    this.dt = Number.isFinite(d) && d > 0 ? d : 0;
-    if (this.bias !== 0) { this.dt += this.bias; this.bias = 0; }
+    const stepMs = stepMs0;
+    if (!(stepMs > 0) || !Number.isFinite(stepMs)) return 0;
+    // A rate change (event 254) resizes the step, so the old count no longer
+    // describes the elapsed time. Re-anchor rather than reinterpret it.
+    if (this.simStepMs !== stepMs) {
+      this.simStepMs = stepMs;
+      this.simSteps = Math.floor(ms / stepMs + 1e-6);
+      return 0;
+    }
+    // EPSILON ON THE FLOOR, and it is not cosmetic. The caller's ms lands on a
+    // step boundary exactly when the grids agree, and floating point puts it a
+    // few ulps either side — so a bare floor() awards one run a step its twin
+    // does not get, and the two diverge for good. A millionth of a step is far
+    // below any real timing and far above the jitter.
+    // Absolute multiples of stepMs from music time 0 — no anchor term, because
+    // any per-object origin would be whichever ms that object first ticked at.
+    const target = Math.floor(ms / stepMs + 1e-6);
+    // Backwards = a seek or a scene jump, which re-seeds state anyway.
+    if (target < this.simSteps) {
+      this.simSteps = target;
+      return 0;
+    }
+    let n = target - this.simSteps;
+    // A BACKGROUNDED TAB pauses rAF while the audio clock keeps running, so a
+    // resume can ask for minutes of catch-up in one call. Grinding it would
+    // hang the page. Re-anchoring loses simulation time, which is a DEGRADED
+    // MODE — so it says so rather than doing it quietly (FRAME_RATE.md §0: a
+    // degraded mode must be loud or fatal, never silent). Unreachable from the
+    // harnesses, which step a fixed grid.
+    if (n > MAX_CATCHUP_STEPS) {
+      console.warn(`scene7: ${n} simulation steps due at ${ms | 0} ms — clock ` +
+                   `stalled (backgrounded tab?). Re-anchoring; the demo will ` +
+                   `have skipped simulation rather than caught up.`);
+      this.simSteps = target;
+      return 0;
+    }
+    this.simSteps = target;
+    return n;
   }
 
   /** Headless warm-up hook (main.js `warmTo`): advance state with no device calls. */
   tick(ctx) {
     if (!this.built) return;
     this.position = ctx.position;
-    this.#tickClock(ctx.songMs);
+    // The step count is consumed even when invisible: the original computes a
+    // dt every frame and discards it while hidden, so time passes without the
+    // state advancing. Consuming it here reproduces that — and stops a scene
+    // becoming visible from firing a burst of back-dated steps.
+    const steps = this.#stepsDue(ctx.songMs);
+    // PUBLISHED for flare.js, which wraps tick/render from outside the class and
+    // must integrate once per SIMULATION step rather than once per call — see
+    // the note in render().
+    this.simStepsThisCall = steps;
     if (!this.visible) return;
+    for (let s = 0; s < steps; s++) {
+      // dt = 1.0 EXACTLY — one `rate` frame. See #stepsDue.
+      this.dt = 1.0;
+      // m253's bias is a ONE-SHOT nudge to a single frame's dt, so it belongs
+      // to the first sub-step and must not be re-applied to the rest.
+      if (this.bias !== 0) { this.dt = F(this.dt + this.bias); this.bias = 0; }
+      this.#advanceOne();
+    }
+  }
+
+  /** One fixed simulation step: what `tick` used to do inline per frame. */
+  #advanceOne() {
     this.#advance();
     // The particle system MUST integrate during the warm-up too.  In the
     // original `FUN_0040d5c6` runs inside every rendered frame, so by the time
@@ -3506,8 +3637,38 @@ export class Landscape {
     if (!this.built || !this.visible) return;
     const d3d = this.d3d, desc = this.desc;
     this.position = ctx.position;
-    this.#tickClock(ctx.songMs);
-    this.#advance();
+    // FIXED TIMESTEP, the live half. `tick()` drives the warm-up; THIS drives
+    // the page, because timeline.render() calls render() once per frame per
+    // object and nothing calls tick() there. Pinning only one of the two would
+    // have left the published page exactly as non-deterministic as before.
+    //
+    // The last step is left to run through the rest of this function, because
+    // the emitting #stepPrecip near the end needs the camera basis and can only
+    // happen here; the earlier steps use #advanceOne, whose precip call does
+    // not emit. So N steps still means N advances and N precip integrations.
+    //
+    // steps === 0 means no simulation is due on this frame — the state is
+    // already correct for this music position and re-running it would be an
+    // extra tick, which is the whole bug. `#stepDue` gates the emitting precip
+    // call below for the same reason.
+    const steps = this.#stepsDue(ctx.songMs);
+    // flare.js wraps this method and integrates the sun's ramp afterwards. It
+    // used to do so ONCE PER CALL on `this.dt`, which put the flare straight
+    // back on the render clock and left scene 4 — the flare-heavy sunset — the
+    // worst residual in rate_scope after everything else had reached zero.
+    this.simStepsThisCall = steps;
+    for (let s = 0; s < steps - 1; s++) {
+      this.dt = 1.0;
+      if (this.bias !== 0) { this.dt = F(this.dt + this.bias); this.bias = 0; }
+      this.#advanceOne();
+    }
+    this.#stepDue = steps > 0;
+    if (!this.#stepDue) this.dt = 0;   // nothing advanced: no consumer may integrate
+    if (this.#stepDue) {
+      this.dt = 1.0;
+      if (this.bias !== 0) { this.dt = F(this.dt + this.bias); this.bias = 0; }
+      this.#advance();
+    }
 
     // ---- camera (FUN_004058a6 + FUN_00405b5d)
     // Verification aid (inert unless set): force this frame's camera time, so
@@ -3907,7 +4068,12 @@ export class Landscape {
     if (this.precip) {
       const right = [view[0], view[4], view[8]];
       const up = [view[1], view[5], view[9]];
-      this.#stepPrecip(F(this.dt * K.TIME_RATE), ev.position, right, up, true, ev.target);
+      // Only on a frame that actually stepped — see the note at the top of
+      // render(). An unguarded call here would put the per-tick RNG draws back
+      // on the render clock and undo the pin for scenes 5 onward.
+      if (this.#stepDue) {
+        this.#stepPrecip(F(this.dt * K.TIME_RATE), ev.position, right, up, true, ev.target);
+      }
       const m = this.precip.mesh;
       m.pos = [0, 0, 0]; m.scale = [1, 1, 1];
       drawMesh(d3d, m);

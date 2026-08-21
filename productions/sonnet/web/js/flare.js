@@ -567,7 +567,13 @@ export function installFlare(Landscape, texgenImage, opts = {}) {
     if (!cs) return r;
     cs.cam.far = this.desc.fogEnd;
     if (typeof this.sunY === 'number' && this.sunY !== null) f.pos[1] = this.sunY;
-    f.updateOffline(cs.view, cs.cam.projectionMatrix(), this.dt || 0);
+    // ONCE PER SIMULATION STEP, not once per call. scene7 advances in whole
+    // fixed steps now (re/scenes/FRAME_RATE.md), so a tick may carry none or
+    // several; integrating per call would make the sun's ramp depend on the
+    // caller's cadence, which is the bug the fixed step exists to remove.
+    const proj = cs.cam.projectionMatrix();
+    const n = this.simStepsThisCall | 0;
+    for (let i = 0; i < n; i++) f.updateOffline(cs.view, proj, 1.0);
     return r;
   };
 
@@ -617,10 +623,16 @@ export function installFlare(Landscape, texgenImage, opts = {}) {
     // render right after the camera transforms) has already laid the marker down
     // and the scene has painted over it, so this is a real occlusion test.
     // `legacy` keeps the old both-at-frame-end order for A/B.
+    // Same rule as the tick wrapper, but the query/draw must happen exactly
+    // ONCE — so the extra steps are pure ramp integration and the final one
+    // carries the draw. (The precip path in scene7 is split the same way.)
+    const n = this.simStepsThisCall | 0;
+    for (let i = 1; i < n; i++) f.update(1.0);
+    const stepDt = n > 0 ? 1.0 : 0;
     if (legacy) {
-      f.step({ view, proj, projFar, dt: this.dt || 0, clearColour: (this.fogColour >>> 0) });
+      f.step({ view, proj, projFar, dt: stepDt, clearColour: (this.fogColour >>> 0) });
     } else {
-      f.stepQuery({ view, proj, projFar, dt: this.dt || 0, clearColour: (this.fogColour >>> 0) });
+      f.stepQuery({ view, proj, projFar, dt: stepDt, clearColour: (this.fogColour >>> 0) });
     }
 
     // Diagnostics for test/sweep.mjs.  Read-only; nothing here feeds the image.

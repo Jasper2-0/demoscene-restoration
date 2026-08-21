@@ -650,12 +650,32 @@ let warmState = null;
 function warmStep(app, pos, startMs, stopBeforeMs) {
   const endMs = positionToSeconds(pos) * 1000 + SETTLE_MS;
   const limit = stopBeforeMs === undefined ? endMs : Math.min(endMs, stopBeforeMs);
-  for (let ms = startMs; ms <= limit; ms += WARM_STEP) {
+  const tickAt = (ms) => {
     const p = Math.min(pos, secondsToPosition(ms / 1000));
     app.timeline.dispatchUpTo(p);
     const ctx = { d3d: app.d3d, position: p, ms, songMs: ms, rowFrac: 0 };
     for (const o of app.objects) if (o && o.tick) o.tick(ctx, false);
-  }
+  };
+  // ms FROM AN INDEX, NOT ACCUMULATED. `ms += WARM_STEP` a few hundred times
+  // drifts in the last bits, and scene7's step count is a floor() of exactly
+  // this quantity — so the drift decides which side of a step boundary a tick
+  // lands on, and two warm-ups of the same position at different `?warmstep`
+  // disagree by a whole simulation step. Multiplying an integer index keeps
+  // every grid point exact.
+  let ms = startMs, i = 0;
+  for (; ms <= limit; ms = startMs + ++i * WARM_STEP) tickAt(ms);
+  // LAND ON `limit` EXACTLY. The loop above stops at the last grid point at or
+  // below `limit`, which is up to one WARM_STEP short — and how short depends
+  // on WARM_STEP, so two warm-ups of the same position at different `?warmstep`
+  // values used to finish at DIFFERENT music times. With scene7's fixed
+  // timestep that shows up as an off-by-one in the simulation step count, i.e.
+  // the harness's own grid leaking into what it measures (rate_scope read
+  // 15-21 RMSE across rates purely from this).
+  //
+  // Safe to add now and not before: a tick that is not a whole step past the
+  // last one advances nothing, so this only tops up the remainder and repeat
+  // ticks at the same ms are inert.
+  if (startMs + (i - 1) * WARM_STEP < limit) tickAt(limit);
   // Only fast-forward the event cursor when this warm-up really did reach
   // `pos`.  When it stops short (the flare burst replays the tail as real
   // frames), dispatching to `pos` here would fire every event of the skipped
@@ -725,12 +745,18 @@ const FLARE_BURST = (() => {
   return Number.isFinite(v) && v >= 0 && v <= 240 ? Math.round(v) : 48;
 })();
 
+// One SIMULATION step, in music ms — scene7's fixed timestep at the binary's
+// nominal rate (FRAME_BASE / 30.0, FUN_00402e4e). The burst below is spaced by
+// this rather than by WARM_STEP so that how far back it reaches is a property
+// of the DEMO, not of `?warmstep`.
+const SIM_STEP_MS = 1000 / 30;
+
 function warmToBurst(app, pos, burst) {
   if (!burst) return { endMs: warmTo(app, pos), burst: 0 };
   const endMs = positionToSeconds(pos) * 1000 + SETTLE_MS;
   // Warm with the tick loop stopping `burst` steps short, then replay those
   // steps as real renders so the last one lands exactly on `endMs`.
-  warmTo(app, pos, endMs - burst * WARM_STEP);
+  warmTo(app, pos, endMs - burst * SIM_STEP_MS);
   // Render the burst frames up to but NOT including `endMs` — the caller
   // renders that one.  Rendering it here too would draw the captured frame
   // TWICE, and a second draw is not free: alpha-blended content composites
@@ -738,7 +764,7 @@ function warmToBurst(app, pos, burst) {
   // re/PRELOADER.md).  Measured when this was off by one: text-only frames,
   // which have no flare at all, regressed 7.2 -> 20.0 RMSE.
   for (let k = burst; k >= 2; k--) {
-    const ms = endMs - (k - 1) * WARM_STEP;
+    const ms = endMs - (k - 1) * SIM_STEP_MS;
     const p = Math.min(pos, secondsToPosition(ms / 1000));
     renderAt(app, p, ms);
     app.d3d.Present();
