@@ -75,7 +75,15 @@ function computeTangents(track) {
     const second = keys[1];
     const third = keys[2];
     const span0 = third.time - first.time;
-    const timeCorrection0 = span0 === 0 ? 0 : -(second.time - first.time) / (2 * span0);
+    // 0.25 for BOTH kinds. The vector equation at 0x0040523a and the scalar one at
+    // 0x004057e3 both do `FSUBR double [0x004332e8]`, and that constant is 0.25.
+    // The port originally carried a bias at the closing end and none here, which
+    // left the first segment of every scalar track slightly wrong — visible as
+    // Wonder's check camera projecting a 1.5436 half-width where the executable
+    // projects 1.4503.
+    const timeCorrection0 = span0 === 0
+      ? 0.25
+      : 0.25 - (second.time - first.time) / (2 * span0);
     const delta02 = sub(asVector(third.value), asVector(first.value));
     outgoing[0] = mul(add(
       add(mul(delta02, 0.5), mul(delta02, timeCorrection0)),
@@ -87,7 +95,21 @@ function computeTangents(track) {
     const penultimate = keys[lastIndex - 1];
     const antepenultimate = keys[lastIndex - 2];
     const span1 = last.time - antepenultimate.time;
-    const lastTimeBias = track.kind === 'scalar' ? 0.5 : 0.75;
+    // 0.75 for BOTH kinds, exactly as the opening is 0.25 for both. The two
+    // routines reach it by different arithmetic, which is what made this look
+    // asymmetric for so long: the VECTOR equation at 0x0040540a does
+    // `FSUBR float [0x004332f0]` (0.25) and then `FADD float [0x004332e4]` (0.5)
+    // inline, while the SCALAR one at 0x00405872 does `FSUBR double [0x004332e8]`
+    // (0.25) and adds the same delta20*0.5 back as a SEPARATE term at 0x0040588e,
+    // after the 1.5 term. Both compute 0.75 - ratio; all four constants were read
+    // out of the executable rather than inferred.
+    //
+    // The port used 0.5 for scalar, which left the FINAL segment of every scalar
+    // track wrong while every earlier segment matched exactly. Measured against the
+    // executable, Wonder's camera roll at order 8 agreed to 0.00 degrees at frame
+    // 30.6 and was 12.17 degrees out at frame 89 — the same instant where
+    // effect_40cea0 scores 0.597.
+    const lastTimeBias = 0.75;
     const timeCorrection1 = span1 === 0
       ? lastTimeBias
       : lastTimeBias - (last.time - penultimate.time) / (2 * span1);

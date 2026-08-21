@@ -13,12 +13,15 @@ function fromVector(value, kind) { return kind === 'scalar' ? value[0] : value; 
 function findSegment(keys, frame) {
   if (frame <= keys[0].time) return { index: 0, t: 0 };
   const last = keys.length - 1;
-  if (frame >= keys[last].time) return { index: last - 1, t: 1 };
+  if (frame > keys[last].time) return { index: last - 1, t: 1 };
   let low = 0;
   let high = last;
   while (low + 1 < high) {
     const middle = (low + high) >> 1;
-    if (keys[middle].time <= frame) low = middle;
+    // FUN_00404f70/FUN_00405960 advance while next.time < frame. Keeping
+    // equality on the preceding segment matters for duplicate-time ENV keys:
+    // the first value is sampled at the key, then the second takes over after.
+    if (keys[middle].time < frame) low = middle;
     else high = middle;
   }
   const duration = keys[low + 1].time - keys[low].time;
@@ -64,13 +67,23 @@ function computeTangents(track) {
       ), nextWeight);
     }
 
-    // These are the original endpoint equations at 0x4051f0/0x4053c0.
-    // Their constants are 0.5 and 1.5 in Wonder's .rdata.
+    // These are Wonder's original endpoint equations. Vector tracks use
+    // 0x4051f0/0x4053c0; scalar tracks use 0x405790/0x405820. The final
+    // vector equation has an additional 0.25 term at 0x40540a that is not
+    // present in the scalar equation.
     const first = keys[0];
     const second = keys[1];
     const third = keys[2];
     const span0 = third.time - first.time;
-    const timeCorrection0 = span0 === 0 ? 0 : -(second.time - first.time) / (2 * span0);
+    // 0.25 for BOTH kinds. The vector equation at 0x0040523a and the scalar one at
+    // 0x004057e3 both do `FSUBR double [0x004332e8]`, and that constant is 0.25.
+    // The port originally carried a bias at the closing end and none here, which
+    // left the first segment of every scalar track slightly wrong — visible as
+    // Wonder's check camera projecting a 1.5436 half-width where the executable
+    // projects 1.4503.
+    const timeCorrection0 = span0 === 0
+      ? 0.25
+      : 0.25 - (second.time - first.time) / (2 * span0);
     const delta02 = sub(asVector(third.value), asVector(first.value));
     outgoing[0] = mul(add(
       add(mul(delta02, 0.5), mul(delta02, timeCorrection0)),
@@ -82,9 +95,24 @@ function computeTangents(track) {
     const penultimate = keys[lastIndex - 1];
     const antepenultimate = keys[lastIndex - 2];
     const span1 = last.time - antepenultimate.time;
+    // 0.75 for BOTH kinds, exactly as the opening is 0.25 for both. The two
+    // routines reach it by different arithmetic, which is what made this look
+    // asymmetric for so long: the VECTOR equation at 0x0040540a does
+    // `FSUBR float [0x004332f0]` (0.25) and then `FADD float [0x004332e4]` (0.5)
+    // inline, while the SCALAR one at 0x00405872 does `FSUBR double [0x004332e8]`
+    // (0.25) and adds the same delta20*0.5 back as a SEPARATE term at 0x0040588e,
+    // after the 1.5 term. Both compute 0.75 - ratio; all four constants were read
+    // out of the executable rather than inferred.
+    //
+    // The port used 0.5 for scalar, which left the FINAL segment of every scalar
+    // track wrong while every earlier segment matched exactly. Measured against the
+    // executable, Wonder's camera roll at order 8 agreed to 0.00 degrees at frame
+    // 30.6 and was 12.17 degrees out at frame 89 — the same instant where
+    // effect_40cea0 scores 0.597.
+    const lastTimeBias = 0.75;
     const timeCorrection1 = span1 === 0
-      ? 0.5
-      : 0.5 - (last.time - penultimate.time) / (2 * span1);
+      ? lastTimeBias
+      : lastTimeBias - (last.time - penultimate.time) / (2 * span1);
     const delta20 = sub(asVector(last.value), asVector(antepenultimate.value));
     incoming[lastIndex] = mul(add(
       mul(delta20, timeCorrection1),
@@ -375,7 +403,11 @@ export function sampleScene(scene, frame) {
   }
   for (const id of nodes.keys()) worldFor(id);
 
-  const sampledMeshes = scene.meshes.map((mesh) => ({ source: mesh, matrix: worldFor(mesh.objectId) }));
+  const sampledMeshes = scene.meshes.map((mesh) => ({
+    source: mesh,
+    matrix: worldFor(mesh.objectId),
+    scale: sampleTrack(mesh.tracks.scale, frame),
+  }));
   const sampledMaterials = scene.materials.map((material) => {
     if (!material.tracks) {
       return {

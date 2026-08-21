@@ -60,7 +60,8 @@ function expandWonderVertexNormals(mesh, vertexNormals) {
 }
 
 /** Convert EXP's independently-indexed position/UV faces to WebGL geometry. */
-export function buildMeshGeometry(mesh, { wonderNormals = false } = {}) {
+export function buildMeshGeometry(mesh, { wonderNormals = false, facingCull = null } = {}) {
+  const keep = facingCull ? new Set(wonderSurvivingFaces(mesh, facingCull)) : null;
   const faceCount = mesh.faceCount;
   const faceNormals = new Array(faceCount);
   const incident = Array.from({ length: mesh.vertexCount }, () => []);
@@ -88,18 +89,22 @@ export function buildMeshGeometry(mesh, { wonderNormals = false } = {}) {
   const texcoords = new Float32Array(faceCount * 6);
   const normals = new Float32Array(faceCount * 9);
   const indices = new Uint32Array(faceCount * 3);
+  let emitted = 0;
   for (let face = 0; face < faceCount; face++) {
+    if (keep && !keep.has(face)) continue;
     const smoothing = mesh.faceFlags[face];
+    const outFace = emitted++;
     for (let corner = 0; corner < 3; corner++) {
-      const expanded = face * 3 + corner;
-      const vertex = mesh.indices[expanded];
+      const source = face * 3 + corner;
+      const expanded = outFace * 3 + corner;
+      const vertex = mesh.indices[source];
       positions[expanded * 3] = mesh.positions[vertex * 3];
       positions[expanded * 3 + 1] = mesh.positions[vertex * 3 + 1];
       positions[expanded * 3 + 2] = mesh.positions[vertex * 3 + 2];
       indices[expanded] = expanded;
 
       if (mesh.texcoordIndices.length) {
-        const textureVertex = mesh.texcoordIndices[expanded];
+        const textureVertex = mesh.texcoordIndices[source];
         texcoords[expanded * 2] = mesh.texcoords[textureVertex * 2];
         // Wonder's loader calls FUN_00406db0 with 1.0 - the exported V at
         // 0x4064af. The later draw callback passes this stored value straight
@@ -128,26 +133,90 @@ export function buildMeshGeometry(mesh, { wonderNormals = false } = {}) {
   const nativeNormals = wonderNormals
     ? expandWonderVertexNormals(mesh, buildWonderVertexNormals(mesh))
     : null;
+  if (keep && emitted < faceCount) {
+    return {
+      positions: positions.subarray(0, emitted * 9),
+      texcoords: texcoords.subarray(0, emitted * 6),
+      normals: normals.subarray(0, emitted * 9),
+      nativeNormals: nativeNormals ? nativeNormals.subarray(0, emitted * 9) : nativeNormals,
+      indices: indices.subarray(0, emitted * 3),
+    };
+  }
   return { positions, texcoords, normals, nativeNormals, indices };
 }
 
+
 /**
- * EXPERIMENTAL PLACEHOLDER — an empirical model of Wonder's per-vertex facing
- * flag. **Off by default and not part of any authentic build.**
+ * Wonder's per-vertex camera-facing test — the real rule, not the fit.
  *
- * `wONDEr.exe` rejects triangles at 0x004076cf: a triangle is submitted iff any
- * of its three vertices carries a non-zero byte at `vertex+0x4c`. That flag is a
- * boolean written once at load, and reading it out of the running engine shows it
- * is ~96% predicted by `dot(vertexNormal, D) > t`. The code that WRITES it has not
- * been found, so this is a FIT, not the recovered rule — see
- * `productions/wonder/work/re/EFFECT_STATUS.md` for the measurements, the three
- * model forms tested, and why the remaining 4% matters.
+ * `FUN_004070d0` walks the vertex array (stride 0x74, count at object +0xd4) once
+ * per frame and writes one byte per vertex:
  *
- * METHOD.md permits an empirical fit "only as an explicitly marked placeholder,
- * and it is dangerous precisely when it looks convincing". This exists to TEST the
- * hypothesis: if the model is right the sweep score should move markedly, and if it
- * barely moves the model is wrong. The score is evidence here, not a goal, and this
- * must not be enabled in a build that claims to be authentic.
+ *     vertex[+0x4c] = dot(P - Clocal, Nengine) < 0 ? 1 : 0
+ *
+ * P is vertex+0x30, Nengine the smooth normal at vertex+0x3c, and Clocal the camera
+ * in the object's local space. The x87 is at 0x00407332-0x0040735e; both stores are
+ * `[ECX+0x18]` against a pointer pre-biased by `LEA ECX,[EDX+0x34]`, which is why
+ * searching for a literal `+0x4c` store found nothing for so long. The consumer
+ * `FUN_00407650` at 0x004076c5 submits a triangle iff
+ * `material[+0x94] != 0 || (v0|v1|v2)[+0x4c]` — ANY corner facing is enough.
+ *
+ * PROVEN, not fitted. The stub dumped +0x3c and +0x4c per vertex out of the running
+ * executable; solving for the single point C that satisfies the inequality
+ * reproduces **100.00%** of the flags on three separate instances, where the best
+ * fixed-DIRECTION model plateaued at 96.04%. That plateau was the far-field
+ * approximation of a point, and the residual 4% was the parallax.
+ *
+ * TWO SIGN CORRECTIONS, both measured rather than chosen:
+ *  - `buildWonderVertexNormals` returns the engine's normals NEGATED. Measured
+ *    dot(Nengine, Nport) = -1.0000 on 100% of vertices in all three arrays. So with
+ *    port normals the comparison is `> 0`, which is what this function applies.
+ *  - Clocal needs its Z negated relative to inverse(objectMatrix) * cameraWorld;
+ *    see the call site.
+ * Getting only one of the two right is worse than getting neither, which is exactly
+ * what happened twice before they were measured.
+ */
+export function wonderFacingFlags(mesh, portNormals, cameraLocal, output = null) {
+  const count = mesh.vertexCount;
+  const flags = output && output.length >= count ? output : new Uint8Array(count);
+  const [cx, cy, cz] = cameraLocal;
+  for (let v = 0; v < count; v++) {
+    const p = v * 3;
+    const dot = (mesh.positions[p] - cx) * portNormals[p]
+      + (mesh.positions[p + 1] - cy) * portNormals[p + 1]
+      + (mesh.positions[p + 2] - cz) * portNormals[p + 2];
+    flags[v] = dot > 0 ? 1 : 0;
+  }
+  return flags;
+}
+
+/**
+ * Surviving expanded indices for one frame, in submission order.
+ *
+ * `buildMeshGeometry` gives face f its own three vertices at expanded slots 3f,
+ * 3f+1, 3f+2, but the flag lives on the SHARED vertex `mesh.indices` points at,
+ * which is what the executable ORs. Both indexings are needed and confusing them
+ * culls the wrong triangles while keeping the count plausible.
+ */
+export function wonderFacingIndices(mesh, flags, output = null) {
+  const faceCount = mesh.faceCount;
+  const indices = output && output.length >= faceCount * 3
+    ? output : new Uint32Array(faceCount * 3);
+  let n = 0;
+  for (let face = 0; face < faceCount; face++) {
+    const e = face * 3;
+    if (!(flags[mesh.indices[e]] | flags[mesh.indices[e + 1]] | flags[mesh.indices[e + 2]])) continue;
+    indices[n++] = e; indices[n++] = e + 1; indices[n++] = e + 2;
+  }
+  return indices.subarray(0, n);
+}
+
+/**
+ * SUPERSEDED, kept as the shipping default until the per-frame rule below is
+ * finished. wonderFacingFlags() is the real criterion and is proven at 100%
+ * against the engine's own flags, where this fit plateaus at 96.04% — but the
+ * port cannot yet compute the per-frame Clocal to the same accuracy, so this
+ * still renders woah3 better. See EFFECT_STATUS.md.
  */
 export const WONDER_FACING_FIT = Object.freeze({
   direction: Object.freeze([-0.50391, -0.80190, +0.32099]),
@@ -156,7 +225,7 @@ export const WONDER_FACING_FIT = Object.freeze({
 });
 
 /** Per-vertex flags under the fitted model. Returns a Uint8Array, 1 = keep. */
-export function wonderFacingFlags(mesh, fit = WONDER_FACING_FIT) {
+export function wonderFittedFacingFlags(mesh, fit = WONDER_FACING_FIT) {
   const normals = buildWonderVertexNormals(mesh);
   const [dx, dy, dz] = fit.direction;
   const flags = new Uint8Array(mesh.vertexCount);
@@ -173,11 +242,49 @@ export function wonderFacingFlags(mesh, fit = WONDER_FACING_FIT) {
  * original's recorded draw stream without rebuilding any buffers.
  */
 export function wonderSurvivingFaces(mesh, fit = WONDER_FACING_FIT) {
-  const flags = wonderFacingFlags(mesh, fit);
+  const flags = wonderFittedFacingFlags(mesh, fit);
   const kept = [];
   for (let face = 0; face < mesh.faceCount; face++) {
     const a = mesh.indices[face * 3], b = mesh.indices[face * 3 + 1], c = mesh.indices[face * 3 + 2];
     if (flags[a] || flags[b] || flags[c]) kept.push(face);
   }
   return kept;
+}
+
+/**
+ * Surviving expanded indices, computed from the CURRENT geometry buffers.
+ *
+ * The per-unique-vertex form above reads `mesh.positions` and normals captured
+ * when the renderer was built. That is wrong for any mesh a runtime modifier
+ * rewrites: Wonder's 0x40e490 modifier "restores its saved source vertices,
+ * applies its current object-frame phases, then regenerates the mesh normals"
+ * for shite1.exp's first four meshes, so the facing test there was reading
+ * geometry the engine had already replaced. Measured: the port culled Sphere02 to
+ * 615 vertices where the executable submits 519, with the modelview matching the
+ * executable exactly (-104.2785, 16.6955, -2770.874), which ruled out the camera.
+ *
+ * buildMeshGeometry gives every face its own three vertices, so a face's corners
+ * are the expanded slots 3f, 3f+1, 3f+2 and the OR across them is the same test
+ * the executable applies across the three shared vertices it indexes.
+ */
+export function wonderFacingIndicesFromGeometry(geometry, cameraLocal, output = null) {
+  const pos = geometry.positions;
+  const nrm = geometry.nativeNormals ?? geometry.normals;
+  const faceCount = Math.floor(pos.length / 9);
+  const indices = output && output.length >= faceCount * 3
+    ? output : new Uint32Array(faceCount * 3);
+  const [cx, cy, cz] = cameraLocal;
+  let n = 0;
+  for (let face = 0; face < faceCount; face++) {
+    let keep = 0;
+    for (let corner = 0; corner < 3 && !keep; corner++) {
+      const e = (face * 3 + corner) * 3;
+      const d = (pos[e] - cx) * nrm[e] + (pos[e + 1] - cy) * nrm[e + 1] + (pos[e + 2] - cz) * nrm[e + 2];
+      if (d > 0) keep = 1;
+    }
+    if (!keep) continue;
+    const e = face * 3;
+    indices[n++] = e; indices[n++] = e + 1; indices[n++] = e + 2;
+  }
+  return indices.subarray(0, n);
 }

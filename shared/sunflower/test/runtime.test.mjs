@@ -237,7 +237,7 @@ test('EXP TCB sampling reproduces native key values and smooth two-key motion', 
   }
 });
 
-test('Wonder TCB final endpoint preserves the native vector/scalar split', () => {
+test('Wonder TCB final endpoint applies the native 0.75 bias to both kinds', () => {
   const keys = [
     { time: 0, value: 0, tension: 0, continuity: 0, bias: 0 },
     { time: 10, value: 10, tension: 0, continuity: 0, bias: 0 },
@@ -249,10 +249,25 @@ test('Wonder TCB final endpoint preserves the native vector/scalar split', () =>
     keys: keys.map((key) => ({ ...key, value: [key.value, 0, 0] })),
   };
 
-  // FUN_00405820 gives the scalar endpoint a 0.5 time bias; FUN_004053c0
-  // adds the 0.25 loaded at 0x4332f0 for vectors. At the segment midpoint
-  // those produce 20.9375 and 20 respectively.
-  assert.equal(sampleTrack(scalar, 20), 20.9375);
+  // There is no vector/scalar split here — this test previously asserted one and
+  // was wrong. Both routines apply a 0.75 time bias, reached by different
+  // arithmetic:
+  //
+  //   FUN_004053c0 (vector)  0x40540a  FSUBR float [0x004332f0]   ; 0.25 - ratio
+  //                          0x405410  FADD  float [0x004332e4]   ; + 0.5
+  //   FUN_00405820 (scalar)  0x405872  FSUBR double [0x004332e8]  ; 0.25 - ratio
+  //                          0x40588e  FADDP ST2,ST0              ; + delta20*0.5
+  //
+  // The scalar routine adds the same 0.5 term as a separate addend AFTER the 1.5
+  // term, which is why reading it as a 0.5 bias looked plausible. All four
+  // constants were read out of wONDEr.exe (1.5 / 0.5 / 0.25 / 0.25).
+  //
+  // The old expectation of 20.9375 overshot a straight line through evenly
+  // progressing keys. Verified against the executable's own draw stream at order
+  // 8: Wonder's camera roll was 12.17 degrees out at frame 89 under the 0.5 bias
+  // and matches to 0.00 degrees under 0.75, while frame 30.6 — an earlier segment,
+  // unaffected by the endpoint tangent — matched exactly under both.
+  assert.equal(sampleTrack(scalar, 20), 20);
   assert.deepEqual(sampleTrack(vector, 20), [20, 0, 0]);
 });
 
@@ -385,13 +400,17 @@ test('Wonder shite modifier retains the timed 0x40e490 normal squash', () => {
   assert.ok([...deformed.positions].every(Number.isFinite));
   assert.notDeepEqual([...deformed.positions.subarray(0, 12)],
     [...original.positions.subarray(0, 12)]);
+  // Snapshots, and they moved when the modifier's input normal was corrected to
+  // the engine's orientation (see buildWonderShiteGeometry). They are the port's
+  // own output, not the executable's, so they record behaviour rather than verify
+  // it; the executable's vertex data is what the fix was measured against.
   assert.deepEqual([...deformed.positions.subarray(0, 3)],
-    [-0.00005722085552406497, -0.0001172915508504957, 597.1497802734375]);
+    [-0.00005722085552406497, -0.00011628575157374144, 597.1497802734375]);
   const later = buildWonderShiteGeometry(mesh, 4);
   assert.notDeepEqual([...later.positions.subarray(0, 12)],
     [...deformed.positions.subarray(0, 12)]);
   assert.deepEqual([...later.positions.subarray(0, 3)],
-    [-0.00006777716043870896, -0.00014188083878252655, 597.1497802734375]);
+    [-0.00007320002623600885, -0.00014867083518765867, 597.1497802734375]);
 });
 
 test('Wonder scene mask retains the 0x40f3b0 immediate-mode layout', () => {
@@ -596,6 +615,17 @@ test('Wonder faceted class retains the 0x40cb20 pulse, split clocks and exit fad
   const gone = wonderFacetedState(17, envelope);
   assert.equal(gone.secondAlpha, 0);
   assert.equal(gone.drawSecond, false);
+
+  // The two clocks are SPLIT BY 30 FRAMES, not by 30 seconds. 0x0040cbcb scales
+  // the time by 10.0 into the first renderer's frame, and 0x0040cc68 adds the
+  // float 30.0 at 0x004334b8 to THAT — so the second layer trails the first by a
+  // constant 30 frames at every instant. Asserting only at t=0 cannot see the
+  // difference, because 0*10+30 and 0+30 are both 30; that is exactly how the
+  // second layer ran 9*t frames behind for as long as it did.
+  const mid = wonderFacetedState(9.528, envelope);
+  assert.equal(mid.firstFrame, Math.fround(95.28));
+  assert.equal(mid.secondFrame, Math.fround(125.28));
+  assert.equal(mid.secondFrame - mid.firstFrame, 30);
 });
 
 test('Wonder faceted constructor applies its native opacity to every material', () => {

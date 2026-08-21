@@ -1,19 +1,26 @@
 /**
- * Layered time scheduler. Clips are active on [start, end), receive local time,
- * and retain insertion order within a layer.
+ * Layered time scheduler. Clips receive local time and retain insertion order
+ * within a layer; callers may opt into a native inclusive/float32 interval.
  */
 export class LayeredTimeline {
-  constructor(clips = []) {
+  constructor(clips = [], {
+    inclusiveStart = true, inclusiveEnd = false, float32Time = false,
+  } = {}) {
     this.clips = [];
+    this.inclusiveStart = inclusiveStart;
+    this.inclusiveEnd = inclusiveEnd;
+    this.float32Time = float32Time;
     clips.forEach((clip) => this.add(clip));
   }
 
   add(clip) {
     const normalized = {
       id: String(clip.id),
-      start: Number(clip.start),
-      end: Number(clip.end),
+      start: this.float32Time ? Math.fround(clip.start) : Number(clip.start),
+      end: this.float32Time ? Math.fround(clip.end) : Number(clip.end),
       layer: Number(clip.layer ?? 0),
+      inclusiveStart: Boolean(clip.inclusiveStart ?? this.inclusiveStart),
+      inclusiveEnd: Boolean(clip.inclusiveEnd ?? this.inclusiveEnd),
       render: clip.render ?? null,
       data: clip.data ?? null,
       insertion: this.clips.length,
@@ -32,15 +39,22 @@ export class LayeredTimeline {
   }
 
   active(time) {
-    return this.clips.filter((clip) => time >= clip.start && time < clip.end);
+    const current = this.float32Time ? Math.fround(time) : time;
+    return this.clips.filter((clip) => (
+      (clip.inclusiveStart ? current >= clip.start : current > clip.start)
+      && (clip.inclusiveEnd ? current <= clip.end : current < clip.end)
+    ));
   }
 
   render(time, context) {
     const active = this.active(time);
+    const current = this.float32Time ? Math.fround(time) : time;
     for (const clip of active) {
-      if (clip.render) clip.render(time - clip.start, context, clip);
+      if (clip.render) {
+        const local = this.float32Time ? Math.fround(current - clip.start) : current - clip.start;
+        clip.render(local, context, clip);
+      }
     }
     return active;
   }
 }
-
