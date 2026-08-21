@@ -96,7 +96,7 @@ ok(timings.atlasSource === 'generated', 'font atlas was GENERATED, not downloade
 // section calls runTexgen directly, and texgen draws from the shared RNG
 // stream, so probing after it would compare a polluted stream position.
 const probeBuiltState = async (pg) => pg.evaluate(async () => {
-  const MG = await import('/js/meshgen.mjs');
+  const MG = await import('/work/js/meshgen.mjs');
   const s7 = await import('/web/js/scene7.js');
   const { allTextureIds } = await import('/web/js/assets.js');
   const fnv = (b) => {
@@ -123,8 +123,8 @@ const coldState = await probeBuiltState(page);
 // --------------------------------------------------------------------- textures
 console.log('\ntextures — browser texgen vs baked/tex/*.png');
 const texResults = await page.evaluate(async () => {
-  const { RESOURCES } = await import('/js/resources.mjs');
-  const { runTexgen } = await import('/js/texgen.mjs');
+  const { RESOURCES } = await import('/work/js/resources.mjs');
+  const { runTexgen } = await import('/work/js/texgen.mjs');
   const out = [];
   for (let id = 0; id < 28; id++) {
     // 11 is the font strip: its only op is 17, which is the GDI atlas and is not a
@@ -222,9 +222,9 @@ console.log('\nmodule — browser buildXm vs extracted/sonnet.xm');
 const xmCmp = await page.evaluate(async () => {
   const { installBuffer, preloadFile } = await import('/web/js/node_compat.js');
   installBuffer();
-  await preloadFile(new URL('/unpacked/sonnet_img.bin', location.href).href);
+  await preloadFile(new URL('/work/unpacked/sonnet_img.bin', location.href).href);
   const t0 = performance.now();
-  const { buildXm } = await import('/audio/writexm.mjs');
+  const { buildXm } = await import('/work/audio/writexm.mjs');
   const b = buildXm({ panMode: 'correct' });
   const ms = performance.now() - t0;
   let h = 0x811c9dc5;

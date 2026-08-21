@@ -88,10 +88,20 @@ export async function loadWarmStore({ root, config, loud = false }) {
 
   // Freshness: re-hash every recorded source. A store baked from different code
   // must not load — a texture entry has no entry-state check to catch it.
+  //
+  // THE SOURCE KEYS ARE PRODUCTION-ROOT RELATIVE (`web/js/main.js`,
+  // `work/js/meshgen.mjs`) because warmstore_node.mjs hashes them from there,
+  // while `root` is the WORK root. Fetching `root + rel` 404s on every entry,
+  // marks the whole store unreadable and boots cold — and does it SILENTLY,
+  // because a miss is only an info and a cold boot is still correct, just
+  // slower. That is what it did from the monorepo migration until 2026-08-21.
+  // Derived rather than fixed at the keys: `web/` sits outside `work/`, so no
+  // work-relative key could name it.
+  const srcRoot = new URL('../', root).href;
   const stale = [];
   await Promise.all(Object.entries(manifest.sources).map(async ([rel, want]) => {
     try {
-      const buf = await fetch(root + rel, { cache: 'no-store' }).then((r) => {
+      const buf = await fetch(srcRoot + rel, { cache: 'no-store' }).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.arrayBuffer();
       });

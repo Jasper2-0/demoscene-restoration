@@ -68,7 +68,7 @@ const require = createRequire(path.join(ROOT, 'productions/ptct/work/js/package.
 const puppeteer = require('puppeteer-core');
 const { createCanvas, loadImage } = require('canvas');
 
-const { positionToSeconds, END_POSITION, SCENE_BANDS } = await import(path.join(WEB, 'js/timeline.js'));
+const { positionToSeconds, END_POSITION, SCENE_BANDS, sceneAt } = await import(path.join(WEB, 'js/timeline.js'));
 
 const REF = path.join(WORK, 'work/reference/sonnet_ref.mkv');
 const OUT = path.join(WORK, 'work/verify');

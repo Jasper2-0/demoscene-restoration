@@ -80,6 +80,30 @@ behavior, so a human signs off.
   `productions/wonder/work/tools/compare-reference.mjs`. The monorepo
   migration had to hand-patch the root computation in every one of them,
   which is the clearest possible evidence they should have been one module.
+
+  **Confirmed the hard way, 2026-08-21.** Four defects of exactly this shape
+  were sitting in the sonnet harness, all dating from the migration, all found
+  only because a routine change made somebody run the suite end to end:
+  1. `web/test/generate_test.mjs` — four dynamic imports and one fetch named
+     `/js/…` and `/audio/…`, which stopped resolving once the server root was
+     the production dir. Tier 1 died on import, so **`run-verify.sh --full`
+     never reached the sweep at all.**
+  2. The warm-store equivalence block sat unreachable behind (1), so it had
+     never run since the migration.
+  3. `web/js/warmstore.js` fetched its freshness sources from the WORK root
+     while the manifest's keys are production-root relative — so every source
+     404'd, every store read as stale, and every boot was cold. **Silently**:
+     a miss is a `console.info` and a cold boot is still correct, only slower.
+     The part worth internalising is that the three "warm vs cold" assertions
+     underneath were therefore comparing a cold boot to a cold boot and passing
+     vacuously — a green check that proved nothing at all.
+  4. `web/test/sweep.mjs` called `sceneAt()` without importing it — a plain
+     ReferenceError, i.e. the sweep could never have run either.
+
+  Two rules for the shared harness fall out of this. **Paths come from one
+  module, never from a literal in a test.** And **a degraded mode must be loud
+  or fatal, never an info** — (3) survived eight days precisely because its
+  failure path was indistinguishable from normal operation.
     
   Build it in **Node**, not Python: `puppeteer-core` is already hoisted at
   the workspace root, every existing harness is already `.mjs`, and Python
@@ -120,7 +144,15 @@ behavior, so a human signs off.
   restoration with a static background, and it belongs beside METHOD.md §8's
   other "measurements that quietly lie" rules.
 
-- [ ] **Capture alignment backfill** — `alignmentOffsetMs` is recorded for
-  ptct (+4431 ms) and wonder (0); lost-vegas and sonnet captures are pinned
-  but their offsets are still null in `prod.json` — recover them from the
-  existing cross-correlation data when next touched.
+- [ ] **Capture alignment backfill** — `alignmentOffsetMs` is now recorded for
+  ptct (+4031 ms, re-measured), wonder (+83.3 ms), lapsus (+6410 ms),
+  planet-potion (+120 ms), lost-vegas (+80 ms) and sonnet (+2430 ms). **Sonnet
+  and lost-vegas are done** — this item claimed both were still null until
+  2026-08-21, which they had not been for some time.
+  Still genuinely null, each for a recorded reason:
+  - `genoaux` — never measured.
+  - `energia` — measured and NOT resolved: five probes disagree by 2.6 s, best
+    mean correlation 0.4298, one probe negatively correlated at every offset.
+    Deliberately left null rather than taking an argmax off a flat curve.
+  - `planet-potion`'s **fallback** capture — the primary's 120 ms was measured
+    against the primary's own audio and must not be assumed to carry over.
