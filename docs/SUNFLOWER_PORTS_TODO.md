@@ -31,7 +31,9 @@ only after both authentic ports have been signed off against their captures.
 
 References:
 
-- Wonder: <https://www.youtube.com/watch?v=7MnD4Ugco1g>
+- Wonder: <https://www.youtube.com/watch?v=G3XLu10_140> (1440x1080 at 60fps, the
+  capture `prod.json` pins; supersedes 7MnD4Ugco1g, whose 30fps resampling made
+  frame boundaries ambiguous)
 - Energia: <https://www.youtube.com/watch?v=JJ3TVjBjat4>
 
 ## 1. Shared Sunflower runtime
@@ -183,3 +185,12 @@ References:
 - [ ] Sign off the authentic 4:3 Wonder port.
 - [ ] Sign off the authentic 4:3 Energia port.
 - [ ] Only then open a separate remaster checklist.
+
+## Repo gates
+
+`npm run verify:repo` runs the mechanical gates that are green: `lint:tools`
+(METHOD.md's tool protocol) and `check:shared-runtime` (vendored runtime drift).
+It is deliberately kept passing — a gate that fails permanently stops being read.
+
+`npm run verify:all` adds `test:shared`, which currently exits 1 on one tracked
+Energia failure. Fold `test:shared` back into `verify:repo` once that is fixed.
