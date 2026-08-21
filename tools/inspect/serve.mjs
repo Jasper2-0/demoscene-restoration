@@ -14,9 +14,11 @@
 // browser cannot (the GitHub tracker, via `gh`).
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { serve, fromRepo } from '../harness/index.mjs';
 import { addNote, listNotes, outDir } from './notes.mjs';
+import { scorePair } from './compare.mjs';
 
 const argv = process.argv.slice(2);
 const prod = argv.find((a) => !a.startsWith('--'));
@@ -114,6 +116,55 @@ const server = await serve(fromRepo('.'), {
         (stored.issue ? `  -> ${stored.issue.url ?? '#' + stored.issue.number}` : '') +
         (stored.issueError ? `  (github: ${stored.issueError})` : ''));
       json(res, 200, stored);
+    },
+    // Score an arbitrary rendered frame against the cached reference for an instant.
+    //
+    // The browser must NOT compute r itself. compare.mjs scores through ffmpeg
+    // (crop -> scale -> gray) and the sweep uses that exact path; a hand-rolled
+    // canvas correlation would drift from the gate, which is the divergence
+    // compare.mjs exists to prevent. So the page renders (it already does, on every
+    // navigation) and the server scores, reusing scorePair unchanged.
+    //
+    // Body: { png: dataURL, captureTime: number, frameRect: {x,y,w,h}|null }
+    'POST /_inspect/score': async (req, res, body) => {
+      const { png, captureTime, frameRect = null } = body ?? {};
+      if (typeof png !== 'string' || !png.startsWith('data:image/png;base64,')) {
+        return json(res, 400, { error: 'expected a PNG data URL' });
+      }
+      if (!Number.isFinite(captureTime)) {
+        return json(res, 400, { error: 'captureTime must be a finite number' });
+      }
+      // The SAME cached file the sweep wrote. Not re-extracted here: a second ffmpeg
+      // seek could land on a different frame and score against a different picture.
+      const ref = path.join(outDir(prod), 'frames', `ref_${captureTime.toFixed(3)}.png`);
+      if (!fs.existsSync(ref)) {
+        return json(res, 409, { error: `no cached reference frame for ${captureTime.toFixed(3)}s`
+          + ` — run the sweep first so ${path.basename(ref)} exists` });
+      }
+      const tmp = path.join(os.tmpdir(), `inspect-score-${process.pid}.png`);
+      try {
+        fs.writeFileSync(tmp, Buffer.from(png.split(',')[1], 'base64'));
+        json(res, 200, scorePair(tmp, ref, frameRect));
+      } catch (e) {
+        json(res, 500, { error: String(e?.message ?? e) });
+      } finally {
+        try { fs.unlinkSync(tmp); } catch { /* already gone */ }
+      }
+    },
+    // Which sweeps exist. The page fetches run[-TAG].json directly, so a mistyped
+    // ?tag= 404s and the inspector degrades to "no sweep yet" — indistinguishable
+    // from never having swept. This lets it say which tag was asked for and what is
+    // actually on disk instead.
+    'GET /_inspect/runs': async (req, res) => {
+      let tags = [];
+      try {
+        tags = fs.readdirSync(outDir(prod))
+          .map((f) => /^run(?:-(.+))?\.json$/.exec(f))
+          .filter(Boolean)
+          .map((m) => m[1] ?? '')
+          .sort();
+      } catch { /* no output dir yet */ }
+      json(res, 200, { tags });
     },
     'GET /_inspect/notes': async (req, res) => json(res, 200, listNotes(prod)),
     'GET /_inspect/issues': async (req, res) => json(res, 200, trackerInTime()),

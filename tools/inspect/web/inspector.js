@@ -25,16 +25,36 @@ const $ = (s) => document.querySelector(s);
 const demo = $('#demo');
 
 const state = { run: null, schedule: [], samples: [], idx: 0, ready: false,
-                tracker: [], notes: [] };
+                tracker: [], notes: [],
+                // LAYER ISOLATION. `only` is null for "the frame as the sweep saw it"
+                // and an array for an explicit whitelist. It is reset on every
+                // navigation: a subset carried to another instant would be a
+                // different picture wearing the last one's score.
+                only: null, deltas: null, baseR: null };
 
 // ---------------------------------------------------------------- boot
 $('#title').textContent = PROD;
 demo.src = `${BASE}/web/index.html?inspect=1`;
 
 try {
-  state.run = await (await fetch(RUN)).json();
-} catch {
-  $('#meta').textContent = 'no sweep yet — run: node tools/inspect/sweep.mjs ' + PROD;
+  const res = await fetch(RUN);
+  // fetch() does not throw on 404 — it resolves with ok:false and .json() then dies
+  // on the error body, which is how a mistyped tag used to arrive here looking
+  // exactly like "this production has never been swept".
+  if (!res.ok) throw new Error(`${res.status} ${RUN.split('/').pop()}`);
+  state.run = await res.json();
+} catch (e) {
+  const asked = RUN.split('/').pop();
+  let avail = [];
+  try { avail = (await (await fetch('/_inspect/runs')).json()).tags ?? []; } catch { /* older server */ }
+  const known = avail.length
+    ? `available: ${avail.map((t) => t === '' ? '(no tag)' : t).join(', ')}`
+    : `run: node tools/inspect/sweep.mjs ${PROD}`;
+  // Distinguish "wrong tag" from "never swept". They need different actions and the
+  // symptom is identical: a timeline with no score trace.
+  $('#meta').innerHTML = avail.length && TAG
+    ? `<span style="color:#d6503f">no run for tag "${TAG}"</span> — looked for ${asked} · ${known}`
+    : `no sweep yet — ${known}`;
 }
 if (state.run) {
   // CHRONOLOGICAL, ALWAYS. The plan is built part-by-part, and for a LAYERED
@@ -234,10 +254,121 @@ $('#timeline').addEventListener('click', (e) => {
 // ---------------------------------------------------------------- panels
 const fmt = (v) => typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(3)) : String(v);
 
+// ---------------------------------------------------------------- layers
+// The adapter says whether it can composite a subset; without that the panel would
+// offer controls that silently do nothing (ADAPTER.md, `features.only`).
+const canIsolate = () => !!demo.contentWindow?.__demo?.features?.only;
+
+// Render the CURRENT sample under the current whitelist. `only: null` is omitted
+// entirely rather than passed, so a port that ignores the field behaves as before.
+async function renderCurrent() {
+  const s = state.samples[state.idx];
+  return demo.contentWindow.__demo.render({
+    part: s.part, local: s.local, ...(state.only ? { only: state.only } : {}),
+  });
+}
+
+// Score whatever is on the canvas against the sweep's cached reference, through the
+// SAME metric the sweep uses — see the note on POST /_inspect/score in serve.mjs.
+async function scoreCanvas(captureTime) {
+  const png = demo.contentWindow.document.querySelector('canvas').toDataURL('image/png');
+  const frameRect = demo.contentWindow.__demo.frameRect?.() ?? null;
+  const res = await fetch('/_inspect/score', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ png, captureTime, frameRect }),
+  });
+  return res.json();
+}
+
+function paintLayers(s) {
+  const block = $('#layerBlock');
+  if (!canIsolate()) { block.hidden = true; return; }
+  block.hidden = false;
+  const live = activeAt(s.captureTime);
+  const on = state.only ? new Set(state.only) : new Set(live);
+  $('#layers').innerHTML = live.map((name) => {
+    const d = state.deltas?.get(name);
+    // A layer whose removal RAISES the score is drawing something wrong. That is the
+    // signal worth hunting, so it is the one that gets a colour.
+    const cls = d === undefined ? '' : d > 0.002 ? 'helps' : d < -0.002 ? 'hurts' : '';
+    const shown = d === undefined ? '' : `${d >= 0 ? '+' : ''}${d.toFixed(3)}`;
+    return `<div class="layerRow ${on.has(name) ? '' : 'off'}" data-name="${name}">`
+      + `<input type="checkbox" ${on.has(name) ? 'checked' : ''}>`
+      + `<span class="nm" title="solo this layer">${name}</span>`
+      + `<span class="d ${cls}">${shown}</span></div>`;
+  }).join('') || '<div class="layerRow"><span class="nm">nothing live here</span></div>';
+
+  const note = $('#layerNote');
+  if (state.baseR !== null) {
+    // Say what the number IS. It is not the layer's score — the reference is always
+    // the full composite — and removing a layer also changes the GL state the ones
+    // after it inherit, so this is a contribution to THIS frame, not a verdict.
+    note.innerHTML = `r with all layers <b>${state.baseR.toFixed(3)}</b><br>`
+      + 'delta = how much r falls when that layer is removed';
+  } else {
+    note.textContent = live.length > 1
+      ? 'toggle to re-render · click a name to solo · measure scores each layer'
+      : 'only one layer live here';
+  }
+}
+
+$('#layers').addEventListener('click', async (e) => {
+  const row = e.target.closest('.layerRow');
+  if (!row?.dataset.name) return;
+  const s = state.samples[state.idx];
+  const live = activeAt(s.captureTime);
+  const on = new Set(state.only ?? live);
+  if (e.target.classList.contains('nm')) {
+    // clicking the name solos, unless it is already the only one — then restore
+    state.only = (state.only?.length === 1 && state.only[0] === row.dataset.name) ? null : [row.dataset.name];
+  } else {
+    if (on.has(row.dataset.name)) on.delete(row.dataset.name); else on.add(row.dataset.name);
+    state.only = live.filter((n) => on.has(n));   // keep native compositing order
+  }
+  await renderCurrent();
+  paintLayers(s);
+});
+
+$('#layerAll').addEventListener('click', async () => {
+  state.only = null;
+  await renderCurrent();
+  paintLayers(state.samples[state.idx]);
+});
+
+$('#layerMeasure').addEventListener('click', async () => {
+  const s = state.samples[state.idx];
+  const live = activeAt(s.captureTime);
+  const note = $('#layerNote');
+  note.textContent = `measuring ${live.length + 1} renders…`;
+  try {
+    await demo.contentWindow.__demo.render({ part: s.part, local: s.local, only: live });
+    const base = await scoreCanvas(s.captureTime);
+    if (base.error) { note.textContent = base.error; return; }
+    const deltas = new Map();
+    for (const name of live) {
+      await demo.contentWindow.__demo.render({
+        part: s.part, local: s.local, only: live.filter((n) => n !== name),
+      });
+      const without = await scoreCanvas(s.captureTime);
+      if (without.error) { note.textContent = without.error; return; }
+      deltas.set(name, base.r - without.r);
+    }
+    state.deltas = deltas;
+    state.baseR = base.r;
+  } finally {
+    await renderCurrent();          // put the view back the way the user left it
+  }
+  paintLayers(s);
+});
+
 async function go(i) {
   state.idx = Math.max(0, Math.min(state.samples.length - 1, i));
   const s = state.samples[state.idx];
+  // A whitelist belongs to ONE instant; carrying it forward would show a subset
+  // labelled with the next sample's score.
+  state.only = null; state.deltas = null; state.baseR = null;
   const info = await demo.contentWindow.__demo.render({ part: s.part, local: s.local });
+  paintLayers(s);
 
   // WHAT IS UNDER THE CURSOR. On a layered timeline the sample is filed under
   // one part but the FRAME is everything live at that instant, so a low score

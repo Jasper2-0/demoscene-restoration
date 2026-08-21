@@ -73,3 +73,20 @@ textarea:focus { outline: none; border-color: var(--accent); }
 .sw.iss { background: #d6503f; } .sw.note { background: #9a6ce6; }
 #timeline { height: 116px; }
 #timeline canvas { height: 116px; }
+
+/* layers ------------------------------------------------------------------ */
+.block .h { display: flex; align-items: baseline; }
+.hTools { margin-left: auto; display: flex; gap: 4px; text-transform: none;
+  letter-spacing: 0; }
+.hTools button { padding: 1px 6px; font-size: 11px; }
+.layerRow { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; }
+.layerRow input { margin: 0; }
+.layerRow .nm { color: var(--ink); cursor: pointer; flex: 1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.layerRow .nm:hover { color: var(--accent); }
+.layerRow.off .nm { color: var(--dim); text-decoration: line-through; }
+.layerRow .d { color: var(--dim); font-variant-numeric: tabular-nums; }
+.layerRow .d.helps { color: var(--ok); }
+.layerRow .d.hurts { color: var(--bad); }
+#layerNote { color: var(--dim); margin-top: 6px; }
+#layerNote b { color: var(--mid); }

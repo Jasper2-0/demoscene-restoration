@@ -25,10 +25,14 @@ window.__demo = {
   /** Draw exactly that sample, deterministically. Must NOT depend on previous
    *  calls: a sweep has to be reproducible and is free to sample out of order.
    *  Returns whatever the production knows about the frame (see below). */
-  async render({ part, local }) -> info | null,
+  async render({ part, local, only }) -> info | null,
 
   /** What is on screen right now — the inspector's resource panel. */
   state() -> object | null,
+
+  /** OPTIONAL. What this adapter supports beyond the required surface, so the
+   *  inspector can hide controls that would silently do nothing. */
+  features: { only: true },
 };
 ```
 
@@ -158,6 +162,37 @@ sweep of a layered production:
   other and only the last drawn survives. The inspector greedily first-fits by
   start time, which degenerates to a single lane exactly when parts never
   overlap, so exclusive productions are unaffected.
+
+### Isolating layers: `render({ only })`
+
+A layered production cannot be diagnosed from its scores alone. When three clips
+are live, one number describes three layers, and improving one of them need not
+move it at all. So `render()` takes an optional `only`:
+
+```js
+render({ part, local, only })
+//  only: array of clip ids to composite — a WHITELIST, exactly ?only= semantics.
+//        Omitted or null = every live clip, the unchanged behaviour.
+//        An EMPTY array means composite nothing, NOT "no filter". Those are
+//        different requests and an adapter that collapses them will draw the whole
+//        frame at the moment the user has unchecked every layer.
+```
+
+Declare `features: { only: true }` when you support it. The inspector hides its
+layer panel otherwise, and every existing caller that never passes `only` is
+unaffected.
+
+Pass it **per call**; do not add a setter. `render()` must stay deterministic and
+`state()` must stay pure (below), and a mutator puts the enabled set somewhere
+`state()` would then have to report.
+
+**An isolated render is not "the composite minus that layer."** Effects inherit GL
+state from whatever drew before them. Wonder's `0x4106a0` never sets a blend function
+at all: at capture 18.692 it draws additively only because `effect_408ca0`'s 300
+petals left `GL_SRC_ALPHA/GL_ONE` in force, and muting that layer composites the
+survivors differently than they were in the full frame. So the inspector's per-layer
+delta is a *contribution to this frame's score*, not that layer's score — and a
+plausible-looking isolated frame is not evidence about how the layer behaves in situ.
 
 Related: the sweep now sorts every sample by capture time before drawing.
 `plan()` is built part-by-part, and a layered production's parts are not in

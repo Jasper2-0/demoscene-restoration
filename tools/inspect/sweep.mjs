@@ -134,7 +134,8 @@ await withPage(
 
     let plan = hasOwnPlan
       ? await page.evaluate((s) => window.__demo.plan(s), STEP)
-      : defaultPlan(await page.evaluate(() => window.__demo.schedule()), STEP);
+      : defaultPlan(await page.evaluate(() => window.__demo.schedule()), STEP,
+        Number(cap.captureFps) || 0);
     if (ONLY) plan = plan.filter((p) => ONLY.includes(p.part));
 
     // A SAMPLE PAST THE END OF THE CAPTURE HAS NO REFERENCE, AND THAT IS NOT AN

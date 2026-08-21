@@ -30,9 +30,16 @@ await withDemo(prodName, extra, async (api) => {
   const { pngPath } = await api.render(part, local);
   const ours = grayOf(pngPath);
 
+  // Offsets are built as INTEGER MULTIPLES of the step, outwards from zero, so
+  // that zero is always in the scan. Accumulating `d += step` from -span does
+  // not put it there: --span=0.5 --step=0.0334 steps straight over it, and the
+  // aligned sample -- which every verdict below is measured AGAINST -- silently
+  // went missing. The verdict then printed `aligned r ?` and the process died on
+  // `atZero.r`, after emitting a table that looked complete.
+  const steps = Math.floor((span + 1e-9) / step);
   const rows = [];
-  for (let d = -span; d <= span + 1e-9; d += step) {
-    const off = +d.toFixed(3), t = t0 + off;
+  for (let k = -steps; k <= steps; k++) {
+    const off = +(k * step).toFixed(3), t = t0 + off;
     if (t < 0) continue;
     rows.push({ d: off, t, r: corr(ours, grayOf(refFrame(prodName, cap.file, +t.toFixed(3)))) });
   }
@@ -40,13 +47,19 @@ await withDemo(prodName, extra, async (api) => {
   console.log(`\n  ${prodName}/${part} @${local}s   offset     capture       r`);
   const best = rows.reduce((a, b) => (b.r > a.r ? b : a), rows[0]);
   const atZero = rows.find((x) => Math.abs(x.d) < 1e-9);
+  if (!atZero) {
+    // Only reachable if t0 - 0 < 0, i.e. the part starts before the capture does.
+    // Exit rather than report: every verdict is a comparison against this sample.
+    console.error(`\n  no aligned sample: capture time ${t0.toFixed(3)}s is outside the capture.`);
+    process.exit(1);
+  }
   for (const x of rows) {
     console.log(`   ${x.d >= 0 ? '+' : ''}${x.d.toFixed(2)}s   ${x.t.toFixed(2)}s  ${x.r.toFixed(4)}` +
       (x === best ? '  <== best' : ''));
   }
   const sorted = rows.map((x) => x.r).sort((a, b) => a - b);
   const median = sorted[sorted.length >> 1];
-  console.log(`\n  aligned r ${atZero ? atZero.r.toFixed(4) : '?'}   best r ${best.r.toFixed(4)} ` +
+  console.log(`\n  aligned r ${atZero.r.toFixed(4)}   best r ${best.r.toFixed(4)} ` +
     `at ${best.d >= 0 ? '+' : ''}${best.d.toFixed(2)}s   scan median ${median.toFixed(4)}`);
 
   const MARGIN = 0.1;
