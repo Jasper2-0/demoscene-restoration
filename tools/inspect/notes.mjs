@@ -140,12 +140,24 @@ function fileToGitHub(n) {
   // it as one of its findings and closes it from under you.
   // `gh label create` prints to stderr when the label exists, which is noise
   // rather than an error; check first instead.
+  //
+  // BOTH labels, not just `observed`. This guard used to cover `observed`
+  // alone while the create call below passed `prod:<production>` as well, so
+  // the first note filed for any production that had never been labelled died
+  // with `could not add label: 'prod:sonnet' not found` — losing the trip to
+  // the tracker even though the note itself was already stored. "Never block
+  // filing on them" was the stated intent and the next line broke it.
+  const wantLabels = [
+    ['observed', '5319e7', 'Reported from the inspector by a human'],
+    [`prod:${n.production}`, '1d76db', `Production: ${n.production}`],
+  ];
   try {
     const have = JSON.parse(gh(['label', 'list', '--limit', '200', '--json', 'name']))
       .map((l) => l.name);
-    if (!have.includes('observed')) {
-      gh(['label', 'create', 'observed', '--color', '5319e7',
-          '--description', 'Reported from the inspector by a human']);
+    for (const [name, color, description] of wantLabels) {
+      if (!have.includes(name)) {
+        gh(['label', 'create', name, '--color', color, '--description', description]);
+      }
     }
   } catch { /* labels are cosmetic; never block filing on them */ }
   const out = gh(['issue', 'create', '--title', `${n.part} — ${n.text.split('\n')[0].slice(0, 70)}`,
