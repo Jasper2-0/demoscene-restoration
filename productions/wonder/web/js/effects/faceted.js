@@ -25,7 +25,12 @@ export function wonderFacetedState(localTime, pulseEnvelope) {
     firstAlpha,
     secondAlpha,
     firstFrame: Math.fround(time * Math.fround(10)),
-    secondFrame: Math.fround(time + Math.fround(30)),
+    // FUN_0040cb20 drives the SECOND renderer from the FIRST renderer's frame,
+    // not from the time: 0x0040cc68 loads the value already multiplied by 10.0 at
+    // 0x0040cbcb and adds the float 30.0 at 0x004334b8. Adding 30 to `time`
+    // instead put the second layer 9*time frames behind the first — at local
+    // 9.528s, frame 39.5 where the executable is at 125.3.
+    secondFrame: Math.fround(Math.fround(time * Math.fround(10)) + Math.fround(30)),
     firstTextureOffset: [Math.fround(scroll), 0],
     secondTextureOffset: [Math.fround(scroll + 8), 0],
     drawSecond: secondAlpha !== 0,

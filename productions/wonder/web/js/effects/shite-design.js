@@ -16,7 +16,24 @@ function positiveRemainder(value, divisor) {
 
 /** Vertex mutation from callback 0x40e490. */
 export function buildWonderShiteGeometry(mesh, frame = 0) {
-  const vertexNormals = buildWonderVertexNormals(mesh);
+  // 0x0040e91a reads the modifier's input normal straight off the source vertex
+  // at +0x3c, and `buildWonderVertexNormals` returns exactly the negation of what
+  // the engine stores there — measured at dot = -1.0000 on 100% of vertices, and
+  // visible in FUN_00406e20 itself, whose face record holds A/B/C at +0/+4/+8 and
+  // whose cross product at 0x00406e76 forms (B-A)x(C-A) where this port forms
+  // (C-A)x(B-A).
+  //
+  // Every other consumer already compensates: the environment UVs negate per mesh
+  // (exp-renderer) and the facing test flips its comparison to `> 0`
+  // (wonderFacingFlags). This one did not, so the sphere was deformed by the
+  // mirrored normal field. It is not a subtle difference: at capture 54.958 the
+  // executable's own vertex data for Sphere02 matches this deform to 0.066 total
+  // absolute error across six coordinates with the negation and 3.33 without, and
+  // the triangle count the facing test then keeps is 174 with it against the
+  // executable's 174, versus 205 without.
+  const engineNormals = buildWonderVertexNormals(mesh);
+  const vertexNormals = new Float32Array(engineNormals.length);
+  for (let i = 0; i < engineNormals.length; i++) vertexNormals[i] = -engineNormals[i];
   const positions = new Float32Array(mesh.positions.length);
   // The callback receives the separately wrapped t*10 object clock. Ghidra's
   // first pass lost both phase terms; the raw x87 stream at 0x40e8d9 proves

@@ -43,10 +43,27 @@ const inspect = parameters.has('inspect');
 // Both modes skip the module, the AudioContext and the transport.
 const headless = fixedTime !== null || inspect;
 const debug = parameters.has('debug');
+// Wonder's per-frame triangle rejection (wonderFacingFlags), derived from
+// FUN_004070d0 and proven at 100% against the engine's own dumped flags.
+//
+// SCOPED TO woah3.exp, because the consumer's bypass is not resolved yet: the gate
+// at 0x004076cf skips rejection entirely when material[+0x94] != 0, and no port
+// field is known to correspond to that runtime offset. Applying rejection to every
+// scene costs parts whose materials evidently bypass it — effect_40c760 falls
+// 0.939 -> 0.565, effect_40f8e0 0.922 -> 0.812, effect_40d060 0.902 -> 0.809.
+// woah3's B2.LWO0n are the meshes the rule was actually verified against.
+// `?cull=all` applies it everywhere, `?cull=off` disables it.
+const cullMode = parameters.get('cull') ?? 'proven';
 const onlyEffects = new Set(parameters.getAll('only')
   .flatMap((value) => value.split(','))
   .map((value) => value.trim())
   .filter(Boolean));
+// Set by __demo.render({ only }) for the duration of one call. It is a separate
+// binding rather than a mutation of onlyEffects because the two have different
+// empty cases: an empty ?only= means "no filter", while an empty explicit whitelist
+// means "composite nothing" — which is what an inspector unchecking every layer asks
+// for. Collapsing them would draw the whole frame at the moment the user expects none.
+let onlyOverride = null;
 const designParts = new Set(parameters.getAll('design-parts')
   .flatMap((value) => value.split(','))
   .map((value) => value.trim())
@@ -98,7 +115,18 @@ try {
     // in scene updates, but the release renderer's textured draw callbacks are
     // unlit, including boxical.exp despite its exported Omni01.
     const renderer = new ExpSceneRenderer(mgl, scene, assets,
-      { lighting: false, sphereMap: false });
+      { lighting: false,
+        sphereMap: false,
+        // woah3 only: the rejection is verified there and the material[+0x94]
+        // bypass that governs other scenes is still unidentified.
+        // DEFAULT: the derived per-frame rejection everywhere. Verified against
+        // the oracle per mesh — at show 102.7967 the port reproduces the
+        // executable's 6408 / 2499 / 2472 / 2439 / 2388 / 1944 vertex submission
+        // and its alphas exactly. `fitted` selects the superseded placeholder,
+        // `off` disables rejection entirely.
+        facingCull: cullMode === 'off' ? false
+          : cullMode === 'fitted' ? (/woah3/i.test(name) ? 'fitted' : false)
+            : true });
     return [name, { scene, renderer }];
   }));
   const scenes = new Map(sceneEntries);
@@ -231,8 +259,9 @@ try {
   const renderAt = (requestedSeconds) => {
     if (!Number.isFinite(requestedSeconds)) throw new Error('render time must be finite');
     const seconds = Math.fround(Math.max(0, Math.min(requestedSeconds, WONDER_SHOW_END)));
-    const activeClips = showTimeline.active(seconds)
-      .filter((clip) => onlyEffects.size === 0 || onlyEffects.has(clip.id));
+    const activeClips = showTimeline.active(seconds).filter((clip) => (onlyOverride
+      ? onlyOverride.has(clip.id)
+      : onlyEffects.size === 0 || onlyEffects.has(clip.id)));
     // Composite effects once in manager order, rather than once per EXP
     // asset. In particular 0x40dab0 is a native scene layer despite owning
     // only DustOnYourEyes__.jpg; deriving this list from EXP filenames made
@@ -406,10 +435,32 @@ try {
   // CAPTURE PHASE IS EXPLICIT AND NOT BAKED IN, per work/reference/README.md:
   // the executable calls FSOUND_SetMixAhead(30) and drives visuals from
   // FMUSIC_GetOrder, so visuals lead audible output by ~30ms, and the 30fps
-  // capture adds another 0-33ms of frame phase. Only the engine's 30ms belongs
-  // in playback. `captureOffsetMs` below carries the rest as a comparison-only
+  // capture would add another 0-33ms of frame phase. Only the engine's 30ms
+  // belongs in playback; `captureOffsetMs` carries the rest as a comparison-only
   // quantity — the same split Lapsus needed between trackOffsetsMs (audio) and
   // visualTrackOffsetsMs (frames), arrived at independently on both ports.
+  //
+  // MEASURED 2026-08-20 as +83.3ms = exactly FIVE frames of the 60fps capture.
+  //
+  // It was 0 until then, on a measurement that had selected against itself: the
+  // offset was estimated from six WELL-MATCHING samples, and a well-matching
+  // sample is precisely one whose phase scan is FLAT, so those six were the six
+  // least able to see an offset. Re-measuring on samples with sharp scans, spread
+  // from capture 1.2s to 183.8s, all EIGHTEEN peak at a positive offset (median
+  // +0.08s, none negative; under a true zero that is a 1-in-260,000 coincidence).
+  //
+  // Three independent things then agree it is real rather than a score-grab:
+  //   * the sweep median is single-peaked in the offset - 0.727 at 50ms, 0.762 at
+  //     75ms, 0.767 at 80-85ms, 0.732 at 100ms - so it is an optimum, not a slope;
+  //   * 80ms and 85ms score identically because ffmpeg -ss snaps to a frame, and
+  //     both land on frame 5. The quantity being measured is an integer number of
+  //     capture frames, which is what a capture START offset physically is;
+  //   * it is constant across 180 seconds. A clock-RATE error would grow.
+  //
+  // The phase is still somewhat variable (three parts prefer a smaller offset and
+  // lose ~0.09), so this is the best single constant, not an exact description.
+  // COMPARISON ONLY: nothing but __demo.schedule()'s captureStart reads it, so it
+  // cannot affect playback. `?capoff=<ms>` overrides it for re-measurement.
   // Order boundaries in seconds, when the envelope was loaded (everything but a
   // bare ?t= render). Drives __demo.positionAt.
   const ORDER_TIMES = orderEnvelopeText
@@ -418,7 +469,9 @@ try {
     name: clip.id, phase: 1, start: clip.start, dur: clip.end - clip.start,
     assets: clip.data?.assets ?? [],
   }));
-  let captureOffsetMs = 0;
+  // ?capoff=<ms> overrides it, so the constant can be MEASURED through the same
+  // adapter the sweep uses rather than guessed.
+  const captureOffsetMs = parameters.has('capoff') ? Number(parameters.get('capoff')) : 83.3;
   let lastState = null;
   window.__demo = {
     id: 'wonder',
@@ -430,15 +483,36 @@ try {
     // tools/inspect/plan.mjs so the five-sample floor cannot drift between
     // productions. Supply plan() here only to OVERRIDE it, and keep
     // tools/inspect/plan-identity.mjs passing so the override stays deliberate.
-    async render({ part, local }) {
+    // `only` is OPTIONAL and has exactly the semantics of ?only= : a WHITELIST of
+    // clip ids to composite. Omitted or null renders whatever the URL asked for,
+    // which is the unchanged behaviour every existing caller relies on.
+    //
+    // It is applied per CALL rather than through a setter because ADAPTER.md
+    // requires render() to be deterministic and state() to be a pure function of
+    // the last render() argument. A mutator would put the enabled set somewhere
+    // state() would have to reflect, and the sweep depends on that purity.
+    //
+    // The swap is safe because the filter is evaluated fresh on every renderAt and
+    // nothing derives from it at load time. It is restored in a finally so a throwing
+    // render cannot leave the page filtered.
+    async render({ part, local, only = null }) {
       const c = CLIPS.find((x) => x.name === part);
       if (!c) return null;
-      // renderAt takes ABSOLUTE show time and is safe to call repeatedly, which
-      // is what lets a whole sweep run in one page load.
-      const info = renderAt(c.start + local);
-      lastState = { ...info, part, local, glError: mgl.gl ? mgl.gl.getError() : 0 };
-      return lastState;
+      const previous = onlyOverride;
+      if (only) onlyOverride = new Set(only);
+      try {
+        // renderAt takes ABSOLUTE show time and is safe to call repeatedly, which
+        // is what lets a whole sweep run in one page load.
+        const info = renderAt(c.start + local);
+        lastState = { ...info, part, local, glError: mgl.gl ? mgl.gl.getError() : 0 };
+        return lastState;
+      } finally {
+        onlyOverride = previous;
+      }
     },
+    // What this adapter supports beyond the required surface, so the inspector can
+    // hide controls that would silently do nothing on a port without them.
+    features: { only: true },
     state: () => lastState,
     assets: (part) => CLIPS.find((x) => x.name === part)?.assets ?? null,
     // OPTIONAL: a MUSICAL coordinate for the timeline axis.

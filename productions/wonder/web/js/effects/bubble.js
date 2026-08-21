@@ -106,13 +106,119 @@ function interpolateControlGrid(control, row, column, rowFraction, columnFractio
     // it as an unwrapped interval reproduces 5/6 -> 1 instead of smearing it
     // backwards through zero.
     uv: [(column + columnFraction) * ONE_SIXTH, (row + rowFraction) * ONE_SIXTH],
+    env: control[row][column].env ? [sample('env', 0), sample('env', 1)] : null,
   };
 }
 
-export function buildWonderBubbleSurface(localTime) {
+/**
+ * The lattice face records at +0x30 and +0x3c, built by FUN_0040a280's first phase.
+ *
+ * NOT a cross product. Every term at 0x0040a340-0x0040a3a3 is `FMUL .. FMUL .. FADDP` —
+ * a sum of products, never FSUBP — so the operator is SYMMETRIC in its two arguments
+ * and swapping operand order cannot flip its sign. Winding is therefore irrelevant
+ * here; the sign comes from four unconditional negations at 0x0040a3a6-0x0040a3e2,
+ * which negate X and Y of both records and leave Z alone.
+ *
+ * Feeding this path conventional triangle normals is why five earlier attempts at the
+ * environment coordinates all scored worse than doing nothing.
+ */
+function faceOperator(q, e) {
+  // FSTP float ptr — each component is stored as float32 before accumulation.
+  return [
+    Math.fround(-(q[1] * e[2] + q[2] * e[1])),   // 0040a342/0040a348, negated at 0040a3b7
+    Math.fround(-(q[0] * e[2] + q[2] * e[0])),   // 0040a355/0040a359, negated at 0040a3a6
+    Math.fround(q[0] * e[1] + q[1] * e[0]),      // 0040a366/0040a36a — Z is NOT negated
+  ];
+}
+
+/**
+ * Accumulated control-point normals, exactly as 0x0040a45c-0x0040a554 sums them.
+ *
+ * The lattice links are P+0x58 = next column (wrapped), +0x54 = previous column,
+ * +0x50 = next row (null on row 5), +0x4c = previous row (null on row 0), and every
+ * dereference falls back to the element ITSELF when the pointer is null — so the
+ * boundary rows double-count their own record rather than skipping a term.
+ *
+ * The six terms are NOT "both triangles of all four adjacent quads", which is what I
+ * assumed before measuring:
+ *
+ *   N(r,c) = F30(r,c) + F3c(r,c) + F30(U) + F3c(D) + F30(UL) + F3c(UL)
+ *   U  = (max(r-1,0), c)      D = (min(r+1,5), c)      UL = (max(r-1,0), (c-1) mod 6)
+ *
+ * There is no division by the term count; the sum is normalised after the transform.
+ */
+function controlNormals(control) {
+  const P = (r, c) => control[Math.min(ROWS - 1, Math.max(0, r))][(c + COLUMNS) % COLUMNS].position;
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const F30 = [], F3c = [];
+  for (let r = 0; r < ROWS; r++) {
+    F30.push([]); F3c.push([]);
+    for (let c = 0; c < COLUMNS; c++) {
+      const self = P(r, c);
+      const right = P(r, c + 1);                       // +0x58, always present (cyclic)
+      const down = r < ROWS - 1 ? P(r + 1, c) : self;  // +0x50, else self
+      const diag = r < ROWS - 1 ? P(r + 1, c + 1) : right; // (+0x58)+0x50, else right
+      const q = sub(diag, self);
+      F3c[r].push(faceOperator(q, sub(right, self)));  // the P,R,Q half-cell
+      F30[r].push(faceOperator(q, sub(down, self)));   // the P,Q,D half-cell
+    }
+  }
+  const out = [];
+  for (let r = 0; r < ROWS; r++) {
+    out.push([]);
+    for (let c = 0; c < COLUMNS; c++) {
+      const ur = Math.max(r - 1, 0);
+      const dr = Math.min(r + 1, ROWS - 1);
+      const ulc = (c - 1 + COLUMNS) % COLUMNS;
+      const terms = [F30[r][c], F3c[r][c], F30[ur][c], F3c[dr][c], F30[ur][ulc], F3c[ur][ulc]];
+      out[r].push(terms.reduce((a, t) => [
+        Math.fround(a[0] + t[0]), Math.fround(a[1] + t[1]), Math.fround(a[2] + t[2]),
+      ], [0, 0, 0]));
+    }
+  }
+  return out;
+}
+
+/**
+ * The env texture coordinate for one control point — 0x0040a554-0x0040a5c6.
+ *
+ *   0040a596  FMUL [EAX] / [EAX+4] / [EAX+8]        -> x   (matrix COLUMNS, i.e. the
+ *   0040a566  FMUL [EAX+0x10] / +0x14 / +0x18       -> y    transpose of the 3x3)
+ *   0040a57a  FMUL [EAX+0x20] / +0x24 / +0x28       -> z
+ *   0040a5a2  CALL 0x0040a610                        -> normalise
+ *   0040a5ad  FADD [0x00433258] (1.0) / FMUL [0x004332e4] (0.5)
+ *
+ * A different convention from `wonderEnvironmentTexcoords`, which serves the EXP meshes
+ * from 0x0040752a: that one does not normalise after the transform and negates V.
+ */
+export function wonderBubbleEnvCoord(normal, modelView) {
+  const m = modelView.m ?? modelView;
+  const x = normal[0] * m[0] + normal[1] * m[1] + normal[2] * m[2];
+  const y = normal[0] * m[4] + normal[1] * m[5] + normal[2] * m[6];
+  const z = normal[0] * m[8] + normal[1] * m[9] + normal[2] * m[10];
+  const length = Math.hypot(x, y, z) || 1;
+  return [
+    Math.fround((Math.fround(x / length) + 1) * 0.5),
+    Math.fround((Math.fround(y / length) + 1) * 0.5),
+  ];
+}
+
+export function buildWonderBubbleSurface(localTime, modelView = null) {
   const control = Array.from({ length: ROWS }, (_, row) =>
     Array.from({ length: COLUMNS }, (_, column) =>
       wonderBubbleControlPoint(localTime, row, column)));
+  // 0x0040a280 generates the env UV AT THE CONTROL POINT; 0x004098a0 then Catmull-Rom
+  // interpolates element slots 3 and 4 across the surface alongside position and
+  // diffuse UV. Interpolating the UV is not the same as interpolating a normal and
+  // transforming per vertex.
+  if (modelView) {
+    const normals = controlNormals(control);
+    for (let row = 0; row < ROWS; row++) {
+      for (let column = 0; column < COLUMNS; column++) {
+        control[row][column].env = wonderBubbleEnvCoord(normals[row][column], modelView);
+      }
+    }
+  }
   const vertices = [];
   for (let row = 0; row < ROWS - 1; row++) {
     for (let rowStep = 0; rowStep < ROW_STEPS - 1; rowStep++) {
@@ -145,7 +251,6 @@ export class BubbleEffect {
   render(localTime) {
     const { mgl } = this;
     const camera = sampleEnvelope(this.envelope, localTime);
-    const vertices = buildWonderBubbleSurface(localTime);
 
     mgl.enableDepthTest(false);
     mgl.depthMask(false);
@@ -172,6 +277,10 @@ export class BubbleEffect {
     mgl.rotate(f32(localTime) * 0.5, 0, 1, 0);
     mgl.rotate(camera[1], 1, 0, 0);
 
+    // Built AFTER the transform: FUN_004097f0 issues glGetFloatv(GL_MODELVIEW_MATRIX)
+    // once the matrix above is in place, then hands it to FUN_0040a280.
+    const vertices = buildWonderBubbleSurface(localTime, mgl.cur);
+
     // The constructor installs two descriptors for the same image. Flags 1
     // and 2 select regular UVs and the generated normal XY respectively;
     // 0x4098a0 draws them as distinct additive passes.
@@ -179,7 +288,7 @@ export class BubbleEffect {
       mgl.begin(mgl.TRIANGLES);
       for (const vertex of vertices) {
         mgl.color4(...vertex.color);
-        mgl.texCoord2(...(pass === 0 ? vertex.uv : vertex.normal));
+        mgl.texCoord2(...(pass === 0 ? vertex.uv : (vertex.env ?? vertex.normal)));
         mgl.vertex3(...vertex.position);
       }
       mgl.end();

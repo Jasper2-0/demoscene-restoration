@@ -78,11 +78,28 @@
       "captureFps": 60,
       "sha256": "73866e9a8efc29b4fe3514c13d300376668297f60cb42d890d612cff5604760e",
       "alignmentOffsetMs": 0,
-      "note": "SUPERSEDES 7MnD4Ugco1g (1440x1080 at 30fps), whose 30-fps resampling made frame boundaries ambiguous. This is 1440x1080 at 60fps, 186.75s, uploaded 2019-06-27. The format pin asks for 1080p60 rather than the available 2880x2160 because every comparison tool downscales to 640x480 - frame RATE was the deficiency, not resolution. alignmentOffsetMs RE-MEASURED against THIS file 2026-08-15 and set to 0: correlating six well-matching samples spread across the demo over -0.20..+0.20s gives a mean peak at +0.033s that beats 0 by 0.002, which is not a measurement, and the samples disagree (115.2s peaks sharply at +0, 135.3s at +0.1). That reproduces the superseded capture README's finding of a VARIABLE frame phase rather than a fixed offset. Bounded to roughly 0..+0.067s; 0 adopted. The first sweep against it scores median r 0.648 across 191 samples, and that is NOT explained by alignment - it is per-part variation from 0.265 to 0.946."
+      "note": "SUPERSEDES 7MnD4Ugco1g (1440x1080 at 30fps), whose 30-fps resampling made frame boundaries ambiguous. This is 1440x1080 at 60fps, 186.75s, uploaded 2019-06-27. The format pin asks for 1080p60 rather than the available 2880x2160 because every comparison tool downscales to 640x480 - frame RATE was the deficiency, not resolution. ALIGNMENT SUPERSEDED 2026-08-20: the 2026-08-15 re-measurement adopted 0 after correlating six WELL-MATCHING samples, which selected against itself - a well-matching sample is one whose phase scan is flat, so those six were the six least able to detect an offset. Re-measuring on samples with SHARP scans, spread from capture 1.2s to 183.8s, all eighteen peak at a POSITIVE offset (median +0.08s, none negative). The sweep median is single-peaked in the offset (0.727 at 50ms, 0.762 at 75ms, 0.767 at 80-85ms, 0.732 at 100ms), and 80ms and 85ms tie because ffmpeg -ss snaps to a frame and both land on frame 5. The adopted value is +83.3ms = exactly FIVE frames at 60fps, and it is constant across 180s (a clock-RATE error would grow). The phase remains somewhat variable: three parts prefer a smaller offset and lose ~0.09. THE LIVE KNOB IS captureOffsetMs IN productions/wonder/web/js/main.js, which is comparison-only (only __demo.schedule()'s captureStart reads it, so playback cannot be affected); alignmentOffsetMs here is not read by any tool. Override with ?capoff=<ms>. With this alignment plus the 0x40cb20 second-clock fix the sweep scores median r 0.774 across 191 samples with NO part below 0.55 (was 0.648 with six)."
     }
   ],
+  "oracle": {
+    "note": "Inputs tools/winebox/oracle-at.sh needs to turn a capture time into an addressable (order, hold) for this production. A production without this block has no winebox oracle and the tool exits 77.",
+    "orderEnvelope": "web/assets/mystified.env",
+    "captureOffsetFrom": "web/js/main.js"
+  },
   "status": {
     "web": "engineering",
     "pagesRepo": "wonder-webgl"
-  }
+  },
+  "placeholders": [
+    {
+      "id": "wonder/facing-cull",
+      "what": "Per-vertex triangle rejection (the byte at vertex+0x4c, gated at 0x004076cf), modelled as dot(vertexNormal, D) > t with D and t fitted to measured behaviour.",
+      "where": "shared/sunflower/js/mesh-geometry.js (WONDER_FACING_FIT); enabled for woah3.exp only, in productions/wonder/web/js/main.js",
+      "why": "The rejection is proven real and geometric: enabling it lifts effect_410300 0.328->0.588 and effect_40dab0 0.359->0.566, and resolves 4 of the 5 anti-correlating samples in issue #31, while touching no colour, blend or envelope state. Applying it to every scene instead COSTS 14 parts, which proves D is not an engine-wide constant.",
+      "notDerived": "SUPERSEDED 2026-08-20. The rule IS now derived and proven: FUN_004070d0 writes vertex[+0x4c] = dot(P - Clocal, Nengine) < 0 per frame, and solving the engine's own dumped flags for a single point C reproduces 100.00% of them on three instances, against this fit's 96.04% plateau. What ships is still the fit only because the port cannot yet compute Clocal to that accuracy: the render-time Z (or YZ) convention is unresolved, and material[+0x94] -- the bypass that governs every other scene -- is unidentified. `?cull=proven` selects the derived path (medianR 0.7739 vs the fit's 0.7741); `?cull=off` disables rejection (0.7694).",
+      "knownWrong": "A fixed direction cannot express parallax. The solved points shrink across instances differing only in scale ([-1.839,+1.375,-1.841] / [-1.521,+0.990,-1.508] / [-1.259,+0.671,-1.331]), which is what inverse(objectMatrix) does; this fit gives all four copies the same 2406 vertices where the original gives 2502/2439/2391/2328.",
+      "disableWith": "?cull=off",
+      "measured": "2026-08-20"
+    }
+  ]
 }

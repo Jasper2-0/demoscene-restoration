@@ -92,20 +92,34 @@ export class SceneMaskEffect {
 
     mgl.blendFunc(mgl.SRC_ALPHA, mgl.ONE_MINUS_SRC_ALPHA);
     mgl.begin(mgl.QUADS);
+    // Each bar fades 0.725 -> 0 -> 0 -> 0.725 across its four corners, so its far
+    // edge disappears entirely. The two inner alphas were 1, which drew that edge
+    // FULLY OPAQUE under SRC_ALPHA/ONE_MINUS_SRC_ALPHA and hid what the strip is
+    // supposed to reveal. The executable pushes 0.0 for both:
+    //
+    //   0040f635  PUSH 0x0 / PUSH 0x3f800000 x3 -> glColor4f @ 0040f646
+    //   0040f67a  PUSH 0x0 / PUSH 0x3f800000 x3 -> glColor4f @ 0040f68b
+    //
+    // against PUSH 0x3f39999a (0.725) at 0040f5ce and 0040f6a8 for the outer two.
+    // cdecl pushes right to left, so the first PUSH is the alpha argument.
     for (const bar of state.bars) {
       mgl.color4(1, 1, 1, Math.fround(0.725));
       mgl.texCoord2(0, 0);
       mgl.vertex3(1, bar.yTopLeft, 0);
-      mgl.color4(1, 1, 1, 1);
+      mgl.color4(1, 1, 1, 0);
       mgl.vertex3(bar.x, bar.yBottom, 0);
-      mgl.color4(1, 1, 1, 1);
+      mgl.color4(1, 1, 1, 0);
       mgl.vertex3(bar.x, bar.yTopRight, 0);
       mgl.color4(1, 1, 1, Math.fround(0.725));
       mgl.vertex3(1, bar.yBottom, 0);
     }
     mgl.end();
 
-    mgl.blendFunc(mgl.SRC_ALPHA, mgl.ZERO);
+    // GL_SRC_COLOR, not GL_ZERO. Read from the driver's own state at this draw
+    // (glretrace -D reports GL_BLEND_SRC=GL_SRC_ALPHA, GL_BLEND_DST=GL_SRC_COLOR),
+    // and the two are not close: ZERO erases the destination, SRC_COLOR keeps it
+    // modulated by the source.
+    mgl.blendFunc(mgl.SRC_ALPHA, mgl.SRC_COLOR);
     mgl.color4(1, 1, 1, Math.fround(0.41));
     mgl.begin(mgl.QUADS);
     mgl.texCoord2(0, 1); mgl.vertex3(0.8, -1, 0);

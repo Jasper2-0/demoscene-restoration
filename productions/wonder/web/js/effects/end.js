@@ -153,6 +153,12 @@ export class EndEffect {
       cullFaceOverride: false,
       opacityScale: state.fade,
       materialOpacityScales: scales,
+      // FUN_0040bfa0 walks this object's material array at 0x0040c258-0x0040c28e
+      // and writes +0x94 = 1 to every material, right beside the +0x9c scaling
+      // the `scales` map above already models. A non-zero +0x94 makes the draw
+      // gate at 0x004076cd submit every triangle, so this scene is exempt from
+      // the per-vertex facing rejection.
+      bypassFacing: true,
       blendFuncOverride: [this.mgl.SRC_ALPHA, this.mgl.ONE_MINUS_SRC_ALPHA],
       projectionMatrix: matrices.projection,
       modelViewMatrix: matrices.modelView,
