@@ -489,3 +489,8 @@ diverges from the original's code in order to preserve the original's
 appearance — the same trade as the resolution reset, and the same kind of call.
 Deciding it needs the beach and winter mechanisms read first, since a fix aimed
 only at `#stepSpires` would leave the other two thirds of the error in place.
+
+> **Superseded in scope, 2026-08-21.** The frame-rate finding that starts here
+> is demo-wide and its inventory, mechanisms and consequences now live in
+> `FRAME_RATE.md`. The spires are section 2 there, and are only the THIRD worst
+> scene. This file remains the record of how it was found.
