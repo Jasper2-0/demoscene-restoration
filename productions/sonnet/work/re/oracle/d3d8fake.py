@@ -18,6 +18,7 @@ here — draw calls are no-ops — so render-target CONTENT is out of scope by
 design; the CPU-side inputs to every pass are what the oracle dumps.
 """
 
+import base64
 import struct
 
 D3D_OK = 0
@@ -27,7 +28,7 @@ DEVICE_VTBL = [
     (0x00, 'QueryInterface', 12, None), (0x04, 'AddRef', 4, None),
     (0x08, 'Release', 4, None),
     (0x1c, 'GetDeviceCaps', 8, None),
-    (0x3c, 'Present', 20, None),
+    (0x3c, 'Present', 20, 'present'),
     (0x40, 'GetBackBuffer', 16, 'get_backbuffer'),
     (0x50, 'CreateTexture', 32, 'create_texture'),
     (0x68, 'CreateDepthStencilSurface', 24, 'create_surface_out5'),
@@ -37,7 +38,7 @@ DEVICE_VTBL = [
     (0x80, 'GetRenderTarget', 8, 'get_rendertarget'),
     (0x88, 'BeginScene', 4, None), (0x8c, 'EndScene', 4, None),
     (0x90, 'Clear', 28, None),
-    (0x94, 'SetTransform', 12, None),
+    (0x94, 'SetTransform', 12, 'set_transform'),
     (0xa0, 'SetViewport', 8, None),
     (0xa8, 'SetMaterial', 8, None),
     (0xb0, 'SetLight', 12, None), (0xb8, 'LightEnable', 12, None),
@@ -54,8 +55,8 @@ DEVICE_VTBL = [
     (0xfc, 'SetTextureStageState', 16, 'set_tss'),
     (0x118, 'DrawPrimitive', 16, None),
     (0x11c, 'DrawIndexedPrimitive', 24, None),
-    (0x120, 'DrawPrimitiveUP', 20, None),
-    (0x124, 'DrawIndexedPrimitiveUP', 36, None),
+    (0x120, 'DrawPrimitiveUP', 20, 'draw_up'),
+    (0x124, 'DrawIndexedPrimitiveUP', 36, 'draw_indexed_up'),
     (0x130, 'SetVertexShader', 8, None),
 ]
 
@@ -88,6 +89,14 @@ class FakeD3D8:
         self.unknown_hit = None   # set by the self-identifying unknown-slot stubs
         self.render_state = {}    # state id -> value (Set/GetRenderState pairs)
         self.tss = {}             # (stage, type) -> value
+        self.transforms = {}      # D3DTS_* -> [16 floats]
+
+        # THE DRAW STREAM (tools/DRAWSTREAM.md).  Off by default: every existing
+        # target calls render() only incidentally and would otherwise pay for
+        # serialising geometry it never looks at.  `drawstream.py` turns it on.
+        self.recording = False
+        self.draws = []
+        self.frames = 0
 
         self.vt_device = self._build_vtbl(DEVICE_VTBL)
         self.vt_texture = self._build_vtbl(TEXTURE_VTBL)
@@ -258,6 +267,107 @@ class FakeD3D8:
         w = max(1, t['w'] >> level)
         h = max(1, t['h'] >> level)
         return self.emu.read(self._level_buf(t, level), w * h * 4)
+
+
+    # ------------------------------------------------------------------ draws
+    # THE POINT OF THE WHOLE EXERCISE.  Sonnet's geometry is DrawPrimitiveUP /
+    # DrawIndexedPrimitiveUP only (re/engine/D3D8_API.md) — the "UP" variants
+    # take a USER POINTER, so the vertices live in the caller's memory rather
+    # than in a driver-owned buffer.  A text log of these calls records the
+    # pointer and nothing else, which is why Wine's +d3d8 channel could not
+    # answer any of this and apitrace's Windows d3d8 wrapper would have been
+    # needed.  Here the pointer is just an address in a memory we own.
+
+    PRIM = {1: 'POINTLIST', 2: 'LINELIST', 3: 'LINESTRIP',
+            4: 'TRIANGLELIST', 5: 'TRIANGLESTRIP', 6: 'TRIANGLEFAN'}
+
+    @staticmethod
+    def _vcount(prim, n):
+        if prim == 1: return n
+        if prim == 2: return n * 2
+        if prim == 3: return n + 1
+        if prim == 4: return n * 3
+        return n + 2                       # STRIP / FAN
+
+    def _tex_id(self, va):
+        """Creation-order identity, matching the port's recorder.
+
+        A fake-object VA is an allocator artefact and means nothing to the other
+        side; the port numbers its textures in creation order, so number ours the
+        same way and the two agree on which texture is "3" for the same reason.
+        `self.textures` is insertion-ordered, which IS creation order."""
+        if not va:
+            return 0
+        for i, k in enumerate(self.textures):
+            if k == va:
+                return i + 1
+        return -1                          # bound but never created here
+
+    def _snapshot(self):
+        """The state IN FORCE at this draw, observed rather than reconstructed.
+
+        This object is the state machine the original talks to, so there is
+        nothing to infer — the mistake tools/winebox/draw-state.mjs made by
+        replaying a log (wrong on 40 of 44 draws) is not available here."""
+        return {
+            'textures': {str(st): self._tex_id(self.tss.get(('tex', st), 0))
+                         for st in (0, 1)},
+            'xform': {'world': self.transforms.get(0x100),
+                      'view': self.transforms.get(2),
+                      'proj': self.transforms.get(3),
+                      'tex0': self.transforms.get(0x10),
+                      'tex1': self.transforms.get(0x11)},
+            'state': {str(k): v for k, v in sorted(self.render_state.items())},
+            'tss': {f'{k[0]}.{k[1]}': v for k, v in sorted(
+                self.tss.items(), key=lambda kv: str(kv[0])) if k[0] != 'tex'},
+        }
+
+    def _h_set_transform(self, emu, args):
+        _this, state, pmat = args(3)
+        self.transforms[state] = list(struct.unpack('<16f', emu.read(pmat, 64)))
+        return D3D_OK
+
+    def _h_present(self, emu, args):
+        # Frame boundary, same convention as the port-side recorder: what is
+        # kept is the LAST frame, so a caller that renders a warm-up burst does
+        # not concatenate it into the frame it asked for.
+        if self.recording:
+            self.frames += 1
+            self.draws = []
+        return D3D_OK
+
+    def _h_draw_up(self, emu, args):
+        _this, prim, count, pverts, stride = args(5)
+        if self.recording and count:
+            n = self._vcount(prim, count)
+            d = {'i': len(self.draws), 'call': 'DrawPrimitiveUP',
+                 'prim': self.PRIM.get(prim, f'PRIM_{prim}'),
+                 'vertexCount': n, 'stride': stride,
+                 'verts': base64.b64encode(emu.read(pverts, n * stride)).decode()}
+            d.update(self._snapshot())
+            self.draws.append(d)
+        return D3D_OK
+
+    def _h_draw_indexed_up(self, emu, args):
+        (_this, prim, minvi, numv, count,
+         pidx, idxfmt, pverts, stride) = args(9)
+        if self.recording and count:
+            nidx = self._vcount(prim, count)
+            # D3DFMT_INDEX16 == 101, INDEX32 == 102.  Every original call site is
+            # 16-bit (D3D8_API.md §9.5); read the format rather than assume it,
+            # because assuming would silently halve or double the index block.
+            isz = 4 if idxfmt == 102 else 2
+            d = {'i': len(self.draws), 'call': 'DrawIndexedPrimitiveUP',
+                 'prim': self.PRIM.get(prim, f'PRIM_{prim}'),
+                 'minVertexIndex': minvi, 'numVertices': numv,
+                 'vertexCount': nidx, 'stride': stride,
+                 'verts': base64.b64encode(
+                     emu.read(pverts, (minvi + numv) * stride)).decode(),
+                 'indices': base64.b64encode(
+                     emu.read(pidx, nidx * isz)).decode()}
+            d.update(self._snapshot())
+            self.draws.append(d)
+        return D3D_OK
 
 
 def install(emu):
