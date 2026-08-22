@@ -354,3 +354,50 @@ self-consistency is not evidence of correctness.
 
 Use the warm-store record (`?warm=record`) instead. It is a cold boot and the
 port maintains it for its own purposes.
+
+---
+
+# ⚠ WHAT THE ORACLE CAN AND CANNOT ANSWER
+
+Scoping statement for everything above. Learned by getting it wrong twice.
+
+`targets/drawstream.py` replays the script and steps a clock, but **its
+time-evolved state does not advance correctly**. Demonstrated at the beach:
+
+| | fog colour at 0x151f | implied ramp `t` |
+|---|---|---|
+| port | `0xFFBDA1B1` | **0.30** |
+| oracle | `0xFFC8C8FF` | **0.00** |
+
+The m8 sunset ramp is `R = 163t + 200(1-t)`, `G = 71t + 200(1-t)`,
+`B = 255(1-t) + t`, `t += dt*0.002`. m8 fires at 0x1500; 0x151f is 31 rows
+later, i.e. 152 steps at 30 Hz, so `t` should be **0.303**. The port is right to
+three decimals. The oracle never armed `flag145` — its event replay reaches the
+object but does not take effect.
+
+So:
+
+* **VALID** — draw counts, primitive types, vertex counts, stride, submission
+  ORDER, pass structure, and the traversal tagging. All structural, none of it
+  depends on a ramp.
+* **NOT VALID** — per-draw render STATE and VERTEX DATA. That is why
+  `compare-drawstream.mjs` reports "vertex-data agreement 0/171": the oracle's
+  ramps sit at t=0 while the port's have advanced, so every position, colour and
+  UV differs for a reason that is the harness's, not the port's.
+
+Two conclusions I drew and then had to withdraw, both from this:
+
+1. **"The fog colour is wrong (pink vs blue)"** — no. The port's ramp matches
+   the disassembled formula and the elapsed step count exactly. The difference
+   is the oracle's un-advanced `t`. (The pink cast FIXLOOP_LOG reports against
+   the VIDEO is a separate, still-open question — this oracle cannot speak to
+   it until the event replay works.)
+2. **"The misordered terrain is why the beach looks missing"** — no. With
+   z-test and z-write on, the submission order of OPAQUE geometry cannot change
+   the image. Fixing the order left obj 7's median at 30.61, unchanged. See the
+   commit for `#drawAll`.
+
+**Next, for anyone continuing:** fix the event replay first. Until `m8` arms
+`flag145` in the emulated object, no per-frame comparison from this target means
+anything, and the leaf/cloud findings above — which are BUILD-time and so not
+affected by ramps — still carry the separate caveat about stream position.
