@@ -97,6 +97,7 @@ class FakeD3D8:
         self.recording = False
         self.draws = []
         self.frames = 0
+        self.walk = None          # set by drawstream.py: the current traversal
 
         self.vt_device = self._build_vtbl(DEVICE_VTBL)
         self.vt_texture = self._build_vtbl(TEXTURE_VTBL)
@@ -345,6 +346,8 @@ class FakeD3D8:
                  'vertexCount': n, 'stride': stride,
                  'verts': base64.b64encode(emu.read(pverts, n * stride)).decode()}
             d.update(self._snapshot())
+            if self.walk:
+                d['walk'] = dict(self.walk)
             self.draws.append(d)
         return D3D_OK
 
@@ -366,6 +369,8 @@ class FakeD3D8:
                  'indices': base64.b64encode(
                      emu.read(pidx, nidx * isz)).decode()}
             d.update(self._snapshot())
+            if self.walk:
+                d['walk'] = dict(self.walk)
             self.draws.append(d)
         return D3D_OK
 

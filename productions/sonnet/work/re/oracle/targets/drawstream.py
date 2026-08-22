@@ -63,6 +63,13 @@ SPRITE_INIT_VA = 0x4026be   # FUN_004026be — allocates DAT_00474880, the 2D
                             # state helper) faults reading flags at +0xc, 135
                             # draws into the frame.
 
+TRAVERSAL_VA = 0x405f8b     # FUN_00405f8b(this, mask, t, mode) — the MASKED scene
+                            # graph walk. FUN_00406004 calls it four times per
+                            # pass (masks 2, 0xc, 2, 4), and `#drawAll` in the
+                            # port collapses all four into one traversal. Tagging
+                            # each draw with the walk that issued it is what turns
+                            # "the order differs" into "which mask each mesh is in".
+
 SHADOW_DRAWS = 2 * 65536 * 16   # PINNED, as in scenebuild.py
 STEP_MS = 1000.0 / 30.0         # one simulation step: FRAME_BASE / rate, rate=30
 ROW_SECONDS = 6 * 2.5 / 92      # js/timeline.js — one script row
@@ -138,6 +145,19 @@ def main():
             emu.write(buf, b'\xff' * 0x10000)
         emu.seed = lcg_advance(emu.seed, SHADOW_DRAWS)
     emu.uc.hook_add(UC_HOOK_CODE, on_bake, begin=0x40e923, end=0x40e923)
+
+    # Tag draws by traversal. __thiscall: this in ECX, mask/t/mode on the stack.
+    from unicorn.x86_const import UC_X86_REG_ESP
+    walk = {'n': -1, 'mask': None, 'mode': None}
+
+    def on_walk(uc, address, size, user):
+        esp = uc.reg_read(UC_X86_REG_ESP)
+        mask, _t, mode = struct.unpack('<III', uc.mem_read(esp + 4, 12))
+        walk['n'] += 1
+        walk['mask'] = mask
+        walk['mode'] = mode & 0xff
+    emu.uc.hook_add(UC_HOOK_CODE, on_walk, begin=TRAVERSAL_VA, end=TRAVERSAL_VA)
+    d3d.walk = walk
 
     # THE REAL RENDER, which is the whole difference from scenebuild.py — that
     # target deliberately stubs slot 1 because it only wants the build stream.
