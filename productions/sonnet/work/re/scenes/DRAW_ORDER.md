@@ -279,3 +279,78 @@ them may be short by whole wraps. The two above are only comparable because they
 are near neighbours; **per-scene deltas derived from this table are ambiguous and
 must not be used.** The scene exits do not even come out monotonic, which is the
 tell.
+
+---
+
+# The RNG hunt, and where it actually stands
+
+⚠ **Read this before trusting the scene-5 numbers above.** The leaf and cloud
+findings are real measurements of two streams, but WHOSE stream is wrong is not
+settled, and one measurement in the set is provably inconsistent.
+
+## Both sides, at the same semantic point
+
+The port already records the shared-RNG state around each scene's shadow bake,
+for its warm store (`js/warmstore.js`, `manifest.shadows[] = {sceneIdx,
+streamEntry, streamExit}`); `?warm=record` exposes it on a COLD boot. The oracle
+records the same point by hooking `FUN_0040e923`. Directly comparable.
+
+| scene | port entry | oracle entry (1st bake) | |
+|---|---|---|---|
+| 0 | `0xec790f32` | `0x89d29c2f` | differ |
+| 1 | `0x803d556a` | `0x7b4ba91d` | differ |
+| **2** | `0x8b6be7d9` | `0x8b6be7d9` | **EXACT MATCH** |
+| 3 | `0x70d500cf` | `0x3b7d0100` | differ |
+| 4 | `0x442310eb` | `0x8ae9e52c` | differ |
+| 5 | `0xacbe7a07` | `0x44887db1` | differ |
+| 7 | `0xc0887601` | `0x9611cbd8` | differ |
+| 8 | `0xe772cd8b` | `0xb3098f45` | differ |
+
+**Scene 2 matches exactly, on entry AND exit, while every neighbour is hundreds
+of millions of draws away.** Two LCG streams that part do not re-converge. So
+one of these measurements is not measuring what it appears to. That is the
+first thing to resolve; everything else here is provisional until it is.
+
+## Three hypotheses tested and killed
+
+* **A missing shadow bake.** The gap between the port's `__scenesReady` state and
+  the oracle's scene-8 exit is 2,098,048 draws against a bake of 2,097,152 — off
+  by 896, which looked like a smoking gun. It is not. Counting 2²¹-advances
+  between each side's own entry and exit gives **2 bakes for scenes 0–5 and 7,
+  1 for scene 8, on BOTH sides**. The `terrainOpt8` gate is faithful:
+  `param_14 = (desc[0x4f] & 0x100) != 0` is bit 8, which is what the port reads.
+  The apparent coincidence was the modulo-2³² ambiguity already flagged above.
+
+* **Build ORDER.** `js/scenes.js` runs nine constructors and then a loop of
+  `build()`, while this target interleaved ctor/build per scene — and
+  `scenes.js` itself warns that "the shared RNG stream makes build ORDER part of
+  the spec". Fixed to match, and it changed **nothing**: the emulator reports
+  `constructed 8 objects, seed 0x00000001`. The Landscape constructors draw no
+  random numbers at all, so the interleaving never mattered.
+
+* **The missing `Border` object.** `objects[2]` is constructed before every scene
+  and it both draws from the stream and RESEEDS it (`srand(4000)`,
+  `srand(5000)`, `scene_camera.js` ~135). The oracle never built it. Added
+  (`FUN_00406539`, `BORDER_CTOR_VA`) — it leaves the seed at `0xb0737aef` rather
+  than 1, and scene 0's build STILL exits at `0x1f818a28`. **The scene builds
+  are seed-independent**; they reseed internally. Kept in the target because it
+  is the faithful sequence, but it is not the divergence.
+
+## What that leaves
+
+The difference is in draws consumed INSIDE a scene's own build, before its
+shadow bake — texgen, terrain, trees. Not in the surrounding sequence, not in
+the bake gate, not in build order.
+
+## ⚠ A probe that measured nothing
+
+Rebuilding the scenes inside an already-booted page (`MG.srand(1)`, then
+`buildSceneN(d3d)` + `build()`, reading `randState()` between) disagreed with the
+oracle at every scene, contradicting ORACLE.md. The probe was wrong, not the
+record: **a warm rebuild of scene 0 consumes 240 RNG draws where a cold one
+consumes 344,078,249** — the texture cache is already populated, so texgen draws
+nothing. It returned the same numbers twice, which is exactly why
+self-consistency is not evidence of correctness.
+
+Use the warm-store record (`?warm=record`) instead. It is a cold boot and the
+port maintains it for its own purposes.

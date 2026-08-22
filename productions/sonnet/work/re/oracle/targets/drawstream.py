@@ -53,6 +53,17 @@ CLOCK_VA = 0x402f01     # returns "now" in ms — FUN_004060c9 calls it for last
 INIT_POSITION = 0xffff  # the script's setup sentinel (js/timeline.js)
 TIMELINE = pathlib.Path(__file__).resolve().parents[4] / 'web' / 'assets' / 'timeline.json'
 
+BORDER_CTOR_VA = 0x406539   # FUN_00406539 — the BORDER/camera object's ctor,
+                            # objects[2] in js/scenes.js and constructed BEFORE
+                            # every scene. It draws from the shared RNG and then
+                            # RESEEDS it (srand(4000), srand(5000)), so the seed
+                            # every scene build starts from is whatever this
+                            # leaves — NOT 1. Omitting it put this target at the
+                            # wrong stream position for every scene, which is
+                            # what made its per-scene seeds disagree with the
+                            # port's own warm-store record everywhere but one.
+                            # `new 0x38` then the ctor, per FUN_00402cdf.
+
 SPRITE_INIT_VA = 0x4026be   # FUN_004026be — allocates DAT_00474880, the 2D
                             # sprite MATERIAL, and its image surface. The real
                             # program calls it from the D3D device init
@@ -139,10 +150,15 @@ def main():
     emu = SonnetEmu(heap_mb=1024)
     d3d = d3d8fake.install(emu)
     emu.call(INIT_VA)
-    assert emu.seed == 1
+    assert emu.seed == 1, f'image init should leave seed 1, got {emu.seed:#x}'
     # The part of device init that is NOT device creation, and that the render
     # path needs. See SPRITE_INIT_VA.
     emu.call(SPRITE_INIT_VA)
+
+    # objects[2] BEFORE the scenes — see BORDER_CTOR_VA. __fastcall(this).
+    border = emu.alloc(0x38)
+    emu.call(BORDER_CTOR_VA, this=border)
+    print(f'border built, seed {emu.seed:#010x} (was 0x00000001)', flush=True)
 
     # Fast-forward the shadow bake exactly as scenebuild.py does: its ~10^9
     # instruction ray march is minutes each under TCG and its only STREAM effect
@@ -151,12 +167,21 @@ def main():
     from unicorn import UC_HOOK_CODE
     from unicorn.x86_const import UC_X86_REG_ECX
 
+    # Per-scene bake boundaries, in the SAME units the port records for its warm
+    # store (js/warmstore.js `shadows[]`: streamEntry / streamExit around
+    # FUN_0040e923). Directly comparable, which is what makes a bisect possible.
+    bakes = []
+
     def on_bake(uc, address, size, user):
         this = uc.reg_read(UC_X86_REG_ECX)
         buf = emu.u32(this + 0x24)
         if buf:
             emu.write(buf, b'\xff' * 0x10000)
+        entry = emu.seed
         emu.seed = lcg_advance(emu.seed, SHADOW_DRAWS)
+        bakes.append({'scene': cur_scene[0],
+                      'streamEntry': f'0x{entry:08x}',
+                      'streamExit': f'0x{emu.seed:08x}'})
     emu.uc.hook_add(UC_HOOK_CODE, on_bake, begin=0x40e923, end=0x40e923)
 
     # Tag draws by traversal. __thiscall: this in ECX, mask/t/mode on the stack.
@@ -181,10 +206,25 @@ def main():
 
     set_clock(emu, 0)
     objs = {}
+    cur_scene = [None]
+
+    # CONSTRUCT EVERY OBJECT FIRST, THEN BUILD THEM — the port's order
+    # (js/scenes.js `buildScenes`: nine constructors, then a loop of `build()`).
+    # Interleaving ctor/build per scene, which is what scenebuild.py does and
+    # what this target did first, consumes the SHARED stream in a different
+    # order, and build order is part of the spec (re/scenes/TREE_IMPOSTOR.md).
+    # Comparing per-scene seeds against the port is meaningless until the two
+    # sequences match.
     for idx in scenes:
         this = emu.alloc(0x2000)
         emu.set_u32(this, vt)
         emu.call(CTOR_VA, this=this)
+        objs[idx] = this
+    print(f'constructed {len(scenes)} objects, seed {emu.seed:#010x}', flush=True)
+
+    for idx in scenes:
+        cur_scene[0] = idx
+        this = objs[idx]
         print(f'scene {idx}: build …', flush=True)
         try:
             emu.call(BUILD_VA, idx, this=this, timeout_s=3600)
@@ -194,9 +234,11 @@ def main():
             print(f'  unmapped: {emu.unmapped}')
             print(f'  api tail: {emu.api_log[-6:]}')
             raise
-        objs[idx] = this
         print(f'scene {idx}: built, seed {emu.seed:#010x} '
               f'({emu.last_call_seconds:.0f} s)', flush=True)
+        for b in [x for x in bakes if x['scene'] == idx]:
+            print(f'  bake  scene {idx}  entry {b["streamEntry"]}  '
+                  f'exit {b["streamExit"]}', flush=True)
 
     this = objs[args.render]
 
