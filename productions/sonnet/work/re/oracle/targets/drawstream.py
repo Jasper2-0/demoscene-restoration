@@ -84,9 +84,16 @@ def ms_to_pos(ms):
     return ((rows // 64) << 8) | (rows % 64)
 
 
-# scene index -> timeline OBJECT index, from js/timeline.js's SCENE_BANDS. They
-# are not the same number: scene 4 (beach) is object 7.
+# scene index -> timeline OBJECT index, read off the port's own scene*.js
+# `new Landscape(d3d, sceneIdx, {objIndex})` calls. They are not the same number:
+# scene 4 (beach) is object 7.
+#
+# ⚠ THERE IS NO SCENE 6. The demo builds indices 0,1,2,3,4,5,7,8 — eight scenes
+# through nine slots — and index 6 is simply never constructed. Building it
+# consumes RNG the original never consumes, which silently corrupts every seed
+# comparison downstream while looking like a more thorough run.
 OBJ_FOR_SCENE = {0: 3, 1: 4, 2: 5, 3: 6, 4: 7, 5: 8, 7: 9, 8: 10}
+BUILT_SCENES = sorted(OBJ_FOR_SCENE)          # 0,1,2,3,4,5,7,8 — no 6
 
 
 def lcg_advance(seed, n):
@@ -119,6 +126,12 @@ def main():
     ap.add_argument('--verts', action='store_true', help='keep vertex bytes in the fixture')
     args = ap.parse_args()
     scenes = [int(x) for x in args.scenes.split(',') if x != '']
+    bad = [x for x in scenes if x not in OBJ_FOR_SCENE]
+    if bad:
+        print(f'no such scene {bad} — the demo builds {BUILT_SCENES} (there is no '
+              f'scene 6). Building one it never builds consumes RNG it never '
+              f'consumes.', file=sys.stderr)
+        return 2
     if args.render not in scenes:
         print(f'--render {args.render} is not among --scenes {scenes}', file=sys.stderr)
         return 2
