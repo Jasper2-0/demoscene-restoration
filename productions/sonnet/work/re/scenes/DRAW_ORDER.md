@@ -137,3 +137,70 @@ present precisely as "visible when it should not be".
 
 Not yet measured. Scene 5's stream is only 16 draws and has no reflection pass,
 so it is a much cheaper place to confirm the mechanism than scene 4 was.
+
+---
+
+# Scene 5 — 70 fewer leaves, and where the stream parts
+
+Same instruments, different scene. Issue #52/#53, "leaves are in different
+positions", at 0x1916 (show 264.5 s).
+
+## The measurement
+
+Both sides submit **14 draws** for obj 8 and thirteen agree on primitive type
+and vertex count. The branch mesh matches **exactly** at 8184 vertices — the
+figure ORACLE.md validated for scene 2's tree — so the tree generator is not
+broadly wrong. One mesh differs:
+
+| | vertices | leaves (4 verts each) |
+|---|--:|--:|
+| original | 10920 | **2730** |
+| port | 10640 | **2660** |
+| deficit | 280 | **70** |
+
+"Different positions" understates it. There are seventy fewer, and a generator
+that emits a different number consumes a different number of RNG draws, so
+every leaf after the first divergence moves.
+
+## It is a STREAM difference, not an off-by-one
+
+Leaf emission is stochastic — `meshgen.mjs`'s tree builder runs
+`TREE.LEAF_TRIES` (16) attempts per ring and emits when
+`rand() < TREE.LEAF_THRESHOLD` (4000 of 32767, ~12 %). Seventy fewer successes
+out of ~22,000 tries is not a loop bound; it is the shared LCG arriving in a
+different place.
+
+## Where it parts
+
+Oracle build seeds, all eight real scenes from image seed 1:
+
+    scene 0  0x1f818a28      scene 4  0x90b31246
+    scene 1  0x71224a04      scene 5  0xd1adf447
+    scene 2  0x2d4f124f      scene 7  0x42165e3c
+    scene 3  0x2e4e9b0b      scene 8  0xabe15a5b
+
+Scenes 0–4 reproduce `fixtures/scenebuild/scenes_0_1_2_3_4` **exactly** —
+recorded in an earlier session, before the draw-stream work — so the
+instrumentation does not perturb the build and the emulator is reproducible
+across sessions. ORACLE.md records those boundaries matching the port.
+
+With the branch mesh also agreeing, that places the divergence **inside scene
+5's own build**. Something specific to that scene consumes RNG differently: its
+tree parameters, or the order it draws them in.
+
+## What is still needed
+
+The port's per-scene exit seeds, to confirm scene 4 leaves both sides on
+`0x90b31246` and scene 5 does not. The port does not expose them:
+`buildSceneN(d3d, opts)` DEFERS the build, so constructing the scenes from a
+page probe consumes no RNG at all — measured, the state stayed at `0x00000001`
+through all eight. A hook is needed inside the build, not around it.
+
+## ⚠ There is no scene 6
+
+The demo builds Landscape indices **0,1,2,3,4,5,7,8** — eight scenes through
+nine object slots, read off the `scene*.js` `new Landscape(d3d, sceneIdx,
+{objIndex})` calls. Index 6 is never constructed, and building it consumes RNG
+the original never consumes. `--scenes 0,1,2,3,4,5,6,7,8` reads like the
+thorough option and silently corrupts every seed comparison downstream;
+`drawstream.py` now rejects it.
