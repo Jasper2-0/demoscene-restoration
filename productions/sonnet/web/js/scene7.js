@@ -4099,8 +4099,45 @@ export class Landscape {
     d3d.setFog(0, 0xffffffff, 0, f32bits(1.0));
   }
 
+  /**
+   * FUN_00406004's scene walk.
+   *
+   * THE ORIGINAL DOES NOT WALK ONCE. `FUN_00406004` calls `FUN_00405f8b` FOUR
+   * times with different masks (2, 0xc, 2, 4), and that function routes each
+   * node on the node's own flags at `+0xa4` — so draw order is MASK-major,
+   * not registration-major. This method used to collapse all four into a
+   * single traversal, which is faithful for WHAT is drawn and wrong for WHEN.
+   *
+   * MEASURED against the original (re/scenes/DRAW_ORDER.md), scene 4 at 0x151f,
+   * by hooking FUN_00405f8b and tagging every draw with the walk that issued it:
+   *
+   *   reflection  mask 0xc mode 1 -> 67 draws, terrain FIRST (draw 0)
+   *   main        mask 0xc mode 1 -> 66 draws, NO terrain
+   *   main        mask 0x4 mode 2 -> 37 draws, terrain among them (draw 135)
+   *
+   * So the terrain is drawn first when mirrored and LAST in the main pass, 69
+   * draws later than here. The port submitted identical geometry — the same 171
+   * draws, the same multiset, the same pass boundaries — in the wrong order, and
+   * issue #50 ("the ground / beach is missing") is the composite that produces:
+   * every prop and grass draw the original puts between the two is blended
+   * against the ground the other way round, under z-writes and alpha.
+   *
+   * ⚠ WHAT THIS REPRODUCES IS THE OBSERVATION, NOT THE WHOLE MECHANISM. The
+   * full fix models `+0xa4` on every drawable and runs all four masked walks,
+   * including the FUN_004050ed / FUN_0040520d routing for bit-4 nodes and the
+   * reflection pass's flare suppression. That is a larger change and it is
+   * still owed; this moves the one draw the oracle actually disagrees about.
+   * DRAW_ORDER.md §4 has the remaining two transpositions (5766<->768, and a
+   * 6v draw against the 90v block) — they are the check on whether a full mask
+   * model is right, because they should resolve together with this one.
+   */
   #drawAll(d3d, reflected) {
-    for (const m of this.meshes) drawMesh(d3d, m);
+    if (reflected) {
+      for (const m of this.meshes) drawMesh(d3d, m);
+      return;
+    }
+    for (const m of this.meshes) if (m !== this.terrainMesh) drawMesh(d3d, m);
+    if (this.terrainMesh) drawMesh(d3d, this.terrainMesh);
   }
 
   /** FUN_00408dfc / FUN_00408dd1 — reflect every drawable about the water plane. */
