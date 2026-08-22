@@ -53,8 +53,28 @@ CLOCK_VA = 0x402f01     # returns "now" in ms — FUN_004060c9 calls it for last
 INIT_POSITION = 0xffff  # the script's setup sentinel (js/timeline.js)
 TIMELINE = pathlib.Path(__file__).resolve().parents[4] / 'web' / 'assets' / 'timeline.json'
 
+SPRITE_INIT_VA = 0x4026be   # FUN_004026be — allocates DAT_00474880, the 2D
+                            # sprite MATERIAL, and its image surface. The real
+                            # program calls it from the D3D device init
+                            # (FUN_00401575, D3D8_API.md §1.1) — which the oracle
+                            # skips, because the fake device is installed
+                            # directly rather than created. Without it
+                            # DAT_00474880 is NULL and FUN_00401d12 (the material
+                            # state helper) faults reading flags at +0xc, 135
+                            # draws into the frame.
+
 SHADOW_DRAWS = 2 * 65536 * 16   # PINNED, as in scenebuild.py
 STEP_MS = 1000.0 / 30.0         # one simulation step: FRAME_BASE / rate, rate=30
+ROW_SECONDS = 6 * 2.5 / 92      # js/timeline.js — one script row
+
+
+def pos_to_ms(p):
+    return (((p >> 8) * 64 + (p & 0xff)) * ROW_SECONDS) * 1000.0
+
+
+def ms_to_pos(ms):
+    rows = int((ms / 1000.0) / ROW_SECONDS)
+    return ((rows // 64) << 8) | (rows % 64)
 
 
 # scene index -> timeline OBJECT index, from js/timeline.js's SCENE_BANDS. They
@@ -100,6 +120,9 @@ def main():
     d3d = d3d8fake.install(emu)
     emu.call(INIT_VA)
     assert emu.seed == 1
+    # The part of device init that is NOT device creation, and that the render
+    # path needs. See SPRITE_INIT_VA.
+    emu.call(SPRITE_INIT_VA)
 
     # Fast-forward the shadow bake exactly as scenebuild.py does: its ~10^9
     # instruction ray march is minutes each under TCG and its only STREAM effect
@@ -165,29 +188,46 @@ def main():
         # by its BITS, which is what the script stores in `u32`.
         emu.call(event_va, e['m'], e.get('u32', 0), this=this)
 
-    fired = []
+    # Setup events first, as js/timeline.js's init() does.
     for e in mine:
         if e['t'] == INIT_POSITION:
-            fire(e); fired.append(e)
-    for e in mine:
-        if e['t'] != INIT_POSITION and (pos is None or e['t'] <= pos):
-            fire(e); fired.append(e)
-    print(f'replayed {len(fired)} script events for obj {obj_index}'
-          f'{f" up to {args.pos}" if pos is not None else ""}: '
-          f'{[e["m"] for e in fired]}', flush=True)
+            fire(e)
+    timed = sorted([e for e in mine if e['t'] != INIT_POSITION], key=lambda e: e['t'])
+
+    # WHERE TO START STEPPING, and why it is exact rather than a shortcut.
+    # An object does nothing before its first script event: reset() zeroed its
+    # timers at build and it is not `visible`, so render returns immediately and
+    # nothing accumulates. Starting the clock at that first event therefore
+    # reproduces the state at target exactly, without emulating the thousands of
+    # frames the demo spends in earlier scenes.
+    start_pos = timed[0]['t'] if timed else 0
+    start_ms = pos_to_ms(start_pos)
+    last_ms = args.ms if args.ms is not None else (
+        pos_to_ms(pos) if pos is not None else start_ms + args.frames * STEP_MS)
+    nsteps = max(1, int(round((last_ms - start_ms) / STEP_MS)) + 1)
+    print(f'obj {obj_index}: {len(mine)} script events; stepping '
+          f'{nsteps} frames from {start_pos:#06x} ({start_ms:.0f} ms) '
+          f'to {last_ms:.0f} ms', flush=True)
 
     layer = args.layer if args.layer is not None else 0
-    last_ms = args.ms if args.ms is not None else args.frames * STEP_MS
 
     # ADVANCE IN WHOLE SIMULATION STEPS, the same grid the port now steps
     # (web/js/scene7.js #stepsDue). Both sides on one grid means a difference
     # between them is a difference in the demo rather than in the cadence.
     d3d.recording = True
     d3d.frames = 0
-    n = max(1, args.frames)
+    cursor = 0
     try:
-        for k in range(n):
-            set_clock(emu, last_ms - (n - 1 - k) * STEP_MS)
+        for k in range(nsteps):
+            ms = start_ms + k * STEP_MS
+            # DISPATCH AS WE STEP, not all up front. obj 7's script fires at
+            # 0x1200, 0x1300 and 0x1500 — spread across the scene — and firing
+            # them together would put the object in a state it is never in.
+            # This is js/timeline.js's dispatchUpTo, on the same grid.
+            p = ms_to_pos(ms)
+            while cursor < len(timed) and timed[cursor]['t'] <= p:
+                fire(timed[cursor]); cursor += 1
+            set_clock(emu, ms)
             # Keep only the LAST frame: the fake device clears on Present, and
             # nothing calls Present here, so clear explicitly per frame.
             d3d.draws = []
