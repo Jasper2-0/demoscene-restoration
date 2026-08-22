@@ -204,3 +204,78 @@ nine object slots, read off the `scene*.js` `new Landscape(d3d, sceneIdx,
 the original never consumes. `--scenes 0,1,2,3,4,5,6,7,8` reads like the
 thorough option and silently corrupts every seed comparison downstream;
 `drawstream.py` now rejects it.
+
+---
+
+# The RNG divergence — what is measured, and what is not
+
+`#51`, `#52` and `#53` are one bug (see above): everything RNG-derived in scene 5
+differs while everything descriptor-derived matches. This section records how far
+the hunt for *where* the stream parts actually got, including a probe that turned
+out to measure nothing.
+
+## Cloud parameters — the same bug as the leaves
+
+At 0x173c the cloud scroll is draw 0, two full-screen layers, 8 vertices.
+
+| | original | port |
+|---|---|---|
+| layer 0 / 1 colour | `0xff3f3f3f` / `0xff7e7e7e` | identical ✅ |
+| layer 0 UV span | **3.1468** | 2.2040 |
+| layer 1 UV span | **2.4685** | 1.0658 |
+
+The colours are exactly right, so the grey ramp and the alpha are faithful — the
+alpha was the obvious suspect and it is innocent. The UV **span** is `p0`, since
+`FUN_0040f27e` lays the quad out as `(u*p0, v*p0) … ((u+1)*p0, (v+1)*p0)`, and
+`p0` is drawn from the shared LCG at build time:
+
+```js
+const s  = F(F(MG.rand01() * K.CLOUD_UV_SPAN) + 1.0);   // rand01()*4 + 1 -> [1,5)
+```
+
+Both sides land inside the legal range. They are different draws from a diverged
+stream, not a mis-transcribed constant. Clouds tiled at a different scale is
+exactly "a different tint of orange, and clouds visible that are not in the
+original": same texture, same greys, different pattern.
+
+## ⚠ A probe that measured nothing
+
+Rebuilding the scenes inside an already-booted page — `MG.srand(1)`, then each
+`buildSceneN(d3d)` followed by `build()`, reading `MG.randState()` between —
+produced seeds that disagreed with the oracle at EVERY scene, including scene 0,
+which contradicts ORACLE.md's recorded match. The right conclusion was to
+distrust the probe, and it was then measured directly:
+
+**a warm rebuild of scene 0 consumes 240 RNG draws. A cold one consumes
+344,078,249.**
+
+The texture cache is already populated, so texgen draws nothing the second time.
+The probe was self-consistent — the same value twice — which is precisely why
+self-consistency is not evidence of correctness.
+
+Getting the port's real per-scene seeds needs a hook INSIDE the cold boot, not a
+rebuild after it.
+
+## A lead worth checking: the gap is one shadow bake
+
+Walking the LCG from seed 1 and recording where each observed state falls:
+
+    240             port, warm rebuild of scene 0   (i.e. nothing)
+    344,078,249     oracle scene 0 exit
+    1,417,885,946   PORT at __scenesReady
+    1,419,983,994   oracle scene 8 exit
+
+The gap between the port's final state and the oracle's is **2,098,048** draws.
+One shadow bake is **2,097,152** (`2 × 65536 × 16`, the count scenebuild.py pins
+and fast-forwards in closed form). The two differ by **896**.
+
+That is close enough to be worth chasing and not close enough to assert: the
+oracle appears to fast-forward one more bake than the port performs, or the port
+skips one. If so the divergence is not in a generator at all — it is in how many
+landscapes run the bake.
+
+⚠ **These counts are modulo the LCG period** (2³² = 4,294,967,296), so any of
+them may be short by whole wraps. The two above are only comparable because they
+are near neighbours; **per-scene deltas derived from this table are ambiguous and
+must not be used.** The scene exits do not even come out monotonic, which is the
+tell.
