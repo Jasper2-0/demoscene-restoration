@@ -10,6 +10,13 @@
 //
 //   node tools/record-minid3d8-draws.mjs sonnet --pos 0x151f [--out port.jsonl]
 //   node tools/record-minid3d8-draws.mjs sonnet --pos 0x151f --verts
+//   node tools/record-minid3d8-draws.mjs sonnet --pos 0x151f --obj 7   # one object
+//
+// --obj ISOLATES ONE TIMELINE OBJECT, via the page's own `?skip=` (main.js:430,
+// "omit timeline objects by index"). Without it the stream is the WHOLE frame,
+// and the oracle's is one object — so the two need aligning by hand, which is
+// how the beach comparison ended up explaining away three draws as "the text
+// object" before they could be read. Ask for the object instead.
 //
 // Writes the envelope in tools/DRAWSTREAM.md, so the original's side — recorded by
 // a completely different machine (work/re/oracle) — is diffable against it.
@@ -65,9 +72,24 @@ for (const [what, rel] of [['production', ''], ['MiniD3D8 module', 'web/js/minid
 const posArg = opt('pos');
 if (!posArg || posArg === true) { console.error('--pos 0xNNNN is required'); process.exit(2); }
 const WANT_VERTS = argv.includes('--verts');
+const OBJ = opt('obj');
 
 let status = 0;
-await withPage({ root: cfg.root, path: cfg.page, query: '?inspect=1&quality=original&warm=0' },
+// The skip list is DERIVED from the object asked for, not tabulated — but only
+// over the SCENE slots, 2..10.
+//
+// Objects 0 and 1 are deliberately never skipped. `?skip=` decides two different
+// things depending on the index: for the scenes it only chooses whether a
+// BUILT object is installed (main.js:538, `if (built[i] && !skip.has(i))`), so
+// the build and its RNG draws happen either way and the stream is untouched.
+// For object 0 it decides whether the Compositor is CONSTRUCTED AT ALL
+// (main.js:432) — skipping it would change what gets built, which is exactly
+// the kind of quiet difference this tool exists to detect rather than cause.
+const skipQuery = (OBJ && OBJ !== true)
+  ? '&skip=' + Array.from({ length: 9 }, (_, i) => i + 2).filter((i) => i !== Number(OBJ)).join(',')
+  : '';
+await withPage({ root: cfg.root, path: cfg.page,
+                 query: `?inspect=1&quality=original&warm=0${skipQuery}` },
   async ({ page, errors }) => {
     await page.waitForFunction('window.__sonnetReady === true', { timeout: 180000 });
 
@@ -204,7 +226,8 @@ await withPage({ root: cfg.root, path: cfg.page, query: '?inspect=1&quality=orig
     const record = {
       api: { name: 'd3d8', version: 8 },
       side: 'port',
-      source: `record-minid3d8-draws.mjs ${production} --pos ${posArg}`,
+      source: `record-minid3d8-draws.mjs ${production} --pos ${posArg}` +
+              (OBJ && OBJ !== true ? ` --obj ${OBJ}` : ''),
       at: { position: `0x${pos.toString(16).padStart(4, '0')}`,
             scene: frame.info?.scene ?? null, songMs: frame.info?.ms ?? null },
       frame: 0,
